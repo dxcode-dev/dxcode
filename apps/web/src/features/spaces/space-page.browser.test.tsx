@@ -752,9 +752,15 @@ it("lays the Space out with no title bar: the Space chat tab, its posts, and Spa
   expect(q(".space-post-edited", post(1) as HTMLElement)?.textContent).toBe(
     "edited",
   );
-  // "Today" over the first post.
+  // A day divider over the first post: "Today", plus "Yesterday" before it
+  // when the posts (40 to 9 minutes old) straddle local midnight.
+  const dayOf = (minutes: number) =>
+    new Date(Date.now() - minutes * 60_000).toDateString() ===
+    new Date().toDateString()
+      ? "Today"
+      : "Yesterday";
   expect(all(".space-day-divider").map((row) => row.textContent)).toEqual([
-    "Today",
+    ...new Set([dayOf(40), dayOf(9)]),
   ]);
 
   // The viewer's post sits right in a bubble; another person's left, under

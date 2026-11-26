@@ -1,10 +1,25 @@
 import type { FirstPartyPluginData, FirstPartyPluginListData } from "@dx/api";
+import {
+  ListPersonalFirstPartyPluginsEndpoint,
+  ListWorkspaceFirstPartyPluginsEndpoint,
+} from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import {
-  listFirstPartyPlugins,
-  type PluginsTarget,
-} from "../../../shared/api/client.js";
+import type { PluginsTarget } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
+
+export const listFirstPartyPlugins = async (
+  target: PluginsTarget,
+  signal?: AbortSignal,
+) =>
+  (target.scope === "personal"
+    ? await dxClient.call(ListPersonalFirstPartyPluginsEndpoint, {}, { signal })
+    : await dxClient.call(
+        ListWorkspaceFirstPartyPluginsEndpoint,
+        { params: { workspaceSlug: target.workspaceSlug } },
+        { signal },
+      )
+  ).data;
 
 export type { FirstPartyPluginData, FirstPartyPluginListData, PluginsTarget };
 

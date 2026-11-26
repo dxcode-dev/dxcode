@@ -1,6 +1,12 @@
 import {
-  GetPersonalAccountThreadCountResponseSchema,
+  GetPersonalAccountEndpoint,
+  GetPersonalAccountThreadCountEndpoint,
   type PersonalAccountData,
+  RemovePersonalAvatarEndpoint,
+  SetPersonalAvatarEndpoint,
+  UpdatePersonalAccountEndpoint,
+  UpdatePersonalAppearanceEndpoint,
+  type UpdatePersonalAppearanceRequest,
 } from "@dx/api";
 import { personalAppearanceFields, type UserId } from "@dx/domain";
 import {
@@ -8,14 +14,32 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  ApiError,
-  getPersonalAccount,
-  request,
-  setPersonalAvatar,
-  updatePersonalAccount,
-  updatePersonalAppearance,
-} from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
+
+const getPersonalAccount = async (
+  signal?: AbortSignal,
+): Promise<PersonalAccountData> =>
+  (await dxClient.call(GetPersonalAccountEndpoint, {}, { signal })).data;
+
+const updatePersonalAccount = async (input: {
+  readonly displayName: string;
+  readonly username: string;
+}): Promise<PersonalAccountData> =>
+  (await dxClient.call(UpdatePersonalAccountEndpoint, { body: input })).data;
+
+/** Replaces the caller's picture with `file`, or removes it with `null`. */
+const setPersonalAvatar = async (
+  file: File | null,
+): Promise<PersonalAccountData> =>
+  (file === null
+    ? await dxClient.call(RemovePersonalAvatarEndpoint, {})
+    : await dxClient.call(SetPersonalAvatarEndpoint, { body: file })
+  ).data;
+
+const updatePersonalAppearance = async (
+  input: UpdatePersonalAppearanceRequest,
+): Promise<PersonalAccountData> =>
+  (await dxClient.call(UpdatePersonalAppearanceEndpoint, { body: input })).data;
 
 export const personalAccountMutationError = (
   cause: unknown,
@@ -62,9 +86,9 @@ export const personalAccountThreadCountQueryOptions = (userId: UserId) =>
     queryKey: personalAccountKeys.threadCount(userId),
     queryFn: async ({ signal }) =>
       (
-        await request(
-          "/v1/settings/personal/account/thread-count",
-          GetPersonalAccountThreadCountResponseSchema,
+        await dxClient.call(
+          GetPersonalAccountThreadCountEndpoint,
+          {},
           { signal },
         )
       ).data,

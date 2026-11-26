@@ -6,6 +6,14 @@ import {
   withMessageAuthor,
 } from "@dx/api";
 import {
+  deriveTranscriptViewModel,
+  INBOUND_MESSAGE_PREFIX,
+  isWithdrawnSettlement,
+  sendRefusal,
+  type TranscriptViewModel,
+  type UserPromptRow,
+} from "@dx/client";
+import {
   type ClaudePlanLimit,
   parseClaudePlanLimit,
   THREAD_SNOOZE_UNTIL_NEEDED_MS,
@@ -63,10 +71,8 @@ import { useMessageEditing } from "./message-edit.js";
 import {
   MessageEditContext,
   type MessageEditOptions,
-  type UserPromptRow,
 } from "./message-edit-model.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
-import { sendRefusal } from "./send-failure.js";
 import {
   type ComposerMentions,
   useComposerMentions,
@@ -80,17 +86,12 @@ import {
   type PendingSubmissionControl,
 } from "./thread-session-registry.js";
 import {
-  INBOUND_MESSAGE_PREFIX,
   ThreadTranscript,
   TRANSCRIPT_FOLLOW_ON_SEND,
   type TranscriptFocus,
 } from "./thread-transcript.js";
 import type { TranscriptAccess } from "./transcript-access.js";
 import type { TranscriptReply } from "./transcript-selection-popup.js";
-import {
-  deriveTranscriptViewModel,
-  type TranscriptViewModel,
-} from "./transcript-view-model.js";
 import { registeredTurnStop } from "./turn-stop-registration.js";
 import {
   type AgentSource,
@@ -103,7 +104,6 @@ import {
   useThreadPresentation,
   useThreadPresentationValue,
 } from "./use-thread-presentation.js";
-import { isWithdrawnSettlement } from "./withdrawn-sends.js";
 
 /**
  * The quick-action row's code loads when a row first shows, after the

@@ -1,5 +1,6 @@
 import { ThreadId, Timestamp } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import { ThreadDataSchema } from "./thread-data.js";
 
@@ -31,3 +32,20 @@ export const SnoozeThreadInvalidTimeResponseSchema = errorResponse(
   "INVALID_SNOOZE_TIME",
   "Choose a wake time in the future, within a year.",
 );
+
+export const SnoozeThreadEndpoint = defineEndpoint({
+  id: "threads.snooze",
+  summary: "Snooze or wake a Thread",
+  method: "PATCH",
+  path: "/v1/threads/:threadId/snooze",
+  params: SnoozeThreadParamsSchema,
+  body: SnoozeThreadRequestSchema,
+  success: SnoozeThreadResponseSchema,
+  refusals: [
+    { status: 400, schema: SnoozeThreadInvalidRequestResponseSchema },
+    { status: 404, schema: SnoozeThreadNotFoundResponseSchema },
+    { status: 409, schema: SnoozeThreadUnavailableResponseSchema },
+    { status: 503, schema: SnoozeThreadPersistenceUnavailableResponseSchema },
+    { status: 400, schema: SnoozeThreadInvalidTimeResponseSchema },
+  ],
+});

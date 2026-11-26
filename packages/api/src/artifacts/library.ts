@@ -174,3 +174,15 @@ export const ArtifactLibraryErrorCodeSchema = Schema.Literals([
 ]);
 export type ArtifactLibraryErrorCode =
   typeof ArtifactLibraryErrorCodeSchema.Type;
+
+/** Every refusal of the library's routes. */
+export const ArtifactLibraryErrorResponseSchema = Schema.Struct({
+  status: Schema.Literal("error"),
+  data: Schema.Struct({
+    code: ArtifactLibraryErrorCodeSchema,
+    message: Schema.String,
+    requestId: Schema.String,
+  }),
+});
+export type ArtifactLibraryErrorResponse =
+  typeof ArtifactLibraryErrorResponseSchema.Type;

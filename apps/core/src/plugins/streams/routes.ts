@@ -1,4 +1,6 @@
+import { PluginPaneIceServersResponseSchema } from "@dx/api";
 import { getLogger } from "@logtape/logtape";
+import { Schema } from "effect";
 import type { Context } from "hono";
 import { setBrowserSessionHeaders } from "../../auth/session-sockets.js";
 import type { AppEnv } from "../../http/types.js";
@@ -194,14 +196,16 @@ export const paneIceServersRoute = async (context: Context<AppEnv>) => {
       ...fields,
       detail: servers.turnError ?? (servers.turn ? "turn" : "stun-only"),
     });
-    return context.json({
-      status: "success",
-      data: {
-        iceServers: servers.iceServers,
-        turn: servers.turn,
-        ttlSeconds: servers.ttlSeconds,
-      },
-    });
+    return context.json(
+      Schema.encodeUnknownSync(PluginPaneIceServersResponseSchema)({
+        status: "success",
+        data: {
+          iceServers: servers.iceServers,
+          turn: servers.turn,
+          ttlSeconds: servers.ttlSeconds,
+        },
+      }),
+    );
   } catch (error) {
     log("failed", {
       ...fields,

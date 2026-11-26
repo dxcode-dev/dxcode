@@ -1,4 +1,5 @@
 import type { ProjectData, ThreadDetailData } from "@dx/api";
+import type { TranscriptViewModel } from "@dx/client";
 import { lazyRouteComponent, useNavigate } from "@tanstack/react-router";
 import { DateTime } from "effect";
 import {
@@ -42,7 +43,6 @@ import { ThreadMenu, ThreadMenuSubmenu } from "./thread-menu.js";
 import { useThreadModelName } from "./thread-model-name.js";
 import { TitleBarItemSlot } from "./title-bar-item.js";
 import { useTitleBarOverflow } from "./title-bar-overflow.js";
-import type { TranscriptViewModel } from "./transcript-view-model.js";
 
 // The Share dialog opens on a click, so it loads then, not with the Thread
 // page.

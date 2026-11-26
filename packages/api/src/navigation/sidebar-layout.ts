@@ -1,5 +1,6 @@
 import { ProjectId, ThreadId } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 
 /**
@@ -133,3 +134,27 @@ export const SidebarLayoutErrorResponseSchema = Schema.Union([
     "Persistence is temporarily unavailable.",
   ),
 ]);
+
+const sidebarLayoutRefusals = [
+  { status: 400, schema: SidebarLayoutErrorResponseSchema },
+  { status: 503, schema: SidebarLayoutErrorResponseSchema },
+];
+
+export const GetSidebarLayoutEndpoint = defineEndpoint({
+  id: "sidebarLayout.get",
+  summary: "Read the sidebar layout",
+  method: "GET",
+  path: "/v1/sidebar-layout",
+  success: SidebarLayoutResponseSchema,
+  refusals: sidebarLayoutRefusals,
+});
+
+export const UpdateSidebarLayoutEndpoint = defineEndpoint({
+  id: "sidebarLayout.update",
+  summary: "Save the sidebar layout",
+  method: "PUT",
+  path: "/v1/sidebar-layout",
+  body: UpdateSidebarLayoutRequestSchema,
+  success: SidebarLayoutResponseSchema,
+  refusals: sidebarLayoutRefusals,
+});

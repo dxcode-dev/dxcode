@@ -7,6 +7,7 @@ export {
   SettingsFieldErrorSchema,
 } from "./field-error.js";
 
+import { defineEndpoint } from "../http/endpoint.js";
 import { SettingsFieldErrorSchema } from "./field-error.js";
 import { WorkspaceProfileDataSchema } from "./workspace-profile.js";
 
@@ -106,3 +107,18 @@ export type GetSettingsContextInvalidRequestResponse =
   typeof GetSettingsContextInvalidRequestResponseSchema.Type;
 export type GetSettingsContextForbiddenResponse =
   typeof GetSettingsContextForbiddenResponseSchema.Type;
+
+/** `GET /v1/settings/personal`: who the caller is in Settings and where. */
+export const GetSettingsContextEndpoint = defineEndpoint({
+  id: "settings.context.get",
+  method: "GET",
+  path: "/v1/settings/personal",
+  success: GetSettingsContextResponseSchema,
+  refusals: [
+    { status: 403, schema: GetSettingsContextForbiddenResponseSchema },
+    {
+      status: 503,
+      schema: GetSettingsContextPersistenceUnavailableResponseSchema,
+    },
+  ],
+});

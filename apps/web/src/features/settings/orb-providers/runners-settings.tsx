@@ -3,6 +3,7 @@ import type { UserId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import * as React from "react";
+import { usePairThisMachine } from "../../../shared/native-shell/use-pair-this-machine.js";
 import { runnerPlatform } from "../../../shared/runner-format.js";
 import { AddRunnerDialog } from "../../../shared/ui/add-runner-dialog.js";
 import { Badge } from "../../../shared/ui/badge.js";
@@ -28,6 +29,7 @@ export function RunnersSettings({ userId }: { readonly userId: UserId }) {
   const [adding, setAdding] = React.useState<AddRunnerSession>();
   const [removing, setRemoving] = React.useState<RunnerMachine>();
   const { list, pairing, connected } = useRunners(userId, { session: adding });
+  const thisMachine = usePairThisMachine(pairing.data?.code);
   const remove = useMutation(removeRunnerMutationOptions(queryClient, userId));
   const runners = list.data?.runners;
   return (
@@ -102,6 +104,7 @@ export function RunnersSettings({ userId }: { readonly userId: UserId }) {
         {...(connected === undefined ? {} : { connectedName: connected.name })}
         onRetry={() => void pairing.refetch()}
         onClose={() => setAdding(undefined)}
+        {...(thisMachine === undefined ? {} : { thisMachine })}
       />
       <ConfirmDialog
         open={removing !== undefined}

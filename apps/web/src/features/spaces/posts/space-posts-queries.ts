@@ -1,12 +1,15 @@
 import {
-  ListSpacePostsResponseSchema,
+  AddSpacePostReactionEndpoint,
+  CreateSpacePostEndpoint,
+  ListSpacePostRevisionsEndpoint,
+  ListSpacePostsEndpoint,
+  type ListSpacePostsResponseSchema,
+  RemoveSpacePostReactionEndpoint,
   SPACE_POST_ID_PATTERN,
   SPACE_POSTS_DEFAULT_LIMIT,
   type SpacePost,
   type SpacePostReaction,
-  SpacePostResponseSchema,
   type SpacePostRevision,
-  SpacePostRevisionsResponseSchema,
 } from "@dx/api";
 import { ThreadId, type UserId } from "@dx/domain";
 import {
@@ -19,7 +22,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
-import { request } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { toggledReactions } from "../../../shared/reactions/reaction-set.js";
 import { THREAD_FRESHNESS_SLO_MS } from "../../threads/thread-queries.js";
 import { refetchSpacePosts, spaceKeys } from "../space-cache-queries.js";
@@ -34,24 +37,24 @@ type SpacePostPage = (typeof ListSpacePostsResponseSchema.Type)["data"];
 
 const PAGE_SIZE = SPACE_POSTS_DEFAULT_LIMIT;
 
-const postsPath = (spaceThreadId: ThreadId, rest = "") =>
-  `/v1/spaces/${encodeURIComponent(spaceThreadId)}/posts${rest}`;
-
 const listPosts = async (
   spaceThreadId: ThreadId,
   before: string | undefined,
   signal?: AbortSignal,
-): Promise<SpacePostPage> => {
-  const query = new URLSearchParams({ limit: String(PAGE_SIZE) });
-  if (before !== undefined) query.set("before", before);
-  return (
-    await request(
-      postsPath(spaceThreadId, `?${query}`),
-      ListSpacePostsResponseSchema,
+): Promise<SpacePostPage> =>
+  (
+    await dxClient.call(
+      ListSpacePostsEndpoint,
+      {
+        params: { threadId: spaceThreadId },
+        query: {
+          limit: PAGE_SIZE,
+          ...(before === undefined ? {} : { before }),
+        },
+      },
       { signal },
     )
   ).data;
-};
 
 const listRevisions = async (
   spaceThreadId: ThreadId,
@@ -59,9 +62,9 @@ const listRevisions = async (
   signal?: AbortSignal,
 ): Promise<ReadonlyArray<SpacePostRevision>> =>
   (
-    await request(
-      postsPath(spaceThreadId, `/${encodeURIComponent(postId)}/revisions`),
-      SpacePostRevisionsResponseSchema,
+    await dxClient.call(
+      ListSpacePostRevisionsEndpoint,
+      { params: { threadId: spaceThreadId, postId } },
       { signal },
     )
   ).data.items;
@@ -71,9 +74,9 @@ const createPost = async (
   text: string,
 ): Promise<SpacePost> =>
   (
-    await request(postsPath(spaceThreadId), SpacePostResponseSchema, {
-      method: "POST",
-      body: JSON.stringify({ text }),
+    await dxClient.call(CreateSpacePostEndpoint, {
+      params: { threadId: spaceThreadId },
+      body: { text },
     })
   ).data.post;
 
@@ -84,13 +87,9 @@ const setReaction = async (
   on: boolean,
 ): Promise<SpacePost> =>
   (
-    await request(
-      postsPath(
-        spaceThreadId,
-        `/${encodeURIComponent(postId)}/reactions/${reaction}`,
-      ),
-      SpacePostResponseSchema,
-      { method: on ? "PUT" : "DELETE" },
+    await dxClient.call(
+      on ? AddSpacePostReactionEndpoint : RemoveSpacePostReactionEndpoint,
+      { params: { threadId: spaceThreadId, postId, reaction } },
     )
   ).data.post;
 

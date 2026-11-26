@@ -1,7 +1,7 @@
-import { McpAppViewsResponseSchema } from "@dx/api";
+import { GetMcpAppViewsEndpoint } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import { request } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import { retryQuery } from "../../shared/query/query-retry.js";
 
 /**
@@ -14,9 +14,9 @@ const getMcpAppViews = async (
   signal?: AbortSignal,
 ) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/mcp-apps/${encodeURIComponent(cardSetId)}`,
-      McpAppViewsResponseSchema,
+    await dxClient.call(
+      GetMcpAppViewsEndpoint,
+      { params: { threadId, cardSetId } },
       { signal },
     )
   ).data.views;

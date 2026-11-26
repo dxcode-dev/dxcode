@@ -34,8 +34,13 @@ export const isAccountOrbMethod = (value: unknown): value is AccountOrbMethod =>
 
 const toBase64 = (bytes: Uint8Array) => {
   let binary = "";
+  // `apply` takes the typed array as it is; a spread walks its iterator,
+  // which made a 16 MiB file take about four times as long.
   for (let index = 0; index < bytes.length; index += 0x8000)
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+    binary += String.fromCharCode.apply(
+      null,
+      bytes.subarray(index, index + 0x8000) as unknown as Array<number>,
+    );
   return btoa(binary);
 };
 

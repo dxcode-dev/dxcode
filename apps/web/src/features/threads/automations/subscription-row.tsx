@@ -10,7 +10,7 @@ import {
   MenuTrigger,
 } from "../../../shared/ui/menu.js";
 import { errorText, subscriptionStatus } from "./automation-text.js";
-import { useAutomationAction } from "./automations-queries.js";
+import { useAutomationAction } from "./automations-mutations.js";
 
 /** A GitHub subscription: opens on GitHub; the menu disables or deletes. */
 export function SubscriptionRow({

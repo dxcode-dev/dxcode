@@ -25,6 +25,8 @@ const requiredScope = (
     // A Space is a Thread.
     path === "/v1/spaces" ||
     path.startsWith("/v1/spaces/") ||
+    // Search finds only Threads the person can already list.
+    path === "/v1/thread-search" ||
     path === "/v1/attachments" ||
     path.startsWith("/v1/attachments/") ||
     // New Thread and New Space drafts.

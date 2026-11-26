@@ -30,6 +30,9 @@ export const EditThreadMessageResponseSchema = successResponse(
 
 /** The Flue entry id of a user message, as the transcript names it. */
 export const THREAD_MESSAGE_ENTRY_ID = /^entry_[A-Za-z0-9_-]{1,400}$/;
+export const ThreadMessageEntryIdSchema = Schema.String.check(
+  Schema.isPattern(THREAD_MESSAGE_ENTRY_ID),
+);
 
 /** Why an edit was refused. Nothing changed unless the code says so. */
 export const EditThreadMessageErrorResponseSchema = Schema.Union([

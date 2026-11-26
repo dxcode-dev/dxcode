@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { successResponse } from "../http/response.js";
+import { errorResponse, successResponse } from "../http/response.js";
 import { ReactionCountSchema, ReactionSchema } from "./reactions.js";
 
 /**
@@ -60,3 +60,17 @@ export const MessageReactionErrorCode = Schema.Literals([
   "MESSAGE_REACTIONS_UNAVAILABLE",
 ]);
 export type MessageReactionErrorCode = typeof MessageReactionErrorCode.Type;
+
+/** Why a reaction request was refused. Nothing changed. */
+export const MessageReactionErrorResponseSchema = Schema.Union([
+  errorResponse("INVALID_REQUEST", "Request validation failed."),
+  errorResponse(
+    "THREAD_NOT_SHARED",
+    "Only a shared Thread's messages take reactions.",
+  ),
+  errorResponse("THREAD_ARCHIVED", "This Thread is archived."),
+  errorResponse(
+    "MESSAGE_REACTIONS_UNAVAILABLE",
+    "Reactions are temporarily unavailable.",
+  ),
+]);

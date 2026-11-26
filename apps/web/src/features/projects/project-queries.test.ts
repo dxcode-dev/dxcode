@@ -3,11 +3,13 @@ import { ProjectId, UserId } from "@dx/domain";
 import { QueryClient } from "@tanstack/react-query";
 import { Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { seedProjectDetail } from "./project-cache-mutations.js";
+import { createProjectMutationOptions } from "./project-mutations.js";
 import {
-  createProjectMutationOptions,
-  seedProjectDetail,
-} from "./project-mutations.js";
-import { projectKeys, projectsQueryOptions } from "./project-queries.js";
+  listProjects,
+  projectKeys,
+  projectsQueryOptions,
+} from "./project-queries.js";
 
 const userId = Schema.decodeUnknownSync(UserId)("user-1");
 const projectId = Schema.decodeUnknownSync(ProjectId)(
@@ -159,5 +161,69 @@ describe("project query contracts", () => {
       queryClient.getQueryState(projectKeys.detail(userId, projectId))
         ?.dataUpdatedAt,
     ).toBe(updatedAt);
+  });
+});
+
+describe("project request errors", () => {
+  it("does not expose messages from undecoded error responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof globalThis.fetch>().mockResolvedValue(
+        Response.json(
+          {
+            status: "error",
+            data: { code: "PERSISTENCE_UNAVAILABLE", message: "Try later." },
+          },
+          { status: 503 },
+        ),
+      ),
+    );
+
+    await expect(listProjects()).rejects.toMatchObject({
+      status: 503,
+      message: "Request failed.",
+      hasValidatedPayload: false,
+    });
+  });
+
+  it("surfaces validated source-authorization failures", async () => {
+    const sourceDenied = Response.json(
+      {
+        status: "error",
+        data: {
+          code: "SOURCE_AUTHORIZATION_DENIED",
+          message:
+            "Source access requires action before this operation can continue.",
+          requestId: "request-1",
+          reason: "grant-disconnected",
+          action: "reconnect",
+        },
+      },
+      { status: 409 },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValueOnce(sourceDenied)
+        .mockResolvedValueOnce(sourceDenied.clone()),
+    );
+
+    const { mutationFn } = createProjectMutationOptions(
+      new QueryClient(),
+      userId,
+    );
+    await expect(
+      mutationFn?.(
+        { name: "source-project", source: { kind: "scratch" } },
+        undefined as never,
+      ),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "SOURCE_AUTHORIZATION_DENIED",
+      message:
+        "Source access requires action before this operation can continue.",
+      hasValidatedPayload: true,
+    });
   });
 });

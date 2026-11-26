@@ -1,10 +1,10 @@
+import type { ToolPart } from "@dx/client";
 import * as React from "react";
 import { ImageTiles, type TileImage } from "./message-attachments-ui.js";
 import {
   ToolMediaSourceContext,
   toolImages,
 } from "./tool-output-media-model.js";
-import type { ToolPart } from "./transcript-activity-projection.js";
 
 export const useToolImages = (part: ToolPart) =>
   toolImages(part, React.useContext(ToolMediaSourceContext));

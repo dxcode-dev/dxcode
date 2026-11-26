@@ -295,6 +295,14 @@ export const McpServersErrorResponseSchema = Schema.Union([
 ]);
 
 /**
+ * Where an OAuth provider sends the browser back after an MCP sign-in, for
+ * personal and workspace servers alike. Not an endpoint a client calls: a
+ * client shows it as the redirect URL for a server's own OAuth app.
+ */
+export const MCP_OAUTH_CALLBACK_PATH =
+  "/v1/settings/personal/mcp-servers/oauth/callback";
+
+/**
  * Why an MCP server's OAuth callback failed. Core's callback sends one of
  * these codes as `?mcpError=` and the web app shows its own fixed text for
  * it, so the page never shows text taken from its address.

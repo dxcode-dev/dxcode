@@ -1,32 +1,25 @@
 import {
-  DeleteThreadOrbFolderResponseSchema,
-  GetThreadOrbDiskResponseSchema,
+  DeleteThreadOrbFolderEndpoint,
+  GetThreadOrbDiskEndpoint,
   type ThreadOrbDiskData,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import {
-  type QueryClient,
   queryOptions,
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import { ApiError, request } from "../../../shared/api/client.js";
-
-export const orbDiskKeys = {
-  all: ["thread-orb-disk"] as const,
-  thread: (threadId: ThreadId) => ["thread-orb-disk", threadId] as const,
-  folders: (threadId: ThreadId) =>
-    ["thread-orb-disk", threadId, "folders"] as const,
-};
+import { ApiError, dxClient } from "../../../shared/api/client.js";
+import { invalidateOrbDisk, orbDiskKeys } from "./orb-disk-cache-queries.js";
 
 const diskRequest = (
   threadId: ThreadId,
   folders: boolean,
   signal: AbortSignal,
 ) =>
-  request(
-    `/v1/threads/${encodeURIComponent(threadId)}/disk${folders ? "?folders=1" : ""}`,
-    GetThreadOrbDiskResponseSchema,
+  dxClient.call(
+    GetThreadOrbDiskEndpoint,
+    { params: { threadId }, query: folders ? { folders: "1" } : {} },
     { signal },
   );
 
@@ -63,12 +56,6 @@ export const threadOrbFoldersQueryOptions = (threadId: ThreadId) =>
     refetchIntervalInBackground: false,
   });
 
-export const invalidateOrbDisk = (client: QueryClient, threadId: ThreadId) =>
-  client.invalidateQueries({ queryKey: orbDiskKeys.thread(threadId) });
-
-export const invalidateAllOrbDisk = (client: QueryClient) =>
-  client.invalidateQueries({ queryKey: orbDiskKeys.all });
-
 /** Deletes one listed rebuildable folder; the list and usage then refresh. */
 export const useDeleteOrbFolder = (threadId: ThreadId) => {
   const client = useQueryClient();
@@ -76,11 +63,10 @@ export const useDeleteOrbFolder = (threadId: ThreadId) => {
     mutationKey: [...orbDiskKeys.thread(threadId), "delete"],
     mutationFn: async (path: string) =>
       (
-        await request(
-          `/v1/threads/${encodeURIComponent(threadId)}/disk/folders/delete`,
-          DeleteThreadOrbFolderResponseSchema,
-          { method: "POST", body: JSON.stringify({ path }) },
-        )
+        await dxClient.call(DeleteThreadOrbFolderEndpoint, {
+          params: { threadId },
+          body: { path },
+        })
       ).data,
     onSettled: () => invalidateOrbDisk(client, threadId),
   });

@@ -1,7 +1,7 @@
+import type { PresenceScope } from "@dx/client";
 import type { ThreadId } from "@dx/domain";
-import type { PresenceScope } from "../../shared/realtime/presence-scope.js";
 
-export { scopeThread } from "../../shared/realtime/presence-scope.js";
+export { scopeThread } from "@dx/client";
 
 /**
  * Where an artifact's routes, caches, and presence are: the Thread it

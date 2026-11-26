@@ -4,8 +4,11 @@ import {
   GetThreadOrbSessionsResponseSchema,
   GetThreadUsageRequestsResponseSchema,
   GetThreadUsageResponseSchema,
+  ThreadClaudePlanOwnerOnlyResponseSchema,
   type ThreadOrbMetricsData,
+  ThreadUsageInvalidQueryResponseSchema,
   ThreadUsageRequestsQuerySchema,
+  ThreadUsageUnavailableResponseSchema,
 } from "@dx/api";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
@@ -31,14 +34,14 @@ import {
 
 const unavailable = (context: Context<AppEnv>) =>
   context.json(
-    {
+    Schema.encodeUnknownSync(ThreadUsageUnavailableResponseSchema)({
       status: "error",
       data: {
         code: "PERSISTENCE_UNAVAILABLE",
         message: "Usage is unavailable.",
         requestId: context.get("requestId"),
       },
-    },
+    }),
     503,
   );
 
@@ -85,14 +88,14 @@ export const threadUsageRoutes = new Hono<AppEnv>()
     if (db === undefined) return unavailable(context);
     if (context.get("threadAccess") !== "owner")
       return context.json(
-        {
+        Schema.encodeUnknownSync(ThreadClaudePlanOwnerOnlyResponseSchema)({
           status: "error",
           data: {
             code: "THREAD_OWNER_ONLY",
             message: "Only the Thread's owner sees its Claude plan.",
             requestId: context.get("requestId"),
           },
-        },
+        }),
         403,
       );
     const threadId = threadIdOf(context);
@@ -145,14 +148,14 @@ export const threadUsageRoutes = new Hono<AppEnv>()
     );
     if (Option.isNone(query))
       return context.json(
-        {
+        Schema.encodeUnknownSync(ThreadUsageInvalidQueryResponseSchema)({
           status: "error",
           data: {
             code: "INVALID_QUERY",
             message: "Name the provider and model.",
             requestId: context.get("requestId"),
           },
-        },
+        }),
         400,
       );
     const data = await readThreadUsageRequests(

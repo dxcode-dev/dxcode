@@ -1,14 +1,19 @@
 import {
+  CreateSpaceEndpoint,
   type CreateSpaceRequest,
-  ListSpaceSuggestionsResponseSchema,
-  ListSpacesResponseSchema,
-  ListSpaceThreadsResponseSchema,
+  DiscoverSpacesEndpoint,
+  GetSpaceEndpoint,
+  JoinSpaceEndpoint,
+  LeaveSpaceEndpoint,
+  ListSpaceArtifactsEndpoint,
+  ListSpaceSuggestionsEndpoint,
+  ListSpacesEndpoint,
+  ListSpaceThreadsEndpoint,
   type SpaceArtifactItem,
-  SpaceArtifactsResponseSchema,
   type SpaceData,
-  SpaceResponseSchema,
   type SpaceSuggestion,
   type SpaceThreadItem,
+  UpdateSpaceEndpoint,
   type UpdateSpaceRequest,
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
@@ -19,7 +24,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { DateTime } from "effect";
-import { ApiError, request } from "../../shared/api/client.js";
+import { ApiError, dxClient } from "../../shared/api/client.js";
 import {
   invalidateThreadQueries,
   THREAD_FRESHNESS_SLO_MS,
@@ -40,19 +45,13 @@ const gcTime = 5 * 60_000;
 
 /** Creates a Space: a root Thread its agent coordinates work in. */
 const createSpace = async (input: CreateSpaceRequest): Promise<SpaceData> =>
-  (
-    await request("/v1/spaces", SpaceResponseSchema, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
-  ).data.space;
+  (await dxClient.call(CreateSpaceEndpoint, { body: input })).data.space;
 
 /** The Spaces the requester created or joined, most recent activity first. */
 const listSpaces = async (
   signal?: AbortSignal,
 ): Promise<ReadonlyArray<SpaceData>> =>
-  (await request("/v1/spaces", ListSpacesResponseSchema, { signal })).data
-    .items;
+  (await dxClient.call(ListSpacesEndpoint, {}, { signal })).data.items;
 
 /** Spaces shared with the requester's workspace that they have not joined. */
 const discoverSpaces = async (
@@ -60,11 +59,9 @@ const discoverSpaces = async (
   signal?: AbortSignal,
 ): Promise<ReadonlyArray<SpaceData>> =>
   (
-    await request(
-      query.trim() === ""
-        ? "/v1/spaces/discover"
-        : `/v1/spaces/discover?q=${encodeURIComponent(query.trim())}`,
-      ListSpacesResponseSchema,
+    await dxClient.call(
+      DiscoverSpacesEndpoint,
+      { query: query.trim() === "" ? {} : { q: query.trim() } },
       { signal },
     )
   ).data.items;
@@ -73,13 +70,8 @@ const getSpace = async (
   threadId: ThreadId,
   signal?: AbortSignal,
 ): Promise<SpaceData> =>
-  (
-    await request(
-      `/v1/spaces/${encodeURIComponent(threadId)}`,
-      SpaceResponseSchema,
-      { signal },
-    )
-  ).data.space;
+  (await dxClient.call(GetSpaceEndpoint, { params: { threadId } }, { signal }))
+    .data.space;
 
 /**
  * Sharing a private Space was held back because its agents read Mail mail
@@ -94,24 +86,18 @@ const updateSpace = async (
   input: UpdateSpaceRequest,
 ): Promise<SpaceData> =>
   (
-    await request(
-      `/v1/spaces/${encodeURIComponent(threadId)}`,
-      SpaceResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
+    await dxClient.call(UpdateSpaceEndpoint, {
+      params: { threadId },
+      body: input,
+    })
   ).data.space;
 
 /** Spaces dx proposes from the person's recent threads, for New Space. */
 const listSpaceSuggestions = async (
   signal?: AbortSignal,
 ): Promise<ReadonlyArray<SpaceSuggestion>> =>
-  (
-    await request(
-      "/v1/spaces/suggestions",
-      ListSpaceSuggestionsResponseSchema,
-      { signal },
-    )
-  ).data.items;
+  (await dxClient.call(ListSpaceSuggestionsEndpoint, {}, { signal })).data
+    .items;
 
 /** Joins or leaves a Space, which lists it in the sidebar or takes it out. */
 const setSpaceJoined = async (
@@ -119,11 +105,9 @@ const setSpaceJoined = async (
   joined: boolean,
 ): Promise<SpaceData> =>
   (
-    await request(
-      `/v1/spaces/${encodeURIComponent(threadId)}/${joined ? "join" : "leave"}`,
-      SpaceResponseSchema,
-      { method: "POST" },
-    )
+    await dxClient.call(joined ? JoinSpaceEndpoint : LeaveSpaceEndpoint, {
+      params: { threadId },
+    })
   ).data.space;
 
 /** The threads a Space started, newest first. */
@@ -132,9 +116,9 @@ const listSpaceThreads = async (
   signal?: AbortSignal,
 ): Promise<ReadonlyArray<SpaceThreadItem>> =>
   (
-    await request(
-      `/v1/spaces/${encodeURIComponent(threadId)}/threads`,
-      ListSpaceThreadsResponseSchema,
+    await dxClient.call(
+      ListSpaceThreadsEndpoint,
+      { params: { threadId } },
       { signal },
     )
   ).data.items;
@@ -145,9 +129,9 @@ const listSpaceArtifacts = async (
   signal?: AbortSignal,
 ): Promise<ReadonlyArray<SpaceArtifactItem>> =>
   (
-    await request(
-      `/v1/spaces/${encodeURIComponent(threadId)}/artifacts`,
-      SpaceArtifactsResponseSchema,
+    await dxClient.call(
+      ListSpaceArtifactsEndpoint,
+      { params: { threadId } },
       { signal },
     )
   ).data.items;

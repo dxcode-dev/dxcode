@@ -1,5 +1,5 @@
+import type { ToolPart } from "@dx/client";
 import { Link } from "@tanstack/react-router";
-import type { ToolPart } from "./transcript-activity-projection.js";
 import {
   record,
   stringField,

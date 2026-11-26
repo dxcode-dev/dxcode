@@ -125,12 +125,23 @@ export const MessageCommentResponseSchema = successResponse(
 );
 export type MessageCommentResponse = typeof MessageCommentResponseSchema.Type;
 
-export type MessageCommentErrorCode =
-  | "INVALID_REQUEST"
-  | "MESSAGE_COMMENTS_UNAVAILABLE"
-  | "MESSAGE_COMMENT_LIMIT"
-  | "NOT_A_SPACE"
-  | "POST_NOT_FOUND";
+export const MessageCommentErrorCodeSchema = Schema.Literals([
+  "INVALID_REQUEST",
+  "MESSAGE_COMMENTS_UNAVAILABLE",
+  "MESSAGE_COMMENT_LIMIT",
+  "NOT_A_SPACE",
+  "POST_NOT_FOUND",
+]);
+export type MessageCommentErrorCode = typeof MessageCommentErrorCodeSchema.Type;
+
+export const MessageCommentErrorResponseSchema = Schema.Struct({
+  status: Schema.Literal("error"),
+  data: Schema.Struct({
+    code: MessageCommentErrorCodeSchema,
+    message: Schema.String,
+    requestId: Schema.String,
+  }),
+});
 
 /** The agent's mention, as comments write it. */
 export const MESSAGE_COMMENT_AGENT_MENTION = "@[dx](agent)";

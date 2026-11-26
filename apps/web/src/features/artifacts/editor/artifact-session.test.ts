@@ -22,7 +22,7 @@ import {
   ArtifactApiError,
   type ArtifactDocument,
   type ArtifactsApi,
-} from "../artifacts-api.js";
+} from "../artifacts-api-queries.js";
 import { ArtifactSession } from "./artifact-session.js";
 
 const threadId = "thr_00000000-0000-4000-8000-000000000001" as ThreadId;

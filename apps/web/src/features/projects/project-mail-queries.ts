@@ -1,20 +1,16 @@
 import {
-  GetProjectMailResponseSchema,
+  GetProjectMailEndpoint,
   type MailboxData,
-  MailErrorResponseSchema,
   type ProjectMailData,
 } from "@dx/api";
 import type { ProjectId, UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import { request } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import { mailboxKeys } from "../mailbox/mailbox-cache-queries.js";
 import { projectKeys } from "./project-queries.js";
 
 export const projectMailKey = (userId: UserId, projectId: ProjectId) =>
   [...projectKeys.detail(userId, projectId), "mail"] as const;
-
-const path = (projectId: ProjectId) =>
-  `/v1/projects/${encodeURIComponent(projectId)}/mail`;
 
 /**
  * The viewer's own `username+tag@` address for the Project, made the first
@@ -28,11 +24,10 @@ export const projectMailQueryOptions = (userId: UserId, projectId: ProjectId) =>
   queryOptions({
     queryKey: projectMailKey(userId, projectId),
     queryFn: async ({ signal, client }): Promise<ProjectMailData> => {
-      const { data } = await request(
-        path(projectId),
-        GetProjectMailResponseSchema,
+      const { data } = await dxClient.call(
+        GetProjectMailEndpoint,
+        { params: { projectId } },
         { signal },
-        MailErrorResponseSchema,
       );
       const summary = client.getQueryData<MailboxData>(
         mailboxKeys.summary(userId),

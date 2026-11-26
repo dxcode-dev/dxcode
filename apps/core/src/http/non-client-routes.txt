@@ -1,0 +1,55 @@
+# Core /v1 routes that no dx UI calls, so they need no endpoint in @dx/api:
+# the dxd daemon and runner protocols, provider webhooks, OAuth callbacks, and
+# agent-only tools. Add a route here only when that is true, and say which
+# caller it serves in the pull request (wiki/headless-client.md).
+
+# dxd daemon in a Thread's Orb (local mode and older guest configuration;
+# deployed stages route /v1/dxd/* to the ingress Worker).
+GET /v1/dxd/:threadId
+GET /v1/dxd/:threadId/attachments/:attachmentId
+GET /v1/dxd/:threadId/storage
+GET /v1/dxd/:threadId/storage/*
+GET /v1/threads/:threadId/dxd
+HEAD /v1/dxd/:threadId/attachments/:attachmentId
+HEAD /v1/dxd/:threadId/storage
+HEAD /v1/dxd/:threadId/storage/*
+POST /v1/dxd/:threadId/plugin-dev
+POST /v1/dxd/:threadId/storage
+POST /v1/dxd/:threadId/storage/*
+
+# `dxd runner` on a person's machine: the install script a shell fetches,
+# pairing, the runner socket, and Thread snapshots Core asks it to move.
+GET /v1/runner/archives/:threadId
+GET /v1/runner/connect
+GET /v1/runner/install.sh
+POST /v1/runner/pair
+PUT /v1/runner/archives/:threadId
+
+# Provider redirects and webhooks: GitHub, Bitbucket, and personal
+# integration OAuth callbacks, the GitHub App setup URL, GitHub webhooks.
+GET /v1/integrations/bitbucket/oauth/callback
+GET /v1/integrations/github/oauth/callback
+GET /v1/integrations/github/setup
+GET /v1/settings/personal/integrations/oauth/callback/:provider
+POST /v1/integrations/github/webhooks
+
+# A Project's icon: an image the browser loads from the `iconUrl` Core puts
+# in the Project's data, not a JSON answer a client decodes.
+GET /v1/projects/:projectId/icon
+
+# No caller outside Core's own tests: no UI, daemon, or script calls these.
+DELETE /v1/integrations/github/personal/authorization
+DELETE /v1/settings/personal/integrations/connections/:connectionId
+GET /v1/settings/personal/integrations
+GET /v1/settings/personal/integrations/connections/:connectionId/disconnect-impact
+POST /v1/integrations/github/personal/grants/:grantId/reconcile
+POST /v1/integrations/github/personal/refresh
+POST /v1/settings/personal/integrations/:provider/authorize
+POST /v1/settings/personal/integrations/connections/:connectionId/health
+POST /v1/settings/personal/integrations/connections/:connectionId/refresh
+PUT /v1/settings/personal/integrations/connections/:connectionId/repositories
+# MCP OAuth: the provider redirects the browser here after sign-in.
+GET /v1/settings/personal/mcp-servers/oauth/callback
+# The MCP router is shared by both scopes; the personal policy route always
+# answers SETTINGS_SCOPE_FORBIDDEN and no UI calls it.
+PATCH /v1/settings/personal/mcp-servers/policy

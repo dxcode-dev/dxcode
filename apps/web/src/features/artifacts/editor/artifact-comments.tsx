@@ -39,7 +39,7 @@ import {
   resolveArtifactCommentMutation,
 } from "../artifact-comments-queries.js";
 import type { ArtifactScope } from "../artifact-scope.js";
-import { ArtifactApiError } from "../artifacts-api.js";
+import { ArtifactApiError } from "../artifacts-api-queries.js";
 import { useArtifactHost } from "./artifact-host.js";
 
 /**

@@ -1,7 +1,7 @@
 import {
   deriveTranscriptViewModel,
   type TranscriptViewModel,
-} from "./transcript-view-model.js";
+} from "@dx/client";
 
 const EMPTY_TRANSCRIPT = deriveTranscriptViewModel({
   messages: [],

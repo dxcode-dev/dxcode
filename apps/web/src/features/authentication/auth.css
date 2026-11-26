@@ -504,3 +504,8 @@
       "footer";
   }
 }
+/* Inside the Mac app: sign in through the system browser and come back. */
+.auth-browser-sign-in {
+  justify-self: center;
+  color: var(--muted-foreground);
+}

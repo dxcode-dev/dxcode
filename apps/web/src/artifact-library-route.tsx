@@ -1,8 +1,8 @@
+import type { PresenceScope } from "@dx/client";
 import { useParams } from "@tanstack/react-router";
 import { ArtifactLibraryPage } from "./features/artifacts/library/artifact-library-page.js";
 import { LibraryArtifactPage } from "./features/artifacts/library/library-artifact-page.js";
 import { useThreadPresence } from "./features/threads/realtime/realtime-provider.js";
-import type { PresenceScope } from "./shared/realtime/presence-scope.js";
 
 /**
  * Joins the artifact's Thread, or the standalone artifact itself, so live

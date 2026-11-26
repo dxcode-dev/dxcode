@@ -1,22 +1,11 @@
-import {
-  RemoveRunnerResponseSchema,
-  type RunnerMachineId,
-  RunnersUnavailableResponseSchema,
-} from "@dx/api";
+import { RemoveRunnerEndpoint, type RunnerMachineId } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
-import { request } from "../../shared/api/client.js";
-import { runnerKeys, runnersBase } from "./runners-queries.js";
+import { dxClient } from "../../shared/api/client.js";
+import { runnerKeys } from "./runners-queries.js";
 
 const removeRunner = async (machineId: RunnerMachineId) =>
-  (
-    await request(
-      `${runnersBase}/${encodeURIComponent(machineId)}`,
-      RemoveRunnerResponseSchema,
-      { method: "DELETE" },
-      RunnersUnavailableResponseSchema,
-    )
-  ).data;
+  (await dxClient.call(RemoveRunnerEndpoint, { params: { machineId } })).data;
 
 export const removeRunnerMutationOptions = (
   queryClient: QueryClient,

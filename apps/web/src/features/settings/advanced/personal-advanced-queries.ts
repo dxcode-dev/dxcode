@@ -1,15 +1,31 @@
 import type { PersonalAgentInstructionsData } from "@dx/api";
+import {
+  GetPersonalAgentInstructionsEndpoint,
+  UpdatePersonalAgentInstructionsEndpoint,
+} from "@dx/api";
 import type { UserId } from "@dx/domain";
 import {
   mutationOptions,
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  ApiError,
-  getPersonalAgentInstructions,
-  updatePersonalAgentInstructions,
-} from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
+
+const getPersonalAgentInstructions = async (
+  signal?: AbortSignal,
+): Promise<PersonalAgentInstructionsData> =>
+  (await dxClient.call(GetPersonalAgentInstructionsEndpoint, {}, { signal }))
+    .data;
+
+const updatePersonalAgentInstructions = async (input: {
+  readonly instructions: string;
+  readonly expectedRevision: number;
+}): Promise<PersonalAgentInstructionsData> =>
+  (
+    await dxClient.call(UpdatePersonalAgentInstructionsEndpoint, {
+      body: input,
+    })
+  ).data;
 
 export const personalAdvancedMutationError = (
   cause: unknown,

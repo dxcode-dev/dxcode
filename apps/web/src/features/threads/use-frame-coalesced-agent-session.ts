@@ -1,81 +1,34 @@
+import {
+  type AgentSource as ClientAgentSource,
+  frameCoalescedAgentSource as clientFrameCoalescedAgentSource,
+  frameCoalescedSnapshots as clientFrameCoalescedSnapshots,
+  createSelection,
+  type FrameScheduler,
+} from "@dx/client";
 import type { FlueAgentSession, useFlueAgentSession } from "@flue/react";
 import * as React from "react";
+
+export { agentValueSource } from "@dx/client";
 
 type AgentSessionResult = ReturnType<typeof useFlueAgentSession>;
 type Snapshot = ReturnType<FlueAgentSession["getSnapshot"]>;
 
+/** Animation frames, read when called so a test's stubs apply. */
+const animationFrames: FrameScheduler = {
+  request: (callback) => requestAnimationFrame(callback),
+  cancel: (handle) => cancelAnimationFrame(handle as number),
+};
+
 /**
  * Wraps a Flue session so its snapshots publish at most once per animation
- * frame. Flue publishes once per stream chunk, and a network batch delivers
- * many chunks in one task; rendering each would block the main thread.
- * Skipped intermediate snapshots are never needed: each one is complete.
- * Hidden tabs do not render until visible again.
+ * frame (`frameCoalescedSnapshots` in `@dx/client`). Hidden tabs do not
+ * render until visible again.
  */
-export const frameCoalescedSnapshots = (session: FlueAgentSession) => {
-  let snapshot: Snapshot = session.getSnapshot();
-  let frame: number | undefined;
-  let release: (() => void) | undefined;
-  const listeners = new Set<() => void>();
-  const flush = () => {
-    frame = undefined;
-    const next = session.getSnapshot();
-    if (next === snapshot) return;
-    snapshot = next;
-    for (const listener of listeners) listener();
-  };
-  return {
-    getSnapshot: () => snapshot,
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      if (release === undefined) {
-        release = session.subscribe(() => {
-          frame ??= requestAnimationFrame(flush);
-        });
-        // Anything published while unsubscribed is visible immediately.
-        snapshot = session.getSnapshot();
-      }
-      return () => {
-        listeners.delete(listener);
-        if (listeners.size > 0) return;
-        release?.();
-        release = undefined;
-        if (frame !== undefined) cancelAnimationFrame(frame);
-        frame = undefined;
-      };
-    },
-  };
-};
+export const frameCoalescedSnapshots = (session: FlueAgentSession) =>
+  clientFrameCoalescedSnapshots<Snapshot>(session, animationFrames);
 
-/**
- * A Flue conversation that each component subscribes to for what it renders:
- * the transcript for every snapshot, the composer and error card only for the
- * values they show. `getSnapshot` returns the same agent until Flue publishes.
- */
-export interface AgentSource<Agent = AgentSessionResult> {
-  readonly subscribe: (listener: () => void) => () => void;
-  readonly getSnapshot: () => Agent;
-}
-
-const noSubscription = () => () => {};
-
-/** An agent its owner re-renders with each change, as an {@link AgentSource}. */
-export const agentValueSource = <Agent>(agent: Agent): AgentSource<Agent> => ({
-  subscribe: noSubscription,
-  getSnapshot: () => agent,
-});
-
-/** Keeps the previous selection while `same` says nothing changed. */
-const createSelection = <T>() => {
-  let selected: { readonly value: T } | undefined;
-  return {
-    keep: (next: T, same: (previous: T, next: T) => boolean) => {
-      if (selected !== undefined && same(selected.value, next))
-        return selected.value;
-      selected = { value: next };
-      return next;
-    },
-  };
-};
+/** A Flue conversation as a store; see `AgentSource` in `@dx/client`. */
+export type AgentSource<Agent = AgentSessionResult> = ClientAgentSource<Agent>;
 
 /**
  * Subscribes the caller to one value it renders from the agent, so it
@@ -94,36 +47,11 @@ export function useAgentSelection<Agent, T>(
 /** The session's agent, with its actions, published at most once per frame. */
 export const frameCoalescedAgentSource = (
   session: FlueAgentSession,
-): AgentSource => {
-  const snapshots = frameCoalescedSnapshots(session);
-  const actions = {
-    sendMessage: session.sendMessage.bind(session),
-    resume: session.resume.bind(session),
-    abort: session.abort.bind(session),
-    retrySend: session.retrySend.bind(session),
-    resendPrompt: session.resendPrompt.bind(session),
-    forgetSend: session.forgetSend.bind(session),
-    refresh: session.refresh,
-    loadOlder: session.loadOlder,
-    openHistoryWindow: session.openHistoryWindow,
-    loadWindowOlder: session.loadWindowOlder,
-    loadWindowNewer: session.loadWindowNewer,
-    closeHistoryWindow: session.closeHistoryWindow,
-  };
-  let snapshot: Snapshot | undefined;
-  let agent: AgentSessionResult | undefined;
-  return {
-    subscribe: snapshots.subscribe,
-    getSnapshot: () => {
-      const next = snapshots.getSnapshot();
-      if (agent === undefined || next !== snapshot) {
-        snapshot = next;
-        agent = { ...next, ...actions } as AgentSessionResult;
-      }
-      return agent;
-    },
-  };
-};
+): AgentSource =>
+  clientFrameCoalescedAgentSource<Snapshot, FlueAgentSession>(
+    session,
+    animationFrames,
+  ) as AgentSource;
 
 // The last session's source; a new session gets its own.
 const createSourceCell = () => {

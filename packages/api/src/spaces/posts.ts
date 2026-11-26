@@ -88,10 +88,8 @@ export const SpacePostSchema = Schema.Struct({
 });
 export type SpacePost = typeof SpacePostSchema.Type;
 
-/** `GET /v1/spaces/:threadId/posts?before=&limit=`. */
+/** `GET /v1/spaces/:threadId/posts?limit=&before=`. */
 export const ListSpacePostsQuerySchema = Schema.Struct({
-  /** Only posts older than this post. */
-  before: Schema.optional(SpacePostIdSchema),
   limit: Schema.optional(
     Schema.String.check(Schema.isPattern(/^[0-9]{1,3}$/)).pipe(
       Schema.decodeTo(Schema.FiniteFromString),
@@ -102,6 +100,8 @@ export const ListSpacePostsQuerySchema = Schema.Struct({
       ),
     ),
   ),
+  /** Only posts older than this post. */
+  before: Schema.optional(SpacePostIdSchema),
 });
 
 /**

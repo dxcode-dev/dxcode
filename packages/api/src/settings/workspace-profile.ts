@@ -7,8 +7,10 @@ import {
   WorkspaceShortName,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import { SettingsFieldErrorSchema } from "./field-error.js";
+import { WorkspaceSettingsParamsSchema } from "./workspace-params.js";
 
 export const WorkspaceProfileDataSchema = Schema.Struct({
   id: WorkspaceId,
@@ -112,3 +114,61 @@ export type CreateWorkspaceResponse =
   typeof CreateWorkspaceResponseSchema.Encoded;
 export type UpdateWorkspaceProfileResponse =
   typeof UpdateWorkspaceProfileResponseSchema.Encoded;
+
+const workspaceProfileRefusals = [
+  { status: 400, schema: WorkspaceProfileInvalidRequestResponseSchema },
+  { status: 403, schema: WorkspaceProfileForbiddenResponseSchema },
+  { status: 409, schema: WorkspaceShortNameUnavailableResponseSchema },
+  { status: 409, schema: WorkspaceMembershipExistsResponseSchema },
+  { status: 409, schema: WorkspaceProfileConflictResponseSchema },
+  { status: 503, schema: WorkspaceProfilePersistenceUnavailableResponseSchema },
+];
+
+export const CreateWorkspaceEndpoint = defineEndpoint({
+  id: "settings.workspaceProfile.create",
+  method: "POST",
+  path: "/v1/settings/workspaces",
+  body: CreateWorkspaceRequestSchema,
+  success: CreateWorkspaceResponseSchema,
+  successStatus: 201,
+  refusals: workspaceProfileRefusals,
+});
+
+export const GetWorkspaceProfileEndpoint = defineEndpoint({
+  id: "settings.workspaceProfile.get",
+  method: "GET",
+  path: "/v1/settings/workspaces/:workspaceSlug",
+  params: WorkspaceSettingsParamsSchema,
+  success: GetWorkspaceProfileResponseSchema,
+  refusals: workspaceProfileRefusals,
+});
+
+export const UpdateWorkspaceProfileEndpoint = defineEndpoint({
+  id: "settings.workspaceProfile.update",
+  method: "PATCH",
+  path: "/v1/settings/workspaces/:workspaceSlug",
+  params: WorkspaceSettingsParamsSchema,
+  body: UpdateWorkspaceProfileRequestSchema,
+  success: UpdateWorkspaceProfileResponseSchema,
+  refusals: workspaceProfileRefusals,
+});
+
+/** Replaces the workspace's picture with an image file. */
+export const SetWorkspaceAvatarEndpoint = defineEndpoint({
+  id: "settings.workspaceProfile.avatar.set",
+  method: "PUT",
+  path: "/v1/settings/workspaces/:workspaceSlug/avatar",
+  params: WorkspaceSettingsParamsSchema,
+  upload: "bytes",
+  success: UpdateWorkspaceProfileResponseSchema,
+  refusals: workspaceProfileRefusals,
+});
+
+export const RemoveWorkspaceAvatarEndpoint = defineEndpoint({
+  id: "settings.workspaceProfile.avatar.remove",
+  method: "DELETE",
+  path: "/v1/settings/workspaces/:workspaceSlug/avatar",
+  params: WorkspaceSettingsParamsSchema,
+  success: UpdateWorkspaceProfileResponseSchema,
+  refusals: workspaceProfileRefusals,
+});

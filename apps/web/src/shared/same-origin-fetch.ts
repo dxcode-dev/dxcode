@@ -5,6 +5,7 @@ import {
   type ShellPart,
   ShellResponseSchema,
 } from "@dx/api";
+import { absentHistoryResponse } from "@dx/client";
 import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { noticeUnauthenticated } from "./auth/session-ended.js";
@@ -40,18 +41,6 @@ const requestTarget = (input: RequestInfo | URL) => {
 
 /** A read of a Thread agent's history, by its URL. */
 const isAgentHistoryRead = (url: string) => /[?&]view=history(&|$)/.test(url);
-
-/**
- * Flue's answer for a conversation that has not started, made in the page.
- * Core answers a history read that asks 204 instead, so the browser logs no
- * error (see `ABSENT_CONVERSATION_REQUEST_HEADER`); Flue's client still
- * reads its own 404.
- */
-export const absentHistoryResponse = () =>
-  new Response('{"error":{"type":"stream_not_found"}}', {
-    status: 404,
-    headers: { "content-type": "application/json" },
-  });
 
 const absentAsNotFound = (response: Response) =>
   response.status === 204 &&

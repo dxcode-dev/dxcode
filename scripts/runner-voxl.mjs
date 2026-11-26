@@ -40,6 +40,18 @@ export const DESKTOP_PIN = resolve(
   "deploy/runner/dx-desktop.json",
 );
 
+/**
+ * The dx Mac app (apps/apple, the official variant), pinned in
+ * deploy/apps/mac.json (tag `dx-mac-v<version>`, built and signed by the
+ * mac-app-build.yml workflow): a DMG for the download button and a zip for
+ * the one-line install, served at /runner/<asset>. Optional: without a pin,
+ * dxcode.dev/apps says the download is coming.
+ */
+export const MAC_APP_PIN = resolve(workspaceRoot, "deploy/apps/mac.json");
+export const MAC_APP_ASSETS = Object.freeze({
+  "macos-aarch64-dmg": "dx-mac-arm64.dmg",
+  "macos-aarch64-zip": "dx-mac-arm64.zip",
+});
 /** The launcher's release asset names, per runner platform (Apple silicon only). */
 export const DESKTOP_ASSETS = Object.freeze({
   "macos-aarch64": "dx-desktop-darwin-arm64",
@@ -122,6 +134,38 @@ export const readDesktopPin = (path = DESKTOP_PIN) => {
   }
   return pin;
 };
+
+export const readMacAppPin = (path = MAC_APP_PIN) => {
+  const pin = JSON.parse(readFileSync(path, "utf8"));
+  if (
+    typeof pin.version !== "string" ||
+    typeof pin.tag !== "string" ||
+    typeof pin.assets !== "object"
+  )
+    throw new Error(`${path}: needs version, tag, and assets.`);
+  if (pin.tag !== `dx-mac-v${pin.version}`)
+    throw new Error(`${path}: tag must be dx-mac-v${pin.version}.`);
+  for (const [platform, entry] of Object.entries(pin.assets)) {
+    if (MAC_APP_ASSETS[platform] !== entry?.asset)
+      throw new Error(
+        `${path}: ${platform} must name the asset ${MAC_APP_ASSETS[platform] ?? "(no such platform)"}.`,
+      );
+    if (!/^[0-9a-f]{64}$/.test(entry.sha256 ?? ""))
+      throw new Error(`${path}: ${platform} needs a sha256.`);
+  }
+  return pin;
+};
+
+/** Writes the pinned Mac app's DMG and zip, when deploy/apps/mac.json exists. */
+export const fetchPinnedMacApp = ({ pinPath = MAC_APP_PIN, ...options }) =>
+  existsSync(pinPath)
+    ? fetchPinned({
+        ...options,
+        pin: readMacAppPin(pinPath),
+        pinPath,
+        name: "dx-mac",
+      })
+    : Promise.resolve([]);
 
 /**
  * Writes each pinned voxl to `<directory>/<asset>`. A missing pin entry, a
@@ -227,7 +271,7 @@ const fetchPinned = async ({
 };
 
 // The release job: `node scripts/runner-voxl.mjs --out <dir>` writes the
-// pinned voxl and launcher with `<asset>.sha256` beside each, and fails
+// pinned voxl, launcher, and Mac app with `<asset>.sha256` beside each, and fails
 // unless every pinned asset downloads and matches its pin. `--voxl-pin` and
 // `--desktop-pin` read the pins from other files, such as the released
 // commit's.
@@ -240,7 +284,7 @@ if (import.meta.filename === process.argv[1]) {
   const out = value("--out");
   if (out === undefined)
     throw new Error(
-      "Usage: node scripts/runner-voxl.mjs --out <dir> [--voxl-pin <file>] [--desktop-pin <file>]",
+      "Usage: node scripts/runner-voxl.mjs --out <dir> [--voxl-pin <file>] [--desktop-pin <file>] [--mac-app-pin <file>]",
     );
   const options = { directory: out, required: true };
   for (const { asset, sha256: hash } of [
@@ -248,6 +292,10 @@ if (import.meta.filename === process.argv[1]) {
     ...(await fetchPinnedDesktop({
       ...options,
       pinPath: value("--desktop-pin"),
+    })),
+    ...(await fetchPinnedMacApp({
+      ...options,
+      pinPath: value("--mac-app-pin"),
     })),
   ]) {
     writeFileSync(resolve(out, `${asset}.sha256`), `${hash}  ${asset}\n`);

@@ -14,7 +14,7 @@ import type {
   FlueConversationMessage,
   FlueConversationPart,
   FlueConversationSettlement,
-} from "@flue/react";
+} from "@flue/sdk";
 import { isArtifactCardPart } from "./artifact-tool-part.js";
 import { presentableToolPart } from "./claude-code-tools.js";
 import { isMcpAppPart } from "./mcp-app-part.js";

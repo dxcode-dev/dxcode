@@ -11,10 +11,11 @@ import {
   Settings,
   UserRound,
 } from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import { type ComponentType, type ReactNode, Suspense, use } from "react";
 import { useIdentity } from "../../shared/auth/auth-context.js";
 import { useCommandPaletteSurface } from "../../shared/commands/command-provider.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
+import { ShellHostsSlot } from "../../shared/native-shell/shell-hosts-slot.js";
 import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
 import {
   MenuItem,
@@ -45,6 +46,8 @@ export function SidebarAccountMenu({
   readonly onNavigate: () => void;
 }) {
   const auth = useIdentity();
+  // Inside the Mac app: the hosts it opens, to switch between.
+  const ShellHostsMenuGroup = use(ShellHostsSlot);
   // Read when a menu item runs, so navigating does not re-render the menu.
   const router = useRouter();
   const navigate = useNavigate();
@@ -80,6 +83,11 @@ export function SidebarAccountMenu({
           <ChevronsUpDown className="account-chevrons" />
         </MenuTrigger>
         <MenuPopup side="top" align="start">
+          {ShellHostsMenuGroup === undefined ? null : (
+            <Suspense fallback={null}>
+              <ShellHostsMenuGroup />
+            </Suspense>
+          )}
           <MenuItem
             disabled={auth === undefined}
             onClick={() => auth?.logout()}

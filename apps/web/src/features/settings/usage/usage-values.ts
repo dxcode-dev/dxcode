@@ -96,20 +96,6 @@ export const usageTime = (value: DateTime.Utc) =>
     minute: "2-digit",
   });
 
-/** "2d7h58m", "26h1m", "6m": the largest units, no zeros in front. */
-export const compactDuration = (milliseconds: number) => {
-  const minutes = Math.floor(milliseconds / 60_000);
-  if (minutes < 1) return "<1m";
-  const days = Math.floor(minutes / 1_440);
-  const hours = Math.floor((minutes % 1_440) / 60);
-  const rest = minutes % 60;
-  return days > 0
-    ? `${days}d${hours}h${rest}m`
-    : hours > 0
-      ? `${hours}h${rest}m`
-      : `${rest}m`;
-};
-
 export const downloadCsv = (exported: {
   readonly content: string;
   readonly contentType: string;

@@ -1,16 +1,158 @@
-import type { UserId } from "@dx/domain";
-import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
-  beginMcpOAuth,
-  createMcpServer,
-  deleteMcpServer,
-  discoverMcpServer,
-  reviewMcpTool,
-  signOutMcpOAuth,
-  updateMcpServer,
-  updateMcpWorkspacePolicy,
-} from "../../../shared/api/client.js";
-import { type McpServersTarget, mcpServerKeys } from "./mcp-queries.js";
+  BeginPersonalMcpOAuthEndpoint,
+  BeginWorkspaceMcpOAuthEndpoint,
+  CreatePersonalMcpServerEndpoint,
+  CreateWorkspaceMcpServerEndpoint,
+  DeletePersonalMcpServerEndpoint,
+  DeleteWorkspaceMcpServerEndpoint,
+  DiscoverPersonalMcpServerEndpoint,
+  DiscoverWorkspaceMcpServerEndpoint,
+  ReviewPersonalMcpToolEndpoint,
+  ReviewWorkspaceMcpToolEndpoint,
+  SignOutPersonalMcpOAuthEndpoint,
+  SignOutWorkspaceMcpOAuthEndpoint,
+  UpdatePersonalMcpServerEndpoint,
+  UpdateWorkspaceMcpPolicyEndpoint,
+  UpdateWorkspaceMcpServerEndpoint,
+} from "@dx/api";
+import type {
+  EnvironmentVariableConfigReference,
+  McpServerId,
+  McpToolName,
+  McpToolSchemaHash,
+  UserId,
+} from "@dx/domain";
+import { mutationOptions, type QueryClient } from "@tanstack/react-query";
+import { dxClient } from "../../../shared/api/client.js";
+import {
+  type McpServerData,
+  type McpServerInput,
+  type McpServersTarget,
+  mcpServerKeys,
+} from "./mcp-queries.js";
+
+const createMcpServer = async (
+  target: McpServersTarget,
+  input: McpServerInput,
+): Promise<McpServerData> =>
+  (target.scope === "personal"
+    ? await dxClient.call(CreatePersonalMcpServerEndpoint, { body: input })
+    : await dxClient.call(CreateWorkspaceMcpServerEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug },
+        body: input,
+      })
+  ).data;
+
+const updateMcpServer = async (
+  target: McpServersTarget,
+  serverId: McpServerId,
+  input: Omit<Partial<McpServerInput>, "authReference" | "authType"> & {
+    readonly authType?: "none" | "bearer" | "oauth";
+    readonly authReference?: EnvironmentVariableConfigReference | null;
+    readonly enabled?: boolean;
+  },
+): Promise<McpServerData> =>
+  (target.scope === "personal"
+    ? await dxClient.call(UpdatePersonalMcpServerEndpoint, {
+        params: { mcpServerId: serverId },
+        body: input,
+      })
+    : await dxClient.call(UpdateWorkspaceMcpServerEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug, mcpServerId: serverId },
+        body: input,
+      })
+  ).data;
+
+const discoverMcpServer = async (
+  target: McpServersTarget,
+  serverId: McpServerId,
+): Promise<McpServerData> =>
+  (target.scope === "personal"
+    ? await dxClient.call(DiscoverPersonalMcpServerEndpoint, {
+        params: { mcpServerId: serverId },
+        body: {},
+      })
+    : await dxClient.call(DiscoverWorkspaceMcpServerEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug, mcpServerId: serverId },
+        body: {},
+      })
+  ).data;
+
+const reviewMcpTool = async (
+  target: McpServersTarget,
+  serverId: McpServerId,
+  toolName: McpToolName,
+  schemaHash: McpToolSchemaHash,
+  approved: boolean,
+): Promise<McpServerData> =>
+  (target.scope === "personal"
+    ? await dxClient.call(ReviewPersonalMcpToolEndpoint, {
+        params: { mcpServerId: serverId, toolName },
+        body: { schemaHash, approved },
+      })
+    : await dxClient.call(ReviewWorkspaceMcpToolEndpoint, {
+        params: {
+          workspaceSlug: target.workspaceSlug,
+          mcpServerId: serverId,
+          toolName,
+        },
+        body: { schemaHash, approved },
+      })
+  ).data;
+
+/** Starts an OAuth sign-in; the caller sends the browser to the returned URL. */
+const beginMcpOAuth = async (
+  target: McpServersTarget,
+  serverId: McpServerId,
+): Promise<string> =>
+  (target.scope === "personal"
+    ? await dxClient.call(BeginPersonalMcpOAuthEndpoint, {
+        params: { mcpServerId: serverId },
+        body: {},
+      })
+    : await dxClient.call(BeginWorkspaceMcpOAuthEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug, mcpServerId: serverId },
+        body: {},
+      })
+  ).data.authorizationUrl;
+
+/** Removes the person's own sign-in to the server. */
+const signOutMcpOAuth = async (
+  target: McpServersTarget,
+  serverId: McpServerId,
+): Promise<McpServerData> =>
+  (target.scope === "personal"
+    ? await dxClient.call(SignOutPersonalMcpOAuthEndpoint, {
+        params: { mcpServerId: serverId },
+      })
+    : await dxClient.call(SignOutWorkspaceMcpOAuthEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug, mcpServerId: serverId },
+      })
+  ).data;
+
+const deleteMcpServer = async (
+  target: McpServersTarget,
+  serverId: McpServerId,
+): Promise<McpServerId> =>
+  (target.scope === "personal"
+    ? await dxClient.call(DeletePersonalMcpServerEndpoint, {
+        params: { mcpServerId: serverId },
+      })
+    : await dxClient.call(DeleteWorkspaceMcpServerEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug, mcpServerId: serverId },
+      })
+  ).data.deletedMcpServerId;
+
+const updateMcpWorkspacePolicy = async (
+  target: Extract<McpServersTarget, { readonly scope: "workspace" }>,
+  allowPersonalServers: boolean,
+): Promise<boolean> =>
+  (
+    await dxClient.call(UpdateWorkspaceMcpPolicyEndpoint, {
+      params: { workspaceSlug: target.workspaceSlug },
+      body: { allowPersonalServers },
+    })
+  ).data.allowPersonalServers;
 
 export type McpServersMutationAction =
   | {

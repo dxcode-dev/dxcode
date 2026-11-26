@@ -6,6 +6,7 @@ import {
   ListThreadQueuedMessagesResponseSchema,
   parseMessageAttachments,
   parseMessageAuthor,
+  QUEUED_SUBMISSION_ID,
   stripMessageAuthorTags,
   THREAD_MESSAGE_ENTRY_ID,
   type ThreadMessageQueueErrorCode,
@@ -44,7 +45,7 @@ const decodeDelete = Schema.decodeUnknownOption(
 );
 
 /** Flue's submission ids: a UUID or a keyed hash, never a path. */
-const SUBMISSION_ID = /^[A-Za-z0-9_:-]{1,200}$/;
+const SUBMISSION_ID = QUEUED_SUBMISSION_ID;
 
 /**
  * A body no message has: a rewind with it only finds its key, and a withdraw

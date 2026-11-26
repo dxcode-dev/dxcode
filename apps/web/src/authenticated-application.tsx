@@ -15,6 +15,7 @@ import {
   HuddleSlot,
   type HuddleSlotProps,
 } from "./shared/huddle/huddle-slot.js";
+import { ShellHostsSlot } from "./shared/native-shell/shell-hosts-slot.js";
 import { artifactLinkHere } from "./shared/navigation/open-artifact.js";
 import { lazyComponent } from "./shared/stale-chunk.js";
 import { Toaster } from "./shared/ui/sonner.js";
@@ -25,6 +26,29 @@ const ReactQueryDevtools = import.meta.env.DEV
   ? lazyComponent(() =>
       import("@tanstack/react-query-devtools").then((module) => ({
         default: module.ReactQueryDevtools,
+      })),
+    )
+  : undefined;
+
+/**
+ * The native shell bridge and the account menu's Hosts group, loaded only
+ * inside a shell (the Mac app), from one chunk: a browser never downloads
+ * either. A shell defines `window.dxShell` before any page script runs;
+ * checked here, not through shared/native-shell, to keep that module off a
+ * browser's first load too.
+ */
+const shellFeature = () =>
+  import("./features/native-shell/native-shell-bridge.js");
+const insideShell = "dxShell" in window;
+const NativeShellBridge = insideShell
+  ? lazyComponent(() =>
+      shellFeature().then((module) => ({ default: module.NativeShellBridge })),
+    )
+  : undefined;
+const ShellHostsMenuGroup = insideShell
+  ? lazyComponent(() =>
+      shellFeature().then((module) => ({
+        default: module.ShellHostsMenuGroup,
       })),
     )
   : undefined;
@@ -140,10 +164,22 @@ export function AuthenticatedApplication({
       <RealtimeProvider queryClient={queryClient} userId={auth.identity.id}>
         <ReportBugSlot.Provider value={AppBugReportDialog}>
           <HuddleSlot.Provider value={HuddleButtonSlot}>
-            <LoadedRouter router={router} />
+            <ShellHostsSlot.Provider value={ShellHostsMenuGroup}>
+              <LoadedRouter router={router} />
+            </ShellHostsSlot.Provider>
           </HuddleSlot.Provider>
         </ReportBugSlot.Provider>
         <InAppNavigation key={auth.identity.id} router={router} />
+        {NativeShellBridge === undefined ? null : (
+          <Suspense fallback={null}>
+            <NativeShellBridge
+              key={`shell-${auth.identity.id}`}
+              router={router}
+              queryClient={queryClient}
+              identity={auth.identity}
+            />
+          </Suspense>
+        )}
         <RecordTimeZone key={auth.identity.id} />
         <FeedbackWidgetOnDx key={auth.identity.id} />
         <Suspense fallback={null}>

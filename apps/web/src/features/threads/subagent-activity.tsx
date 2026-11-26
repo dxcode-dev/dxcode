@@ -1,3 +1,4 @@
+import type { SubagentView, ToolPart } from "@dx/client";
 import { ChevronRight, Maximize2, X } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
@@ -8,8 +9,6 @@ import {
   DialogRoot,
   DialogTitle,
 } from "../../shared/ui/dialog.js";
-import type { SubagentView } from "./subagent-view.js";
-import type { ToolPart } from "./transcript-activity-projection.js";
 import { TranscriptMarkdown } from "./transcript-markdown.js";
 
 type RenderStep = (part: ToolPart, key: string) => React.ReactNode;

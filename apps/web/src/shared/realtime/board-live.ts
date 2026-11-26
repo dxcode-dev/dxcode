@@ -1,7 +1,6 @@
 import type { BoardLivePayload } from "@dx/api";
-import type { UserId } from "@dx/domain";
+import type { BoardLiveEvent, PresenceScope } from "@dx/client";
 import * as React from "react";
-import type { PresenceScope } from "./presence-scope.js";
 
 /**
  * Live presence on an artifact, between the realtime client (which owns the
@@ -11,12 +10,7 @@ import type { PresenceScope } from "./presence-scope.js";
  * change.
  */
 
-/** Someone drawing on a board, as the hub relays it. */
-export interface BoardLiveEvent {
-  readonly userId: UserId;
-  readonly clientId: string;
-  readonly payload: BoardLivePayload;
-}
+export type { BoardLiveEvent };
 
 export interface BoardLiveHub {
   readonly send: (

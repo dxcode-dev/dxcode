@@ -43,7 +43,10 @@ import { artifactCommentsOptions } from "../artifact-comments-queries.js";
 import { ArtifactPeople } from "../artifact-people.js";
 import { PresenceStack } from "../artifact-presence.js";
 import type { ArtifactScope } from "../artifact-scope.js";
-import { type ArtifactDocument, artifactsApi } from "../artifacts-api.js";
+import {
+  type ArtifactDocument,
+  artifactsApi,
+} from "../artifacts-api-queries.js";
 import {
   CommentCard,
   type CommentDraft,

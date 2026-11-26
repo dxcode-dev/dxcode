@@ -5,6 +5,7 @@ import {
   Timestamp,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import { SettingsFieldErrorSchema } from "./field-error.js";
 
@@ -83,3 +84,39 @@ export type GetPersonalAgentInstructionsResponse =
   typeof GetPersonalAgentInstructionsResponseSchema.Encoded;
 export type UpdatePersonalAgentInstructionsResponse =
   typeof UpdatePersonalAgentInstructionsResponseSchema.Encoded;
+
+export const GetPersonalAgentInstructionsEndpoint = defineEndpoint({
+  id: "settings.personalAgentInstructions.get",
+  method: "GET",
+  path: "/v1/settings/personal/agent-instructions",
+  success: GetPersonalAgentInstructionsResponseSchema,
+  refusals: [
+    { status: 403, schema: PersonalAgentInstructionsForbiddenResponseSchema },
+    { status: 404, schema: PersonalAgentInstructionsNotFoundResponseSchema },
+    {
+      status: 503,
+      schema: PersonalAgentInstructionsPersistenceUnavailableResponseSchema,
+    },
+  ],
+});
+
+export const UpdatePersonalAgentInstructionsEndpoint = defineEndpoint({
+  id: "settings.personalAgentInstructions.update",
+  method: "PATCH",
+  path: "/v1/settings/personal/agent-instructions",
+  body: UpdatePersonalAgentInstructionsRequestSchema,
+  success: UpdatePersonalAgentInstructionsResponseSchema,
+  refusals: [
+    {
+      status: 400,
+      schema: PersonalAgentInstructionsInvalidRequestResponseSchema,
+    },
+    { status: 409, schema: PersonalAgentInstructionsConflictResponseSchema },
+    { status: 403, schema: PersonalAgentInstructionsForbiddenResponseSchema },
+    { status: 404, schema: PersonalAgentInstructionsNotFoundResponseSchema },
+    {
+      status: 503,
+      schema: PersonalAgentInstructionsPersistenceUnavailableResponseSchema,
+    },
+  ],
+});

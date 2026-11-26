@@ -1,13 +1,43 @@
-import type { UserId } from "@dx/domain";
-import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
-  updatePersonalProjectDefaults,
-  updateWorkspaceProjectDefaults,
-} from "../../../shared/api/client.js";
+  type ProjectDefaultsData,
+  UpdatePersonalProjectDefaultsEndpoint,
+  UpdateWorkspaceProjectDefaultsEndpoint,
+} from "@dx/api";
+import type {
+  ProjectDefaultOverrides,
+  UserId,
+  WorkspaceProjectPolicy,
+  WorkspaceSlug,
+} from "@dx/domain";
+import { mutationOptions, type QueryClient } from "@tanstack/react-query";
+import { dxClient } from "../../../shared/api/client.js";
 import {
   type ProjectDefaultsTarget,
   projectDefaultsKeys,
 } from "./project-defaults-queries.js";
+
+const updatePersonalProjectDefaults = async (
+  expectedRevision: number,
+  overrides: ProjectDefaultOverrides,
+): Promise<ProjectDefaultsData> =>
+  (
+    await dxClient.call(UpdatePersonalProjectDefaultsEndpoint, {
+      body: { expectedRevision, overrides },
+    })
+  ).data;
+
+const updateWorkspaceProjectDefaults = async (
+  workspaceSlug: WorkspaceSlug,
+  expectedRevision: number,
+  overrides: ProjectDefaultOverrides,
+  policy: WorkspaceProjectPolicy,
+): Promise<ProjectDefaultsData> =>
+  (
+    await dxClient.call(UpdateWorkspaceProjectDefaultsEndpoint, {
+      params: { workspaceSlug },
+      body: { expectedRevision, overrides, policy },
+    })
+  ).data;
 
 export interface ProjectDefaultsMutationInput {
   readonly expectedRevision: number;

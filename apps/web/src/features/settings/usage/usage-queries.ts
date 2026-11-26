@@ -6,6 +6,21 @@ import type {
   WorkspaceUsageAuditPageData,
   WorkspaceUsageData,
 } from "@dx/api";
+import {
+  ExportWorkspaceUsageAuditEndpoint,
+  ExportWorkspaceUsageEndpoint,
+  GetOrbUsageEndpoint,
+  GetPersonalUsageEndpoint,
+  GetWorkspaceUsageEndpoint,
+  InspectWorkspacePrivateThreadEndpoint,
+  type InspectWorkspacePrivateThreadRequestSchema,
+  ListWorkspaceUsageAuditEndpoint,
+  type PersonalUsageExportData,
+  type PersonalUsageQuerySchema,
+  type WorkspaceUsageAuditExportData,
+  type WorkspaceUsageAuditQuerySchema,
+  type WorkspaceUsageQuerySchema,
+} from "@dx/api";
 import type { UserId, WorkspaceSlug } from "@dx/domain";
 import {
   hashKey,
@@ -15,18 +30,168 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  exportWorkspaceUsage,
-  exportWorkspaceUsageAudit,
-  getOrbUsage,
-  getPersonalUsage,
-  getWorkspaceUsage,
-  inspectWorkspacePrivateThread,
-  listWorkspaceUsageAudit,
-  type PersonalUsageQuery,
-  type WorkspaceUsageAuditQuery,
-  type WorkspaceUsageQuery,
-} from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
+
+export interface PersonalUsageQuery {
+  readonly from: string;
+  readonly to: string;
+  readonly timezoneOffsetMinutes: number;
+  readonly projectId?: string;
+  readonly threadId?: string;
+  readonly providerId?: string;
+  readonly modelId?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
+/**
+ * A filter left empty is left out of the query. Filters hold what a person
+ * picked or typed, so they are cast to the query's IDs and Core checks them.
+ */
+const filled = (value: string | undefined) =>
+  value === undefined || value === "" ? undefined : value;
+
+const personalUsageQuery = (input: PersonalUsageQuery) =>
+  ({
+    from: input.from,
+    to: input.to,
+    timezoneOffsetMinutes: input.timezoneOffsetMinutes,
+    projectId: filled(input.projectId),
+    threadId: filled(input.threadId),
+    providerId: filled(input.providerId),
+    modelId: filled(input.modelId),
+    cursor: filled(input.cursor),
+    limit: input.limit,
+  }) as typeof PersonalUsageQuerySchema.Type;
+
+export interface WorkspaceUsageQuery {
+  readonly from: string;
+  readonly to: string;
+  readonly timezoneOffsetMinutes: number;
+  readonly userId?: string;
+  readonly projectId?: string;
+  readonly providerId?: string;
+  readonly modelId?: string;
+  readonly ranking: "users" | "projects";
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
+const workspaceUsageQuery = (input: WorkspaceUsageQuery) =>
+  ({
+    from: input.from,
+    to: input.to,
+    timezoneOffsetMinutes: input.timezoneOffsetMinutes,
+    ranking: input.ranking,
+    userId: filled(input.userId),
+    projectId: filled(input.projectId),
+    providerId: filled(input.providerId),
+    modelId: filled(input.modelId),
+    cursor: filled(input.cursor),
+    limit: input.limit,
+  }) as typeof WorkspaceUsageQuerySchema.Type;
+
+export interface WorkspaceUsageAuditQuery {
+  readonly from: string;
+  readonly to: string;
+  readonly actorUserId?: string;
+  readonly threadId?: string;
+  readonly result?:
+    | "success"
+    | "permission_denied"
+    | "browser_session_required"
+    | "recent_authentication_required"
+    | "thread_unavailable"
+    | "thread_not_private";
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
+const workspaceUsageAuditQuery = (input: WorkspaceUsageAuditQuery) =>
+  ({
+    from: input.from,
+    to: input.to,
+    actorUserId: filled(input.actorUserId),
+    threadId: filled(input.threadId),
+    result: input.result,
+    cursor: filled(input.cursor),
+    limit: input.limit,
+  }) as typeof WorkspaceUsageAuditQuerySchema.Type;
+
+const getPersonalUsage = async (
+  input: PersonalUsageQuery,
+  signal?: AbortSignal,
+): Promise<PersonalUsageData> =>
+  (
+    await dxClient.call(
+      GetPersonalUsageEndpoint,
+      { query: personalUsageQuery(input) },
+      { signal },
+    )
+  ).data;
+
+const getOrbUsage = async (signal?: AbortSignal): Promise<OrbUsageData> =>
+  (await dxClient.call(GetOrbUsageEndpoint, {}, { signal })).data;
+
+const getWorkspaceUsage = async (
+  workspaceSlug: WorkspaceSlug,
+  input: WorkspaceUsageQuery,
+  signal?: AbortSignal,
+): Promise<WorkspaceUsageData> =>
+  (
+    await dxClient.call(
+      GetWorkspaceUsageEndpoint,
+      { params: { workspaceSlug }, query: workspaceUsageQuery(input) },
+      { signal },
+    )
+  ).data;
+
+const exportWorkspaceUsage = async (
+  workspaceSlug: WorkspaceSlug,
+  input: WorkspaceUsageQuery,
+): Promise<PersonalUsageExportData> =>
+  (
+    await dxClient.call(ExportWorkspaceUsageEndpoint, {
+      params: { workspaceSlug },
+      query: workspaceUsageQuery(input),
+    })
+  ).data;
+
+const inspectWorkspacePrivateThread = async (
+  workspaceSlug: WorkspaceSlug,
+  input: { readonly threadId: string; readonly reason: string },
+): Promise<WorkspacePrivateThreadInspectionData> =>
+  (
+    await dxClient.call(InspectWorkspacePrivateThreadEndpoint, {
+      params: { workspaceSlug },
+      // The typed Thread ID goes to Core as typed; Core checks it.
+      body: input as typeof InspectWorkspacePrivateThreadRequestSchema.Type,
+    })
+  ).data;
+
+const listWorkspaceUsageAudit = async (
+  workspaceSlug: WorkspaceSlug,
+  input: WorkspaceUsageAuditQuery,
+  signal?: AbortSignal,
+): Promise<WorkspaceUsageAuditPageData> =>
+  (
+    await dxClient.call(
+      ListWorkspaceUsageAuditEndpoint,
+      { params: { workspaceSlug }, query: workspaceUsageAuditQuery(input) },
+      { signal },
+    )
+  ).data;
+
+const exportWorkspaceUsageAudit = async (
+  workspaceSlug: WorkspaceSlug,
+  input: WorkspaceUsageAuditQuery,
+): Promise<WorkspaceUsageAuditExportData> =>
+  (
+    await dxClient.call(ExportWorkspaceUsageAuditEndpoint, {
+      params: { workspaceSlug },
+      query: workspaceUsageAuditQuery(input),
+    })
+  ).data;
 
 export type {
   OrbUsageData,

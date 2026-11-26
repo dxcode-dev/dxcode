@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { ArtifactScope } from "../artifact-scope.js";
-import type { ArtifactDocument } from "../artifacts-api.js";
+import type { ArtifactDocument } from "../artifacts-api-queries.js";
 import { ArtifactSession } from "./artifact-session.js";
 
 const RELEASED_FOR = 10 * 60_000;

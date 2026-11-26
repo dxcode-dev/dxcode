@@ -1,13 +1,13 @@
-import { parseThreadReference } from "@dx/domain";
-import { MAIL_TOOL_NAMES } from "./mail-tool-part.js";
-import { shellCommandOperations } from "./shell-command-operation.js";
 import {
   categoryForPart,
+  shellCommandOperations,
   type ToolCategory,
   type ToolPart,
   toolPart,
   type WorkRow,
-} from "./transcript-activity-projection.js";
+} from "@dx/client";
+import { parseThreadReference } from "@dx/domain";
+import { MAIL_TOOL_NAMES } from "./mail-tool-part.js";
 
 export const record = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null

@@ -60,13 +60,13 @@ vi.mock("./panes/thread-stacked-layout.js", async (importOriginal) => {
   };
 });
 
+import { deriveTranscriptViewModel } from "@dx/client";
 import { AuthContext } from "../../shared/auth/auth-context.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";
 import { ThreadSessionRegistry } from "./thread-session-registry.js";
 import { ThreadTranscript } from "./thread-transcript.js";
 import { ThreadSession } from "./thread-workspace.js";
-import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 
 // --- Fake layout: a 400×600 viewport, 100 px turns, nothing when hidden.
 const sizeOf = (element: Element) => {

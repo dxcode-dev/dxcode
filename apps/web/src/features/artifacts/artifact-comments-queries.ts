@@ -13,7 +13,7 @@ import {
   getStandaloneArtifactMembers,
   listArtifactComments,
   resolveArtifactComment,
-} from "./artifacts-api.js";
+} from "./artifacts-api-queries.js";
 import { artifactKeys } from "./artifacts-queries.js";
 
 export const artifactCommentsOptions = (

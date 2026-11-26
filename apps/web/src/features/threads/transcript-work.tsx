@@ -1,12 +1,12 @@
-import { ChevronRight } from "lucide-react";
-import * as React from "react";
-import { TranscriptActivityList } from "./transcript-activities.js";
 import {
   sameTranscriptRows,
   sameTranscriptTurn,
   type TranscriptRow,
   type TranscriptTurn as TranscriptTurnModel,
-} from "./transcript-view-model.js";
+} from "@dx/client";
+import { ChevronRight } from "lucide-react";
+import * as React from "react";
+import { TranscriptActivityList } from "./transcript-activities.js";
 import { useThreadPresentation } from "./use-thread-presentation.js";
 
 const formatDuration = (durationMs: number | undefined) => {

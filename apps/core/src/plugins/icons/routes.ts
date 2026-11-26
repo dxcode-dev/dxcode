@@ -1,4 +1,9 @@
+import {
+  PluginIconInvalidHashResponseSchema,
+  PluginIconNotFoundResponseSchema,
+} from "@dx/api";
 import { getLogger } from "@logtape/logtape";
+import { Schema } from "effect";
 import { Hono } from "hono";
 import type { AppEnv } from "../../http/types.js";
 import { lucideIconSvg } from "./lucide.js";
@@ -86,14 +91,14 @@ export const pluginIconRoutes = new Hono<AppEnv>()
     if (!HASH.test(hash)) {
       log("invalid");
       return context.json(
-        {
+        Schema.encodeUnknownSync(PluginIconInvalidHashResponseSchema)({
           status: "error",
           data: {
             code: "INVALID_REQUEST",
             message: "Not an icon hash.",
             requestId,
           },
-        },
+        }),
         400,
       );
     }
@@ -115,14 +120,14 @@ export const pluginIconRoutes = new Hono<AppEnv>()
       log("not-found");
       context.header("Cache-Control", "no-store");
       return context.json(
-        {
+        Schema.encodeUnknownSync(PluginIconNotFoundResponseSchema)({
           status: "error",
           data: {
             code: "NOT_FOUND",
             message: "No plugin icon has that hash.",
             requestId,
           },
-        },
+        }),
         404,
       );
     }

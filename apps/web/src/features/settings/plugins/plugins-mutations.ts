@@ -1,14 +1,93 @@
-import type { ConfigurablePluginProviderId } from "@dx/api";
-import type { UserId } from "@dx/domain";
-import { mutationOptions, type QueryClient } from "@tanstack/react-query";
+import type {
+  ConfigurablePluginProviderId,
+  SetFirstPartyPluginConfigurationRequest,
+} from "@dx/api";
 import {
-  deleteFirstPartyPluginConfiguration,
-  setFirstPartyPluginConfiguration,
-  setFirstPartyPluginEnablement,
-  setFirstPartyPluginWorkspacePolicy,
-} from "../../../shared/api/client.js";
+  DeletePersonalFirstPartyPluginConfigurationEndpoint,
+  DeleteWorkspaceFirstPartyPluginConfigurationEndpoint,
+  SetPersonalFirstPartyPluginConfigurationEndpoint,
+  SetPersonalFirstPartyPluginEnablementEndpoint,
+  SetWorkspaceFirstPartyPluginConfigurationEndpoint,
+  SetWorkspaceFirstPartyPluginEnablementEndpoint,
+  SetWorkspaceFirstPartyPluginPolicyEndpoint,
+} from "@dx/api";
+import type { FirstPartyPluginId, UserId, WorkspaceSlug } from "@dx/domain";
+import { mutationOptions, type QueryClient } from "@tanstack/react-query";
+import { dxClient } from "../../../shared/api/client.js";
 import { settingsKeys } from "../settings-context-queries.js";
 import { firstPartyPluginKeys, type PluginsTarget } from "./plugins-queries.js";
+
+/** Callers pass any id; Core refuses one this deployment does not install. */
+const firstPartyPluginId = (pluginId: string) => pluginId as FirstPartyPluginId;
+
+/** First-party plugins (Search, …): enablement, provider, and credential per scope. */
+const setFirstPartyPluginEnablement = async (
+  target: PluginsTarget,
+  pluginId: string,
+  enablement: "enabled" | "disabled" | null,
+) =>
+  (target.scope === "personal"
+    ? await dxClient.call(SetPersonalFirstPartyPluginEnablementEndpoint, {
+        params: { pluginId: firstPartyPluginId(pluginId) },
+        body: { enablement },
+      })
+    : await dxClient.call(SetWorkspaceFirstPartyPluginEnablementEndpoint, {
+        params: {
+          workspaceSlug: target.workspaceSlug,
+          pluginId: firstPartyPluginId(pluginId),
+        },
+        body: { enablement },
+      })
+  ).data;
+
+const setFirstPartyPluginConfiguration = async (
+  target: PluginsTarget,
+  pluginId: string,
+  input: SetFirstPartyPluginConfigurationRequest,
+) =>
+  (target.scope === "personal"
+    ? await dxClient.call(SetPersonalFirstPartyPluginConfigurationEndpoint, {
+        params: { pluginId: firstPartyPluginId(pluginId) },
+        body: input,
+      })
+    : await dxClient.call(SetWorkspaceFirstPartyPluginConfigurationEndpoint, {
+        params: {
+          workspaceSlug: target.workspaceSlug,
+          pluginId: firstPartyPluginId(pluginId),
+        },
+        body: input,
+      })
+  ).data;
+
+const deleteFirstPartyPluginConfiguration = async (
+  target: PluginsTarget,
+  pluginId: string,
+) =>
+  (target.scope === "personal"
+    ? await dxClient.call(DeletePersonalFirstPartyPluginConfigurationEndpoint, {
+        params: { pluginId: firstPartyPluginId(pluginId) },
+      })
+    : await dxClient.call(
+        DeleteWorkspaceFirstPartyPluginConfigurationEndpoint,
+        {
+          params: {
+            workspaceSlug: target.workspaceSlug,
+            pluginId: firstPartyPluginId(pluginId),
+          },
+        },
+      )
+  ).data;
+
+const setFirstPartyPluginWorkspacePolicy = async (
+  workspaceSlug: WorkspaceSlug,
+  allowPersonalOverrides: boolean,
+) =>
+  (
+    await dxClient.call(SetWorkspaceFirstPartyPluginPolicyEndpoint, {
+      params: { workspaceSlug },
+      body: { allowPersonalOverrides },
+    })
+  ).data;
 
 export type FirstPartyPluginAction =
   | {

@@ -618,9 +618,15 @@ export const RUNNER_ASSETS = Object.freeze({
     platform: "dx-desktop-darwin-aarch64",
     format: "macho",
   },
+  // The dx Mac app (deploy/apps/mac.json), for dxcode.dev/apps: the DMG the
+  // download button serves and the zip the one-line install fetches.
+  "dx-mac-arm64.dmg": { platform: "app-macos-aarch64-dmg", format: "dmg" },
+  "dx-mac-arm64.zip": { platform: "app-macos-aarch64-zip", format: "zip" },
 });
+/** The Mac app's one-line installer, served beside its zip. */
+const MAC_APP_INSTALLER = "dx-mac-install.sh";
 const RUNNER_PATH =
-  /^assets\/runner\/(?:manifest\.json|(?:dxd-(?:darwin|linux)-(?:arm64|x64)|voxl-darwin-arm64|dx-desktop-darwin-arm64)(?:\.sha256)?)$/;
+  /^assets\/runner\/(?:manifest\.json|dx-mac-install\.sh|(?:dxd-(?:darwin|linux)-(?:arm64|x64)|voxl-darwin-arm64|dx-desktop-darwin-arm64|dx-mac-arm64\.(?:dmg|zip))(?:\.sha256)?)$/;
 
 const runnerBinaryFormat = (binary) =>
   binary.length >= 4 &&
@@ -629,7 +635,16 @@ const runnerBinaryFormat = (binary) =>
     : binary.length >= 4 &&
         binary.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
       ? "elf"
-      : undefined;
+      : binary.length >= 4 &&
+          binary.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]))
+        ? "zip"
+        : // A DMG ends with its 512-byte "koly" trailer.
+          binary.length >= 512 &&
+            binary
+              .subarray(binary.length - 512, binary.length - 508)
+              .toString() === "koly"
+          ? "dmg"
+          : undefined;
 
 /**
  * Tools a runner Thread needs and a bare Mac or a minimal Linux lacks
@@ -737,9 +752,30 @@ export const packageRunnerAssets = (runnerBinaries, outputRoot, release) => {
     paths.push(`assets/runner/${asset}`, `assets/runner/${asset}.sha256`);
   }
   if (paths.length === 0) return undefined;
+  // With the Mac app: its version for dxcode.dev/apps, and its installer.
+  const macApp =
+    assets["app-macos-aarch64-zip"] === undefined
+      ? undefined
+      : {
+          version: JSON.parse(
+            readFileSync(
+              resolve(workspaceRoot, "deploy/apps/mac.json"),
+              "utf8",
+            ),
+          ).version,
+          installer: `/runner/${MAC_APP_INSTALLER}`,
+        };
+  if (macApp !== undefined) {
+    writeFileSync(
+      resolve(outputRoot, "assets/runner", MAC_APP_INSTALLER),
+      readFileSync(resolve(workspaceRoot, "deploy/apps/install-mac.sh")),
+      { mode: 0o644 },
+    );
+    paths.push(`assets/runner/${MAC_APP_INSTALLER}`);
+  }
   writeFileSync(
     resolve(outputRoot, "assets/runner/manifest.json"),
-    `${JSON.stringify({ version: release, assets, tools: loadRunnerTools() }, null, 2)}\n`,
+    `${JSON.stringify({ version: release, assets, tools: loadRunnerTools(), ...(macApp === undefined ? {} : { macApp }) }, null, 2)}\n`,
     { mode: 0o644 },
   );
   return {
@@ -1011,7 +1047,9 @@ const runnerPackageFiles = (manifest, files) => {
   )
     throw new Error("Production package runner assets are invalid.");
   for (const path of listed.filter((candidate) =>
-    /\/(?:dxd|voxl|dx-desktop)-[a-z0-9-]+$/.test(candidate),
+    /\/(?:(?:dxd|voxl|dx-desktop)-[a-z0-9-]+|dx-mac-arm64\.(?:dmg|zip))$/.test(
+      candidate,
+    ),
   )) {
     const binary = files.find((file) => file.path === path);
     const recorded = files.find((file) => file.path === `${path}.sha256`);

@@ -153,7 +153,9 @@ describe("account Orb client", () => {
     const read = await orb.readFile("/home/user/big.bin");
     expect(read.byteLength).toBe(file.byteLength);
     expect(read[read.byteLength - 1]).toBe(7);
-  });
+    // About 22 MiB of base64 is encoded, streamed, parsed, and decoded:
+    // under half a second alone, several times that on a loaded shard.
+  }, 30_000);
 
   it("still surfaces the Worker's error message and health answer (#2390)", async () => {
     await expect(

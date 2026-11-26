@@ -14,6 +14,7 @@ import {
   WorkspaceUsageRanking,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { PageLimitQuerySchema } from "../http/page-limit-query.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import {
@@ -39,11 +40,11 @@ export const WorkspaceUsageQuerySchema = Schema.Struct({
   from: UsageDate,
   to: UsageDate,
   timezoneOffsetMinutes: TimezoneOffsetQuerySchema,
+  ranking: Schema.optional(WorkspaceUsageRanking),
   userId: Schema.optional(UserId),
   projectId: Schema.optional(ProjectId),
   providerId: Schema.optional(Schema.String),
   modelId: Schema.optional(Schema.String),
-  ranking: Schema.optional(WorkspaceUsageRanking),
   cursor: Schema.optional(PageCursor),
   limit: Schema.optional(PageLimitQuerySchema),
 });
@@ -300,3 +301,63 @@ export type WorkspaceUsageAuditPageData =
   typeof ListWorkspaceUsageAuditResponseSchema.Type.data;
 export type WorkspaceUsageAuditExportData =
   typeof WorkspaceUsageAuditExportDataSchema.Type;
+
+const workspaceUsageRefusals = [
+  { status: 400, schema: WorkspaceUsageInvalidRequestResponseSchema },
+  { status: 403, schema: WorkspaceUsageScopeForbiddenResponseSchema },
+  { status: 403, schema: WorkspaceUsagePermissionForbiddenResponseSchema },
+  { status: 403, schema: WorkspaceUsageResourceForbiddenResponseSchema },
+  { status: 403, schema: WorkspacePrivateInspectionForbiddenResponseSchema },
+  { status: 404, schema: WorkspacePrivateInspectionUnavailableResponseSchema },
+  { status: 503, schema: WorkspaceUsagePersistenceUnavailableResponseSchema },
+];
+
+export const GetWorkspaceUsageEndpoint = defineEndpoint({
+  id: "settings.workspaceUsage.get",
+  method: "GET",
+  path: "/v1/settings/workspaces/:workspaceSlug/usage",
+  params: WorkspaceUsageParamsSchema,
+  query: WorkspaceUsageQuerySchema,
+  success: GetWorkspaceUsageResponseSchema,
+  refusals: workspaceUsageRefusals,
+});
+
+export const ExportWorkspaceUsageEndpoint = defineEndpoint({
+  id: "settings.workspaceUsage.export",
+  method: "GET",
+  path: "/v1/settings/workspaces/:workspaceSlug/usage/export",
+  params: WorkspaceUsageParamsSchema,
+  query: WorkspaceUsageQuerySchema,
+  success: ExportWorkspaceUsageResponseSchema,
+  refusals: workspaceUsageRefusals,
+});
+
+export const InspectWorkspacePrivateThreadEndpoint = defineEndpoint({
+  id: "settings.workspaceUsage.inspectPrivateThread",
+  method: "POST",
+  path: "/v1/settings/workspaces/:workspaceSlug/usage/private-inspections",
+  params: WorkspaceUsageParamsSchema,
+  body: InspectWorkspacePrivateThreadRequestSchema,
+  success: InspectWorkspacePrivateThreadResponseSchema,
+  refusals: workspaceUsageRefusals,
+});
+
+export const ListWorkspaceUsageAuditEndpoint = defineEndpoint({
+  id: "settings.workspaceUsage.audit.list",
+  method: "GET",
+  path: "/v1/settings/workspaces/:workspaceSlug/usage/audit",
+  params: WorkspaceUsageParamsSchema,
+  query: WorkspaceUsageAuditQuerySchema,
+  success: ListWorkspaceUsageAuditResponseSchema,
+  refusals: workspaceUsageRefusals,
+});
+
+export const ExportWorkspaceUsageAuditEndpoint = defineEndpoint({
+  id: "settings.workspaceUsage.audit.export",
+  method: "GET",
+  path: "/v1/settings/workspaces/:workspaceSlug/usage/audit/export",
+  params: WorkspaceUsageParamsSchema,
+  query: WorkspaceUsageAuditQuerySchema,
+  success: ExportWorkspaceUsageAuditResponseSchema,
+  refusals: workspaceUsageRefusals,
+});

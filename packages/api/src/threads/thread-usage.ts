@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { successResponse } from "../http/response.js";
+import { errorResponse, successResponse } from "../http/response.js";
 
 /**
  * A Thread's Cost & Usage (the Thread menu's cost row and its dialog). Every
@@ -281,3 +281,19 @@ export const GetThreadClaudePlanResponseSchema = Schema.Struct({
   status: Schema.Literal("success"),
   data: ThreadClaudePlanDataSchema,
 });
+
+/** The deployment has no database to read usage from. */
+export const ThreadUsageUnavailableResponseSchema = errorResponse(
+  "PERSISTENCE_UNAVAILABLE",
+  "Usage is unavailable.",
+);
+/** `requests` without a provider and model. */
+export const ThreadUsageInvalidQueryResponseSchema = errorResponse(
+  "INVALID_QUERY",
+  "Name the provider and model.",
+);
+/** Only the owner sees which Claude plan their Thread runs on. */
+export const ThreadClaudePlanOwnerOnlyResponseSchema = errorResponse(
+  "THREAD_OWNER_ONLY",
+  "Only the Thread's owner sees its Claude plan.",
+);

@@ -1,4 +1,4 @@
-import type { ToolPart } from "./transcript-activity-projection.js";
+import type { ToolPart } from "@dx/client";
 
 /** The agent's mail tools, which read the owner's Mail. */
 export const MAIL_TOOL_NAMES: ReadonlySet<string> = new Set([

@@ -22,7 +22,7 @@ import {
   changeFeedbackWidgetMutationOptions,
   type FeedbackWidgetChange,
   feedbackWidgetQueryOptions,
-} from "./feedback-widget-queries.js";
+} from "./project-feedback-widget-queries.js";
 
 const scriptTag = (scriptUrl: string) =>
   `<script src="${scriptUrl}" async></script>`;

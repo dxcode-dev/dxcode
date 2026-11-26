@@ -11,6 +11,8 @@
 //   Delete for an artifact that is already gone;
 // - Delete calls the wrong Thread or artifact, or Keep deletes anyway.
 
+import type { ToolPart } from "@dx/client";
+import { deriveTranscriptViewModel } from "@dx/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -24,8 +26,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { ArtifactToolCard } from "./artifact-tool-card.js";
-import type { ToolPart } from "./transcript-activity-projection.js";
-import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 import { TranscriptTurn } from "./transcript-work.js";
 
 const THREAD = "thr_00000000-0000-4000-8000-0000000000a1";

@@ -1,3 +1,8 @@
+import {
+  promptOutlineLabel,
+  type TranscriptOutlineAnchor,
+  type TranscriptRowId,
+} from "@dx/client";
 import type { FlueConversationPrompt } from "@flue/react";
 import { List } from "lucide-react";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
@@ -7,11 +12,6 @@ import {
   MenuRoot,
   MenuTrigger,
 } from "../../shared/ui/menu.js";
-import {
-  promptOutlineLabel,
-  type TranscriptOutlineAnchor,
-  type TranscriptRowId,
-} from "./transcript-view-model.js";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",

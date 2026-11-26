@@ -58,8 +58,8 @@ import {
 import { artifactCommentsOptions } from "../artifact-comments-queries.js";
 import { PresenceStack } from "../artifact-presence.js";
 import type { ArtifactScope } from "../artifact-scope.js";
-import type { ArtifactDocument } from "../artifacts-api.js";
-import { artifactsApi } from "../artifacts-api.js";
+import type { ArtifactDocument } from "../artifacts-api-queries.js";
+import { artifactsApi } from "../artifacts-api-queries.js";
 import {
   CommentCard,
   type CommentDraft,

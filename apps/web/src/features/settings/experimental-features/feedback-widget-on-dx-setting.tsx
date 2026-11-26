@@ -6,10 +6,8 @@ import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
 import { SettingsRow, SettingsSelect } from "../../../shared/ui/settings.js";
-import {
-  personalFeedbackWidgetQueryOptions,
-  updatePersonalFeedbackWidgetMutationOptions,
-} from "../../projects/feedback-widget-queries.js";
+import { updatePersonalFeedbackWidgetMutationOptions } from "../../projects/feedback-widget-mutations.js";
+import { personalFeedbackWidgetQueryOptions } from "../../projects/feedback-widget-queries.js";
 
 const OFF = "off";
 const OTHER = "other";

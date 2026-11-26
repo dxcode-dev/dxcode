@@ -1,5 +1,6 @@
 import { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 
 export const MarkThreadSeenParamsSchema = Schema.Struct({
@@ -28,3 +29,17 @@ export const MarkThreadSeenPersistenceUnavailableResponseSchema = errorResponse(
   "PERSISTENCE_UNAVAILABLE",
   "Persistence is temporarily unavailable.",
 );
+
+export const MarkThreadSeenEndpoint = defineEndpoint({
+  id: "threads.markSeen",
+  summary: "Mark a Thread seen",
+  method: "POST",
+  path: "/v1/threads/:threadId/seen",
+  params: MarkThreadSeenParamsSchema,
+  success: MarkThreadSeenResponseSchema,
+  refusals: [
+    { status: 400, schema: MarkThreadSeenInvalidRequestResponseSchema },
+    { status: 404, schema: MarkThreadSeenNotFoundResponseSchema },
+    { status: 503, schema: MarkThreadSeenPersistenceUnavailableResponseSchema },
+  ],
+});

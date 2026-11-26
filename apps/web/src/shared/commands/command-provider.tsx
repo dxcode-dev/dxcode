@@ -58,13 +58,27 @@ const dispatcherSnapshot = () => 0;
 const useGlobalCommandDispatcher = (
   handler: (event: KeyboardEvent) => void,
   textFieldHandler: (event: KeyboardEvent) => void,
+  shellCommand: (id: string) => void,
 ) => {
+  // A native shell's menus (the Mac app's New Thread, Toggle Sidebar,
+  // Keyboard Shortcuts) send `command {id}` as a `dxshell` window event
+  // (shared/native-shell/native-shell.ts), and run the same commands as the
+  // keyboard. Read here, not through that module, so a browser's first load
+  // carries none of the shell's code; a browser never sends the event.
+  const shellHandler = (event: Event) => {
+    const detail = (event as CustomEvent<{ type?: unknown; id?: unknown }>)
+      .detail;
+    if (detail?.type === "command" && typeof detail.id === "string")
+      shellCommand(detail.id);
+  };
   const subscribe = (_onStoreChange: () => void) => {
     window.addEventListener("keydown", handler, true);
     window.addEventListener("keydown", textFieldHandler);
+    window.addEventListener("dxshell", shellHandler);
     return () => {
       window.removeEventListener("keydown", handler, true);
       window.removeEventListener("keydown", textFieldHandler);
+      window.removeEventListener("dxshell", shellHandler);
     };
   };
   React.useSyncExternalStore(subscribe, dispatcherSnapshot, dispatcherSnapshot);
@@ -329,6 +343,11 @@ export function CommandProvider({
   useGlobalCommandDispatcher(
     createCommandKeydownHandler(dispatcherOptions),
     createTextFieldCommandHandler(dispatcherOptions),
+    (id) => {
+      const context = commandContextFromPath(window.location.pathname);
+      if (registry.getCommands(context).some((command) => command.id === id))
+        registry.dispatch(id as CommandId, runtime, context);
+    },
   );
 
   const paletteCommand = commands.find(

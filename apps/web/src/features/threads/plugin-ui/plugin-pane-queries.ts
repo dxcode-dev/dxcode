@@ -1,12 +1,11 @@
 import {
-  PluginPaneMessagesResponseSchema,
-  PluginPaneViewResponseSchema,
-  PluginThreadUiErrorResponseSchema,
-  PostPluginPaneMessageResponseSchema,
+  GetPluginPaneViewEndpoint,
+  ListPluginPaneMessagesEndpoint,
+  PostPluginPaneMessageEndpoint,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
-import { ApiError, request } from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
 import { pluginPaneMessagesKey } from "../thread-queries.js";
 
 /**
@@ -14,9 +13,6 @@ import { pluginPaneMessagesKey } from "../thread-queries.js";
  * realtime's `plugin-pane.invalidated` refetches), and the messages its view
  * sends to the plugin. Loaded with the first pane shown.
  */
-
-const panePath = (threadId: ThreadId, plugin: string, pane: string) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/plugin-ui/panes/${encodeURIComponent(plugin)}/${encodeURIComponent(pane)}`;
 
 /**
  * Apart from the plugin UI's key, so a prompt or notice never refetches an
@@ -31,11 +27,10 @@ export const pluginPaneViewQueryOptions = (
     queryKey: ["plugin-pane-view", threadId, plugin, pane] as const,
     queryFn: async ({ signal }) =>
       (
-        await request(
-          panePath(threadId, plugin, pane),
-          PluginPaneViewResponseSchema,
+        await dxClient.call(
+          GetPluginPaneViewEndpoint,
+          { params: { threadId, plugin, pane } },
           { signal },
-          PluginThreadUiErrorResponseSchema,
         )
       ).data,
     staleTime: 30_000,
@@ -52,11 +47,10 @@ export const pluginPaneMessagesQueryOptions = (
     queryKey: [...pluginPaneMessagesKey(threadId), plugin, pane] as const,
     queryFn: async ({ signal }) =>
       (
-        await request(
-          `${panePath(threadId, plugin, pane)}/messages`,
-          PluginPaneMessagesResponseSchema,
+        await dxClient.call(
+          ListPluginPaneMessagesEndpoint,
+          { params: { threadId, plugin, pane }, query: {} },
           { signal },
-          PluginThreadUiErrorResponseSchema,
         )
       ).data.messages,
     staleTime: 30_000,
@@ -97,12 +91,10 @@ export const pluginPaneMessageMutationOptions = (
     mutationFn: async (message: unknown) => {
       try {
         return (
-          await request(
-            `${panePath(threadId, plugin, pane)}/messages`,
-            PostPluginPaneMessageResponseSchema,
-            { method: "POST", body: JSON.stringify({ message }) },
-            PluginThreadUiErrorResponseSchema,
-          )
+          await dxClient.call(PostPluginPaneMessageEndpoint, {
+            params: { threadId, plugin, pane },
+            body: { message },
+          })
         ).data.result;
       } catch (error) {
         if (isPluginPaneGone(error))

@@ -115,16 +115,18 @@ export const ThreadDataSchema = Schema.Struct({
   parentColor: Schema.optional(ThreadColor),
   /** `space` for a Space (see `SpaceData`); absent means `thread`. */
   kind: Schema.optional(ThreadKind),
-}).check(
-  Schema.makeFilter((thread) =>
-    thread.agentUrl === threadAgentUrl(thread.id)
-      ? undefined
-      : {
-          path: ["agentUrl"],
-          issue: "agentUrl must contain the response ThreadId",
-        },
-  ),
-);
+})
+  .check(
+    Schema.makeFilter((thread) =>
+      thread.agentUrl === threadAgentUrl(thread.id)
+        ? undefined
+        : {
+            path: ["agentUrl"],
+            issue: "agentUrl must contain the response ThreadId",
+          },
+    ),
+  )
+  .annotate({ identifier: "ThreadData" });
 
 export type ThreadData = typeof ThreadDataSchema.Type;
 

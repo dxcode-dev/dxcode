@@ -7,6 +7,7 @@ import type {
   ThreadDetailData,
 } from "@dx/api";
 import { BUG_REPORT_IMAGE_MAX_BYTES, BUG_REPORT_MAX_IMAGES } from "@dx/api";
+import type { TranscriptViewModel } from "@dx/client";
 import {
   type QueryClient,
   useMutation,
@@ -32,7 +33,6 @@ import { Textarea } from "../../../shared/ui/textarea.js";
 import { loadedChanges } from "../changes/changes-queries.js";
 import type { DictationRecord } from "../dictation/dictation-session.js";
 import { serializeThreadJson } from "../thread-export.js";
-import type { TranscriptViewModel } from "../transcript-view-model.js";
 import { reportDestination } from "./bug-report-format.js";
 import {
   bugReportAccessQueryOptions,

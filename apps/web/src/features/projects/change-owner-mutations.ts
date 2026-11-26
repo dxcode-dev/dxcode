@@ -1,9 +1,9 @@
-import { type MoveProjectRequest, MoveProjectResponseSchema } from "@dx/api";
+import { MoveProjectEndpoint, type MoveProjectRequest } from "@dx/api";
 import type { ProjectId, UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
-import { request } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import { threadKeys } from "../threads/thread-queries.js";
-import { cacheProject } from "./project-mutations.js";
+import { cacheProject } from "./project-cache-mutations.js";
 import { projectKeys } from "./project-queries.js";
 
 /**
@@ -22,11 +22,10 @@ export const moveProjectMutationOptions = (
     mutationKey: [...projectKeys.detail(userId, projectId), "move"] as const,
     mutationFn: async (input: MoveProjectRequest) =>
       (
-        await request(
-          `/v1/projects/${encodeURIComponent(projectId)}/move`,
-          MoveProjectResponseSchema,
-          { method: "POST", body: JSON.stringify(input) },
-        )
+        await dxClient.call(MoveProjectEndpoint, {
+          params: { projectId },
+          body: input,
+        })
       ).data,
     onSuccess: async ({ project }) => {
       await cacheProject(queryClient, userId, project);

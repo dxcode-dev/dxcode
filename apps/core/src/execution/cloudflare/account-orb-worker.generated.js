@@ -35,7 +35,7 @@ var ACCOUNT_ORB_METHODS = [
 var isAccountOrbMethod = (value) => typeof value === "string" && ACCOUNT_ORB_METHODS.includes(value);
 var toBase64 = (bytes) => {
 	let binary = "";
-	for (let index = 0; index < bytes.length; index += 32768) binary += String.fromCharCode(...bytes.subarray(index, index + 32768));
+	for (let index = 0; index < bytes.length; index += 32768) binary += String.fromCharCode.apply(null, bytes.subarray(index, index + 32768));
 	return btoa(binary);
 };
 var fromBase64 = (value) => {

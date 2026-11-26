@@ -5,9 +5,12 @@ import {
   createRouter,
   lazyRouteComponent,
   Outlet,
+  type RouteComponent,
   type RouterHistory,
   redirect,
 } from "@tanstack/react-router";
+import { nativeShell } from "../../shared/native-shell/native-shell.js";
+import { HostedApps } from "./hosted-landing.js";
 import { JoinSignInRoute } from "./join-sign-in-route.js";
 import { PublicHome } from "./public-home.js";
 import { validateSignInSearch } from "./sign-in-paths.js";
@@ -24,6 +27,11 @@ const rootRoute = createRootRouteWithContext<PublicRouterContext>()({
 const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
+  // An app (the Mac app) opens dx to sign in, not to its public home page.
+  beforeLoad: () => {
+    if (nativeShell() !== undefined)
+      throw redirect({ to: "/signin", replace: true });
+  },
   component: PublicHome,
 });
 
@@ -40,6 +48,17 @@ const signUpRoute = createRoute({
   validateSearch: validateSignInSearch,
   component: SignInRoute,
 });
+
+// dxcode.dev/apps, hosted dx only. Elsewhere the router has no /apps, as
+// Core lists none (DEPLOYMENT_PAGE_PATHS), so the catch-all handles it.
+const appsRoute =
+  HostedApps === undefined
+    ? undefined
+    : createRoute({
+        getParentRoute: () => rootRoute,
+        path: "/apps",
+        component: HostedApps as RouteComponent,
+      });
 
 const joinRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -72,6 +91,7 @@ const anyRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
+  ...(appsRoute === undefined ? [] : [appsRoute]),
   signInRoute,
   signUpRoute,
   joinRoute,

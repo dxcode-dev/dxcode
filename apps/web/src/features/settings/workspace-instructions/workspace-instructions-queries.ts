@@ -1,13 +1,42 @@
+import {
+  GetWorkspaceAgentInstructionsEndpoint,
+  UpdateWorkspaceAgentInstructionsEndpoint,
+  type WorkspaceAgentInstructionsData,
+} from "@dx/api";
 import type { WorkspaceSlug } from "@dx/domain";
 import {
   mutationOptions,
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  getWorkspaceAgentInstructions,
-  updateWorkspaceAgentInstructions,
-} from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
+
+/** A workspace's AGENTS.md: members read it, admins change it. */
+const getWorkspaceAgentInstructions = async (
+  workspaceSlug: WorkspaceSlug,
+  signal?: AbortSignal,
+): Promise<WorkspaceAgentInstructionsData> =>
+  (
+    await dxClient.call(
+      GetWorkspaceAgentInstructionsEndpoint,
+      { params: { workspaceSlug } },
+      { signal },
+    )
+  ).data;
+
+const updateWorkspaceAgentInstructions = async (
+  workspaceSlug: WorkspaceSlug,
+  input: {
+    readonly instructions: string;
+    readonly expectedRevision: number;
+  },
+): Promise<WorkspaceAgentInstructionsData> =>
+  (
+    await dxClient.call(UpdateWorkspaceAgentInstructionsEndpoint, {
+      params: { workspaceSlug },
+      body: input,
+    })
+  ).data;
 
 const workspaceInstructionsKey = (workspaceSlug: WorkspaceSlug) =>
   ["workspace-settings", workspaceSlug, "agent-instructions"] as const;

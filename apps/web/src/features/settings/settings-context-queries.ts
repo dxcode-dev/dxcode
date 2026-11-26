@@ -1,6 +1,38 @@
+import {
+  GetSettingsContextEndpoint,
+  GetWorkspaceProfileEndpoint,
+  type SettingsContextData,
+  type WorkspaceProfileData,
+} from "@dx/api";
 import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import { ApiError, getSettingsContext } from "../../shared/api/client.js";
+import { ApiError, dxClient } from "../../shared/api/client.js";
+
+const getWorkspaceProfile = async (
+  workspaceSlug: WorkspaceSlug,
+  signal?: AbortSignal,
+): Promise<WorkspaceProfileData> =>
+  (
+    await dxClient.call(
+      GetWorkspaceProfileEndpoint,
+      { params: { workspaceSlug } },
+      { signal },
+    )
+  ).data;
+
+const getSettingsContext = async (
+  input: SettingsContextScope,
+  signal?: AbortSignal,
+): Promise<SettingsContextData> => {
+  if (input.scope === "personal") {
+    return (await dxClient.call(GetSettingsContextEndpoint, {}, { signal }))
+      .data;
+  }
+  return {
+    activeScope: "workspace",
+    workspace: await getWorkspaceProfile(input.workspaceSlug, signal),
+  };
+};
 
 export type SettingsContextScope =
   | { readonly scope: "personal" }

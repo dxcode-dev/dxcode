@@ -1,4 +1,9 @@
-import { SpaceCoordinatorOrbResponseSchema } from "@dx/api";
+import {
+  GetPersonalSpaceCoordinatorOrbEndpoint,
+  GetWorkspaceSpaceCoordinatorOrbEndpoint,
+  UpdatePersonalSpaceCoordinatorOrbEndpoint,
+  UpdateWorkspaceSpaceCoordinatorOrbEndpoint,
+} from "@dx/api";
 import type { RunnerProfileId, UserId } from "@dx/domain";
 import {
   mutationOptions,
@@ -7,16 +12,39 @@ import {
 } from "@tanstack/react-query";
 import {
   ApiError,
+  dxClient,
   type PluginsTarget,
-  request,
 } from "../../../shared/api/client.js";
 
 /** Settings → Orb Providers → Space coordinator: its read and write. */
 
-const path = (target: PluginsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/space-coordinator-orb"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/space-coordinator-orb`;
+const read = async (target: PluginsTarget, signal: AbortSignal) =>
+  (target.scope === "personal"
+    ? await dxClient.call(
+        GetPersonalSpaceCoordinatorOrbEndpoint,
+        {},
+        { signal },
+      )
+    : await dxClient.call(
+        GetWorkspaceSpaceCoordinatorOrbEndpoint,
+        { params: { workspaceSlug: target.workspaceSlug } },
+        { signal },
+      )
+  ).data;
+
+const save = async (
+  target: PluginsTarget,
+  runnerProfileId: RunnerProfileId | null,
+) =>
+  (target.scope === "personal"
+    ? await dxClient.call(UpdatePersonalSpaceCoordinatorOrbEndpoint, {
+        body: { runnerProfileId },
+      })
+    : await dxClient.call(UpdateWorkspaceSpaceCoordinatorOrbEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug },
+        body: { runnerProfileId },
+      })
+  ).data;
 
 const keys = (userId: UserId, target: PluginsTarget) =>
   ["space-coordinator-orb", userId, target] as const;
@@ -27,12 +55,7 @@ export const spaceCoordinatorOrbQueryOptions = (
 ) =>
   queryOptions({
     queryKey: keys(userId, target),
-    queryFn: async ({ signal }) =>
-      (
-        await request(path(target), SpaceCoordinatorOrbResponseSchema, {
-          signal,
-        })
-      ).data,
+    queryFn: ({ signal }) => read(target, signal),
     // A deployment with Spaces off answers SPACES_UNAVAILABLE: no card.
     retry: (count, error) =>
       !(error instanceof ApiError && error.status < 500) && count < 2,
@@ -51,13 +74,8 @@ export const spaceCoordinatorOrbSaveOptions = (
   target: PluginsTarget,
 ) =>
   mutationOptions({
-    mutationFn: async (runnerProfileId: RunnerProfileId | null) =>
-      (
-        await request(path(target), SpaceCoordinatorOrbResponseSchema, {
-          method: "PUT",
-          body: JSON.stringify({ runnerProfileId }),
-        })
-      ).data,
+    mutationFn: (runnerProfileId: RunnerProfileId | null) =>
+      save(target, runnerProfileId),
     onSuccess: (data) => {
       queryClient.setQueryData(keys(userId, target), data);
       // The other scope's "what applies" may change with this one.

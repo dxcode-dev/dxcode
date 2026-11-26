@@ -5,7 +5,9 @@ import {
   WorkspaceSlug,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
+import { WorkspaceSettingsParamsSchema } from "./workspace-params.js";
 
 export const WorkspacePolicyParamsSchema = Schema.Struct({
   workspaceSlug: WorkspaceSlug,
@@ -68,3 +70,29 @@ export const WorkspacePolicyErrorResponseSchema = Schema.Union([
 
 export type UpdateWorkspacePolicyRequest =
   typeof UpdateWorkspacePolicyRequestSchema.Type;
+
+const workspacePolicyRefusals = [
+  { status: 400, schema: WorkspacePolicyInvalidRequestResponseSchema },
+  { status: 403, schema: WorkspacePolicyForbiddenResponseSchema },
+  { status: 409, schema: WorkspacePolicyConflictResponseSchema },
+  { status: 503, schema: WorkspacePolicyPersistenceUnavailableResponseSchema },
+];
+
+export const GetWorkspacePolicyEndpoint = defineEndpoint({
+  id: "settings.workspacePolicy.get",
+  method: "GET",
+  path: "/v1/settings/workspaces/:workspaceSlug/policy",
+  params: WorkspaceSettingsParamsSchema,
+  success: GetWorkspacePolicyResponseSchema,
+  refusals: workspacePolicyRefusals,
+});
+
+export const UpdateWorkspacePolicyEndpoint = defineEndpoint({
+  id: "settings.workspacePolicy.update",
+  method: "PUT",
+  path: "/v1/settings/workspaces/:workspaceSlug/policy",
+  params: WorkspaceSettingsParamsSchema,
+  body: UpdateWorkspacePolicyRequestSchema,
+  success: UpdateWorkspacePolicyResponseSchema,
+  refusals: workspacePolicyRefusals,
+});

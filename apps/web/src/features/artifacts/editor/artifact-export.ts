@@ -5,7 +5,7 @@
  * none of the editor's parts (highlights, grips, buttons) come with it.
  */
 import { DOMSerializer, type Node } from "prosemirror-model";
-import { artifactImageBlob } from "../artifacts-api.js";
+import { artifactImageBlob } from "../artifacts-api-queries.js";
 import { artifactSchema } from "../markdown/artifact-markdown.js";
 import { parseChip } from "../markdown/chips.js";
 import { chipLabel } from "./chip-views.js";

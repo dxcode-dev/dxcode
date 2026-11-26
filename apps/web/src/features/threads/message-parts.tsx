@@ -1,3 +1,4 @@
+import type { TranscriptRow } from "@dx/client";
 import type { FlueConversationPart } from "@flue/react";
 import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
 import { MessageFileLinks } from "./message-attachments-ui.js";
@@ -7,7 +8,6 @@ import {
   TranscriptAttachment,
   TranscriptMarkdown,
 } from "./transcript-markdown.js";
-import type { TranscriptRow } from "./transcript-view-model.js";
 
 type ToolPart = Extract<FlueConversationPart, { type: "dynamic-tool" }>;
 

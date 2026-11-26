@@ -1,5 +1,6 @@
-import type { PluginPaneLive } from "@dx/api";
+import { type PluginPaneLive, PluginPaneStreamEndpoint } from "@dx/api";
 import { VIEW_HOST_MESSAGE } from "@dx/api/views/view-frame.mjs";
+import { endpointPath } from "@dx/client";
 import type { ThreadId } from "@dx/domain";
 import { paneIceServers } from "./pane-live-queries.js";
 
@@ -37,9 +38,6 @@ interface PaneLiveOptions {
   ) => void;
 }
 
-const panePath = (threadId: ThreadId, plugin: string, pane: string) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/plugin-ui/panes/${encodeURIComponent(plugin)}/${encodeURIComponent(pane)}`;
-
 const record = (
   value: unknown,
 ): Readonly<Record<string, unknown>> | undefined =>
@@ -70,7 +68,10 @@ export const createPaneLive = (options: PaneLiveOptions) => {
 
   const connect = () => {
     if (closed || !wanted) return;
-    const url = `${location.origin.replace(/^http/, "ws")}${panePath(threadId, plugin, pane)}/stream`;
+    const url = `${location.origin.replace(/^http/, "ws")}${endpointPath(
+      PluginPaneStreamEndpoint,
+      { params: { threadId, plugin, pane } },
+    )}`;
     const next = new WebSocket(url);
     next.binaryType = "arraybuffer";
     socket = next;
@@ -157,7 +158,7 @@ export const createPaneLive = (options: PaneLiveOptions) => {
             );
             return true;
           }
-          void paneIceServers(panePath(threadId, plugin, pane))
+          void paneIceServers(threadId, plugin, pane)
             .then((iceServers) => reply(id, { iceServers }))
             .catch((error: unknown) =>
               fail(

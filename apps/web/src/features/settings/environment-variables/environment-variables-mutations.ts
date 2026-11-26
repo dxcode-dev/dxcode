@@ -1,4 +1,19 @@
 import {
+  ApplyPersonalBulkEnvironmentVariablesEndpoint,
+  ApplyWorkspaceBulkEnvironmentVariablesEndpoint,
+  type BulkEnvironmentVariablePreviewItem,
+  CreatePersonalEnvironmentVariableEndpoint,
+  CreateWorkspaceEnvironmentVariableEndpoint,
+  DeletePersonalEnvironmentVariableEndpoint,
+  DeleteWorkspaceEnvironmentVariableEndpoint,
+  PreviewPersonalBulkEnvironmentVariablesEndpoint,
+  PreviewWorkspaceBulkEnvironmentVariablesEndpoint,
+  RotatePersonalEnvironmentVariableEndpoint,
+  RotateWorkspaceEnvironmentVariableEndpoint,
+  UpdatePersonalEnvironmentVariableEndpoint,
+  UpdateWorkspaceEnvironmentVariableEndpoint,
+} from "@dx/api";
+import {
   type EnvironmentVariableId,
   isHiddenEnvironmentValue,
   MASKED_SECRET_VALUE,
@@ -6,21 +21,158 @@ import {
 } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import { DateTime } from "effect";
-import {
-  ApiError,
-  applyBulkEnvironmentVariables,
-  createEnvironmentVariable,
-  deleteEnvironmentVariable,
-  type listEnvironmentVariables,
-  previewBulkEnvironmentVariables,
-  rotateEnvironmentVariable,
-  updateEnvironmentVariable,
-} from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
 import {
   type EnvironmentVariableData,
   type EnvironmentVariablesTarget,
   environmentVariableKeys,
+  environmentVariablesScope,
+  type listEnvironmentVariables,
 } from "./environment-variables-queries.js";
+
+/**
+ * Where an existing variable lives: the workspace routes, or the personal
+ * routes with a `scope` query (personal or Project).
+ */
+const environmentVariableInput = (
+  target: EnvironmentVariablesTarget,
+  item: EnvironmentVariableData,
+) =>
+  target.scope === "workspace"
+    ? ({
+        workspace: true,
+        params: {
+          workspaceSlug: target.workspaceSlug,
+          environmentVariableId: item.reference.id,
+        },
+      } as const)
+    : ({
+        workspace: false,
+        params: { environmentVariableId: item.reference.id },
+        query: environmentVariablesScope(target),
+      } as const);
+
+const createEnvironmentVariable = async (
+  target: EnvironmentVariablesTarget,
+  input: {
+    readonly name: string;
+    readonly kind: "secret" | "variable";
+    readonly value: string;
+  },
+): Promise<EnvironmentVariableData> => {
+  const body = { ...environmentVariablesScope(target), ...input };
+  return (
+    target.scope === "workspace"
+      ? await dxClient.call(CreateWorkspaceEnvironmentVariableEndpoint, {
+          params: { workspaceSlug: target.workspaceSlug },
+          body,
+        })
+      : await dxClient.call(CreatePersonalEnvironmentVariableEndpoint, {
+          body,
+        })
+  ).data;
+};
+
+const updateEnvironmentVariable = async (
+  target: EnvironmentVariablesTarget,
+  item: EnvironmentVariableData,
+  input: { readonly enabled?: boolean },
+): Promise<EnvironmentVariableData> => {
+  const at = environmentVariableInput(target, item);
+  return (
+    at.workspace
+      ? await dxClient.call(UpdateWorkspaceEnvironmentVariableEndpoint, {
+          params: at.params,
+          body: input,
+        })
+      : await dxClient.call(UpdatePersonalEnvironmentVariableEndpoint, {
+          params: at.params,
+          query: at.query,
+          body: input,
+        })
+  ).data;
+};
+
+const rotateEnvironmentVariable = async (
+  target: EnvironmentVariablesTarget,
+  item: EnvironmentVariableData,
+  value: string,
+): Promise<EnvironmentVariableData> => {
+  const at = environmentVariableInput(target, item);
+  return (
+    at.workspace
+      ? await dxClient.call(RotateWorkspaceEnvironmentVariableEndpoint, {
+          params: at.params,
+          body: { value },
+        })
+      : await dxClient.call(RotatePersonalEnvironmentVariableEndpoint, {
+          params: at.params,
+          query: at.query,
+          body: { value },
+        })
+  ).data;
+};
+
+const deleteEnvironmentVariable = async (
+  target: EnvironmentVariablesTarget,
+  item: EnvironmentVariableData,
+) => {
+  const at = environmentVariableInput(target, item);
+  return (
+    at.workspace
+      ? await dxClient.call(DeleteWorkspaceEnvironmentVariableEndpoint, {
+          params: at.params,
+        })
+      : await dxClient.call(DeletePersonalEnvironmentVariableEndpoint, {
+          params: at.params,
+          query: at.query,
+        })
+  ).data.deletedEnvironmentVariableId;
+};
+
+const previewBulkEnvironmentVariables = async (
+  target: EnvironmentVariablesTarget,
+  input: {
+    readonly kind: "secret" | "variable" | "auto";
+    readonly contents: string;
+  },
+): Promise<{
+  readonly items: ReadonlyArray<BulkEnvironmentVariablePreviewItem>;
+  readonly canApply: boolean;
+}> => {
+  const body = { ...environmentVariablesScope(target), ...input };
+  return (
+    target.scope === "workspace"
+      ? await dxClient.call(PreviewWorkspaceBulkEnvironmentVariablesEndpoint, {
+          params: { workspaceSlug: target.workspaceSlug },
+          body,
+        })
+      : await dxClient.call(PreviewPersonalBulkEnvironmentVariablesEndpoint, {
+          body,
+        })
+  ).data;
+};
+
+const applyBulkEnvironmentVariables = async (
+  target: EnvironmentVariablesTarget,
+  input: {
+    readonly kind: "secret" | "variable" | "auto";
+    readonly contents: string;
+    readonly conflictBehavior: "reject" | "replace";
+  },
+) => {
+  const body = { ...environmentVariablesScope(target), ...input };
+  return (
+    target.scope === "workspace"
+      ? await dxClient.call(ApplyWorkspaceBulkEnvironmentVariablesEndpoint, {
+          params: { workspaceSlug: target.workspaceSlug },
+          body,
+        })
+      : await dxClient.call(ApplyPersonalBulkEnvironmentVariablesEndpoint, {
+          body,
+        })
+  ).data;
+};
 
 type EnvironmentVariableList = Awaited<
   ReturnType<typeof listEnvironmentVariables>

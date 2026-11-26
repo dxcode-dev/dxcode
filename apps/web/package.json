@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.176",
+  "version": "0.2.177",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -21,6 +21,7 @@
     "@better-auth/utils": "0.4.2",
     "@cloudflare/realtimekit": "^2.0.4",
     "@dx/api": "workspace:^",
+    "@dx/client": "workspace:^",
     "@dx/domain": "workspace:^",
     "@dxcode/plugin-ui": "workspace:^",
     "@excalidraw/excalidraw": "0.18.1",

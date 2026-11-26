@@ -121,6 +121,7 @@ vi.mock("./attachment-upload.js", async (importOriginal) => ({
   },
 }));
 
+import { deriveTranscriptViewModel } from "@dx/client";
 import { AgentPanel, type AgentPanelOptions } from "./agent-panel.js";
 import { createPendingAttachmentCollection } from "./image-attachments.js";
 import { TranscriptRowContent } from "./message-parts.js";
@@ -128,7 +129,6 @@ import {
   createPendingSubmissionControl,
   type OptimisticThreadCreation,
 } from "./thread-session-registry.js";
-import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 import { createPresentationValue } from "./use-thread-presentation.js";
 
 const agent = {

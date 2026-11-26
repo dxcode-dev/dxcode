@@ -11,7 +11,8 @@ export type AuthScreen =
   | "verify-email"
   | "waitlisted"
   | "invite-unavailable"
-  | "unavailable";
+  | "unavailable"
+  | "open-app";
 
 /**
  * Every signed-out screen: the form column, and from 1024px the `aside` panel

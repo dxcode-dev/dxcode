@@ -449,6 +449,9 @@ importers:
       '@dx/api':
         specifier: workspace:^
         version: link:../../packages/api
+      '@dx/client':
+        specifier: workspace:^
+        version: link:../../packages/client
       '@dx/domain':
         specifier: workspace:^
         version: link:../../packages/domain
@@ -742,6 +745,21 @@ importers:
       '@dx/domain':
         specifier: workspace:^
         version: link:../domain
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+
+  packages/client:
+    dependencies:
+      '@dx/api':
+        specifier: workspace:^
+        version: link:../api
+      '@dx/domain':
+        specifier: workspace:^
+        version: link:../domain
+      '@flue/sdk':
+        specifier: file:../../third-party/flue/sdk-ea96490468932c82c2894dd9463b56a21b158dad.tgz
+        version: file:third-party/flue/sdk-ea96490468932c82c2894dd9463b56a21b158dad.tgz
       effect:
         specifier: 4.0.5
         version: 4.0.5

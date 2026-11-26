@@ -71,6 +71,11 @@ describe("dx HTTP error mapping", () => {
       event: "request_failed",
       category: "internal",
       requestId: "failure-id",
+      method: "GET",
+      path: "/failure",
+      errorName: "Error",
+      errorMessage: "secret diagnostic",
+      errorStack: expect.stringContaining("http-errors.test.ts"),
     });
     expect(JSON.stringify(body)).not.toContain("secret diagnostic");
   });

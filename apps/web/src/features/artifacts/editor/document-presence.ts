@@ -27,7 +27,7 @@ import {
   collaboratorColor,
 } from "../artifact-people.js";
 import type { ArtifactScope } from "../artifact-scope.js";
-import type { ArtifactDocument } from "../artifacts-api.js";
+import type { ArtifactDocument } from "../artifacts-api-queries.js";
 
 type Caret = NonNullable<BoardLivePayload["caret"]>;
 type Point = Caret["anchor"];

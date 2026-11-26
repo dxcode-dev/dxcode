@@ -16,6 +16,8 @@ import {
   AuthWaitlisted,
 } from "./auth-parts.js";
 import { AuthShowcase } from "./auth-showcase.js";
+import { ShellBrowserSignIn } from "./shell-browser-sign-in.js";
+import { magicLinkCallback, signInWithShellBrowser } from "./shell-sign-in.js";
 import { signInErrorCode, signInErrorMessage } from "./sign-in-errors.js";
 import {
   useGoogleSignIn,
@@ -157,12 +159,14 @@ export function SignInPage({
     setLastEmail(email);
     const password = String(data.get("password") ?? "");
     if (method === "link") {
-      magicLink.mutate({
-        email,
-        callbackURL: successURL,
-        errorCallbackURL: returnPage,
-        challenge: challenge.current,
-      });
+      void magicLinkCallback(successURL).then((callbackURL) =>
+        magicLink.mutate({
+          email,
+          callbackURL,
+          errorCallbackURL: returnPage,
+          challenge: challenge.current,
+        }),
+      );
     } else if (showPasswordSignUp) {
       passwordSignUp.mutate({
         name: String(data.get("name") ?? "").trim(),
@@ -254,6 +258,9 @@ export function SignInPage({
             onSelect={() => {
               onDismissRedirectError();
               resetRequests();
+              // Google refuses embedded web views: the app signs in through
+              // the browser and takes the session back.
+              if (signInWithShellBrowser()) return;
               google.mutate({
                 callbackURL: successURL,
                 errorCallbackURL: returnPage,
@@ -285,6 +292,7 @@ export function SignInPage({
       ) : visibleError === undefined ? null : (
         <AuthAlert id="sign-in-error">{visibleError}</AuthAlert>
       )}
+      <ShellBrowserSignIn />
       {hasPassword && signUpAllowed ? (
         <SwitchPage
           to={pageMode === "sign-in" ? "sign-up" : "sign-in"}

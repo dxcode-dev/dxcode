@@ -1,5 +1,6 @@
 import { THREAD_SEARCH_QUERY_MAX_LENGTH } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { PageLimitQuerySchema } from "../http/page-limit-query.js";
 import { errorResponse, successResponse } from "../http/response.js";
 
@@ -67,3 +68,16 @@ export const SearchThreadsUnavailableResponseSchema = errorResponse(
 );
 
 export type SearchThreadsResponse = typeof SearchThreadsResponseSchema.Encoded;
+
+export const SearchThreadsEndpoint = defineEndpoint({
+  id: "threads.search",
+  summary: "Search Threads with the query language",
+  method: "GET",
+  path: "/v1/thread-search",
+  query: SearchThreadsQuerySchema,
+  success: SearchThreadsResponseSchema,
+  refusals: [
+    { status: 400, schema: SearchThreadsInvalidRequestResponseSchema },
+    { status: 503, schema: SearchThreadsUnavailableResponseSchema },
+  ],
+});

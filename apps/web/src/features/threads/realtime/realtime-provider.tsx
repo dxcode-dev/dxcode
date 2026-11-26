@@ -1,3 +1,4 @@
+import type { PresenceScope, ThreadTyping } from "@dx/client";
 import type { ThreadId, UserId } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import * as React from "react";
@@ -6,8 +7,7 @@ import {
   BoardLiveContext,
   type BoardLiveHub,
 } from "../../../shared/realtime/board-live.js";
-import type { PresenceScope } from "../../../shared/realtime/presence-scope.js";
-import { RealtimeClient, type ThreadTyping } from "./realtime-client.js";
+import { RealtimeClient } from "./realtime-client.js";
 
 const RealtimeContext = React.createContext<RealtimeClient | undefined>(
   undefined,

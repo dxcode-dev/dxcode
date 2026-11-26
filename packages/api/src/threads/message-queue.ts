@@ -125,3 +125,9 @@ export const ThreadMessageQueueErrorResponseSchema = Schema.Union([
 ]);
 export type ThreadMessageQueueErrorCode =
   (typeof ThreadMessageQueueErrorResponseSchema.Type)["data"]["code"];
+
+/** A waiting message's submission ID, as Core accepts it in a path. */
+export const QUEUED_SUBMISSION_ID = /^[A-Za-z0-9_:-]{1,200}$/;
+export const QueuedSubmissionIdSchema = Schema.String.check(
+  Schema.isPattern(QUEUED_SUBMISSION_ID),
+);

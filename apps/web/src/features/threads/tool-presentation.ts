@@ -1,4 +1,4 @@
-import { shellCommandOperations } from "./shell-command-operation.js";
+import { shellCommandOperations } from "@dx/client";
 
 const record = (input: unknown): Record<string, unknown> | undefined =>
   typeof input === "object" && input !== null

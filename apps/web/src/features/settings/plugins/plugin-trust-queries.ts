@@ -1,7 +1,6 @@
 import type { PageCursor, UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import { listProjects } from "../../../shared/api/client.js";
-import { projectKeys } from "../../projects/project-queries.js";
+import { listProjects, projectKeys } from "../../projects/project-queries.js";
 
 /** Stops a runaway cursor: 50 pages of 100 projects. */
 const MAX_PAGES = 50;

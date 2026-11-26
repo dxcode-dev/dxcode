@@ -1,3 +1,4 @@
+import type { ToolPart } from "@dx/client";
 import { useNavigate } from "@tanstack/react-router";
 import {
   emailOf,
@@ -5,7 +6,6 @@ import {
   mailOutputOf,
   mailText,
 } from "./mail-tool-part.js";
-import type { ToolPart } from "./transcript-activity-projection.js";
 
 /** "Read email: Your code is 482917", "Listed emails". */
 export function MailToolLabel({ part }: { readonly part: ToolPart }) {

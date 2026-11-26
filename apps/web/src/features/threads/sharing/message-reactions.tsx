@@ -1,10 +1,10 @@
 import type { MessageReaction, ThreadDetailData } from "@dx/api";
+import type { TranscriptRow } from "@dx/client";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import type { ReactionCount } from "../../../shared/reactions/reaction-set.js";
 import { lazyComponent } from "../../../shared/stale-chunk.js";
-import type { TranscriptRow } from "../transcript-view-model.js";
 import {
   messageReactionsQueryOptions,
   reactedMessageId,

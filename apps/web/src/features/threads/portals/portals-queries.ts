@@ -1,8 +1,9 @@
 import {
-  GetThreadPortalsResponseSchema,
-  PublishThreadPortalResponseSchema,
-  RevokeThreadPortalResponseSchema,
+  ListThreadPortalsEndpoint,
+  PublishThreadPortalEndpoint,
+  RevokeThreadPortalEndpoint,
   type ThreadPortalPublicDuration,
+  WakeThreadPortalsEndpoint,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import {
@@ -10,7 +11,7 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import { request } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 
 export const portalKeys = {
   thread: (threadId: ThreadId) => ["thread-portals", threadId] as const,
@@ -28,9 +29,9 @@ export const threadPortalsQueryOptions = (
     queryKey: portalKeys.thread(threadId),
     queryFn: async ({ signal }) =>
       (
-        await request(
-          `/v1/threads/${encodeURIComponent(threadId)}/portals`,
-          GetThreadPortalsResponseSchema,
+        await dxClient.call(
+          ListThreadPortalsEndpoint,
+          { params: { threadId } },
           { signal },
         )
       ).data,
@@ -49,18 +50,18 @@ export const useWakePortals = (threadId: ThreadId) => {
     mutationKey: [...portalKeys.thread(threadId), "wake"],
     mutationFn: async () =>
       (
-        await request(
-          `/v1/threads/${encodeURIComponent(threadId)}/portals/wake`,
-          GetThreadPortalsResponseSchema,
-          { method: "POST" },
-        )
+        await dxClient.call(WakeThreadPortalsEndpoint, {
+          params: { threadId },
+        })
       ).data,
     onSuccess: (data) => client.setQueryData(portalKeys.thread(threadId), data),
   });
 };
 
-const publicLinkPath = (threadId: ThreadId, port: number) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/portals/${port}/public`;
+const publicLinkParams = (threadId: ThreadId, port: number) => ({
+  threadId,
+  port: String(port),
+});
 
 /**
  * The owner makes a port public for a while, or private again. Either way
@@ -79,19 +80,13 @@ export const usePortalPublicLink = (threadId: ThreadId) => {
         | { readonly port: number; readonly duration: "private" },
     ) =>
       change.duration === "private"
-        ? request(
-            publicLinkPath(threadId, change.port),
-            RevokeThreadPortalResponseSchema,
-            { method: "DELETE" },
-          )
-        : request(
-            publicLinkPath(threadId, change.port),
-            PublishThreadPortalResponseSchema,
-            {
-              method: "PUT",
-              body: JSON.stringify({ duration: change.duration }),
-            },
-          ),
+        ? dxClient.call(RevokeThreadPortalEndpoint, {
+            params: publicLinkParams(threadId, change.port),
+          })
+        : dxClient.call(PublishThreadPortalEndpoint, {
+            params: publicLinkParams(threadId, change.port),
+            body: { duration: change.duration },
+          }),
     onSettled: () =>
       client.invalidateQueries({ queryKey: portalKeys.thread(threadId) }),
   });

@@ -449,3 +449,18 @@ export const PluginThreadUiErrorResponseSchema = Schema.Union([
 
 export type PluginThreadUiErrorCode =
   (typeof PluginThreadUiErrorResponseSchema.Type)["data"]["code"];
+
+/** `GET …/panes/:plugin/:pane/ice-servers`: short-lived TURN credentials, or public STUN. */
+export const PluginPaneIceServersResponseSchema = successResponse(
+  Schema.Struct({
+    iceServers: Schema.Array(
+      Schema.Struct({
+        urls: Schema.Union([Schema.String, Schema.Array(Schema.String)]),
+        username: Schema.optional(Schema.String),
+        credential: Schema.optional(Schema.String),
+      }),
+    ),
+    turn: Schema.Boolean,
+    ttlSeconds: Schema.Number,
+  }),
+);

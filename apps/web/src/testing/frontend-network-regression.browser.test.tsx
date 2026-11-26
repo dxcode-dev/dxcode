@@ -20,6 +20,7 @@ import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  listProjects,
   projectKeys,
   projectsQueryOptions,
 } from "../features/projects/project-queries.js";
@@ -36,7 +37,6 @@ import {
   threadKeys,
   threadsQueryOptions,
 } from "../features/threads/thread-queries.js";
-import { listProjects } from "../shared/api/client.js";
 import { AuthContext } from "../shared/auth/auth-context.js";
 import { createQueryClient } from "../shared/query/query-client.js";
 import { FrontendNetworkHarness } from "./frontend-network-harness.js";

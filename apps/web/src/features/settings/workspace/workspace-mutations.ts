@@ -1,15 +1,55 @@
 import type { SettingsContextData, WorkspaceProfileData } from "@dx/api";
+import {
+  CreateWorkspaceEndpoint,
+  RemoveWorkspaceAvatarEndpoint,
+  SetWorkspaceAvatarEndpoint,
+  UpdateWorkspaceProfileEndpoint,
+} from "@dx/api";
 import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
-  createWorkspace,
   deleteWorkspace,
+  dxClient,
   leaveWorkspace,
-  setWorkspaceAvatar,
-  updateWorkspaceProfile,
 } from "../../../shared/api/client.js";
 import { settingsKeys } from "../settings-context-queries.js";
 import { workspaceKeys } from "./workspace-queries.js";
+
+const createWorkspace = async (input: {
+  readonly displayName: string;
+  readonly shortName: string;
+}): Promise<WorkspaceProfileData> =>
+  (await dxClient.call(CreateWorkspaceEndpoint, { body: input })).data;
+
+const updateWorkspaceProfile = async (
+  workspaceSlug: WorkspaceSlug,
+  input: {
+    readonly displayName: string;
+    readonly shortName: string;
+    readonly expectedRevision: number;
+  },
+): Promise<WorkspaceProfileData> =>
+  (
+    await dxClient.call(UpdateWorkspaceProfileEndpoint, {
+      params: { workspaceSlug },
+      body: input,
+    })
+  ).data;
+
+/** Replaces the workspace's picture with `file`, or removes it with `null`. */
+const setWorkspaceAvatar = async (
+  workspaceSlug: WorkspaceSlug,
+  file: File | null,
+): Promise<WorkspaceProfileData> =>
+  (file === null
+    ? await dxClient.call(RemoveWorkspaceAvatarEndpoint, {
+        params: { workspaceSlug },
+      })
+    : await dxClient.call(SetWorkspaceAvatarEndpoint, {
+        params: { workspaceSlug },
+        body: file,
+      })
+  ).data;
 
 export type WorkspaceMutation =
   | {

@@ -6,13 +6,17 @@ const packages = {
     path: "packages/api/package.json",
     allowed: new Set(["@dx/domain"]),
   },
+  "@dx/client": {
+    path: "packages/client/package.json",
+    allowed: new Set(["@dx/api", "@dx/domain"]),
+  },
   "@dx/core": {
     path: "apps/core/package.json",
     allowed: new Set(["@dx/api", "@dx/domain"]),
   },
   "@dx/web": {
     path: "apps/web/package.json",
-    allowed: new Set(["@dx/api", "@dx/domain"]),
+    allowed: new Set(["@dx/api", "@dx/client", "@dx/domain"]),
   },
 };
 

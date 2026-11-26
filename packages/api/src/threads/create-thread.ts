@@ -10,8 +10,15 @@ import {
   WorkspacePolicyDenialReason,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse } from "../http/response.js";
+import { MailErrorResponseSchema, MailId } from "../mail/mail.js";
 import { RunnerMachineId } from "../settings/runners.js";
+import {
+  SourceControlDeniedResponseSchema,
+  SourceControlProviderFailureResponseSchema,
+} from "../source-control/errors.js";
+import { ThreadIdUnavailableResponseSchema } from "./delete-thread.js";
 import { ThreadDetailDataSchema } from "./thread-data.js";
 
 // Mirrors Flue's public DeliveredAttachment contract. Flue applies this
@@ -347,3 +354,76 @@ export type CreateThreadProjectNotFoundResponse =
 export type CreateThreadPersistenceUnavailableResponse =
   typeof CreateThreadPersistenceUnavailableResponseSchema.Type;
 export type InitialThreadMessage = typeof InitialThreadMessageSchema.Type;
+
+/** Every error `POST /v1/threads` answers on purpose. */
+export const CreateThreadRefusals = [
+  { status: 400, schema: CreateThreadInvalidRequestResponseSchema },
+  {
+    status: 422,
+    schema: CreateThreadPluginThreadTypeUnavailableResponseSchema,
+  },
+  { status: 422, schema: CreateThreadPluginAgentModeUnavailableResponseSchema },
+  { status: 404, schema: CreateThreadProjectNotFoundResponseSchema },
+  { status: 422, schema: CreateThreadModelRouteUnavailableResponseSchema },
+  { status: 400, schema: CreateThreadClaudePlanRefusedResponseSchema },
+  // CLAUDE_PLAN_USED_UP; CLAUDE_PLAN_UNAVAILABLE is 400.
+  { status: 409, schema: CreateThreadClaudePlanRefusedResponseSchema },
+  { status: 409, schema: ThreadIdUnavailableResponseSchema },
+  {
+    status: 503,
+    schema: CreateThreadInitialAdmissionUnavailableResponseSchema,
+  },
+  { status: 422, schema: CreateThreadInitialMessageRejectedResponseSchema },
+  { status: 413, schema: CreateThreadInitialMessageTooLargeResponseSchema },
+  { status: 409, schema: CreateThreadInitialSubmissionConflictResponseSchema },
+  { status: 409, schema: CreateThreadAlreadyStartedResponseSchema },
+  { status: 403, schema: CreateThreadPolicyDeniedResponseSchema },
+  { status: 403, schema: CreateThreadProjectlessForbiddenResponseSchema },
+  { status: 409, schema: CreateThreadOrbUnavailableResponseSchema },
+  { status: 409, schema: CreateThreadSharingUnavailableResponseSchema },
+  { status: 403, schema: CreateThreadSharingForbiddenResponseSchema },
+  { status: 409, schema: CreateThreadRunnerUnavailableResponseSchema },
+  { status: 503, schema: CreateThreadPersistenceUnavailableResponseSchema },
+  { status: 409, schema: SourceControlDeniedResponseSchema },
+  { status: 503, schema: SourceControlProviderFailureResponseSchema },
+];
+
+export const CreateThreadEndpoint = defineEndpoint({
+  id: "threads.create",
+  summary: "Start a Thread",
+  method: "POST",
+  path: "/v1/threads",
+  body: CreateThreadRequestSchema,
+  success: CreateThreadResponseSchema,
+  successStatus: 201,
+  refusals: CreateThreadRefusals,
+});
+
+/** Mail's own refusals before it hands the request to `POST /v1/threads`. */
+const mailStartThreadRefusals = [
+  // MAIL_INVALID_REQUEST
+  { status: 400, schema: MailErrorResponseSchema },
+  // MAIL_FORBIDDEN
+  { status: 403, schema: MailErrorResponseSchema },
+  // MAIL_DISABLED, MAIL_NOT_FOUND
+  { status: 404, schema: MailErrorResponseSchema },
+  // MAIL_USERNAME_REQUIRED
+  { status: 409, schema: MailErrorResponseSchema },
+];
+
+/**
+ * Start thread on an email: the New Thread request, which Mail sends to
+ * `POST /v1/threads` with the email in its first message, answering as that
+ * route does.
+ */
+export const StartMailThreadEndpoint = defineEndpoint({
+  id: "mail.startThread",
+  summary: "Start a Thread from an email",
+  method: "POST",
+  path: "/v1/mailbox/messages/:id/start-thread",
+  params: Schema.Struct({ id: MailId }),
+  body: CreateThreadRequestSchema,
+  success: CreateThreadResponseSchema,
+  successStatus: 201,
+  refusals: [...mailStartThreadRefusals, ...CreateThreadRefusals],
+});

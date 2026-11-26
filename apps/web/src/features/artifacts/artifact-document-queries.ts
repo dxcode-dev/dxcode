@@ -11,7 +11,7 @@ import {
   artifactsApi,
   deleteArtifact,
   notifyArtifactAgent,
-} from "./artifacts-api.js";
+} from "./artifacts-api-queries.js";
 import { artifactKeys, invalidateArtifacts } from "./artifacts-queries.js";
 
 export const artifactListOptions = (threadId: ArtifactScope, active = true) =>

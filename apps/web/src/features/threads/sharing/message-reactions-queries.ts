@@ -2,6 +2,7 @@ import type {
   ListMessageReactionsResponseSchema,
   ThreadDetailData,
 } from "@dx/api";
+import type { TranscriptRow } from "@dx/client";
 import type { ThreadId, UserId } from "@dx/domain";
 import {
   queryOptions,
@@ -9,7 +10,6 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { THREAD_FRESHNESS_SLO_MS } from "../thread-queries.js";
-import type { TranscriptRow } from "../transcript-view-model.js";
 import { messageReactionKeys } from "./message-reactions-cache-queries.js";
 import type { MessageReactionInput } from "./message-reactions-request-queries.js";
 

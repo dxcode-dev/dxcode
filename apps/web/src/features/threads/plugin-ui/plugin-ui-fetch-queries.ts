@@ -1,14 +1,15 @@
 import {
+  GetPluginIconEndpoint,
+  GetPluginThreadUiEndpoint,
   type PluginNotice,
   type PluginPaneEntry,
   type PluginThreadUiData,
-  PluginThreadUiErrorResponseSchema,
-  PluginThreadUiResponseSchema,
 } from "@dx/api";
+import { endpointPath } from "@dx/client";
 import type { ThreadId } from "@dx/domain";
 import { createElement } from "react";
 import { toast } from "sonner";
-import { request } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { requestPluginPane } from "../../../shared/commands/thread-open-view-event.js";
 import { linkRemarkFor } from "./plugin-link-remark.js";
 import { iconForItem } from "./plugin-ui-icon-lookup.js";
@@ -47,7 +48,9 @@ const showNotices = (
         ? {}
         : {
             icon: createElement("img", {
-              src: `/v1/plugins/icons/${src}`,
+              src: endpointPath(GetPluginIconEndpoint, {
+                params: { sha256: src },
+              }),
               alt: "",
               width: 16,
               height: 16,
@@ -86,11 +89,10 @@ const openRequestedPanes = (
 };
 
 export const loadPluginUi = async (threadId: ThreadId, signal: AbortSignal) => {
-  const { data } = await request(
-    `/v1/threads/${encodeURIComponent(threadId)}/plugin-ui`,
-    PluginThreadUiResponseSchema,
+  const { data } = await dxClient.call(
+    GetPluginThreadUiEndpoint,
+    { params: { threadId } },
     { signal },
-    PluginThreadUiErrorResponseSchema,
   );
   showNotices(data.notices, data.plugins);
   queueMicrotask(() => openRequestedPanes(threadId, data.panes ?? []));

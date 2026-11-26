@@ -1,6 +1,7 @@
+import { ListGitHubGrantsEndpoint } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
-import { getGitHubIntegrationStatus } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { settingsKeys } from "../settings-context-queries.js";
 
 export const integrationKeys = {
@@ -15,7 +16,8 @@ export const integrationKeys = {
 export const githubIntegrationQueryOptions = (userId: UserId) =>
   queryOptions({
     queryKey: integrationKeys.github(userId),
-    queryFn: ({ signal }) => getGitHubIntegrationStatus(signal),
+    queryFn: async ({ signal }) =>
+      (await dxClient.call(ListGitHubGrantsEndpoint, {}, { signal })).data,
     staleTime: 30_000,
     retry: false,
   });

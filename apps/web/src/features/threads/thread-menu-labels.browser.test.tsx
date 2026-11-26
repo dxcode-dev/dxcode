@@ -22,7 +22,7 @@ import { AuthContext } from "../../shared/auth/auth-context.js";
 import { ThreadArchiveContext } from "../../shared/thread-archive.js";
 import { ThreadEditingContext } from "../../shared/thread-editing.js";
 import { ThreadSnoozeContext } from "../../shared/thread-snooze.js";
-import { orbMemoryKeys } from "./orb-memory/orb-memory-queries.js";
+import { orbMemoryKeys } from "./orb-memory/orb-memory-cache-queries.js";
 import { ThreadMenu } from "./thread-menu.js";
 import { threadUsageQueryOptions } from "./thread-usage/thread-usage-queries.js";
 // The menu's widths live in the app stylesheet.

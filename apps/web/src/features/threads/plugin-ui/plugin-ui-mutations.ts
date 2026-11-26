@@ -1,12 +1,8 @@
-import {
-  AnswerPluginPromptResponseSchema,
-  PluginThreadUiErrorResponseSchema,
-  RunPluginCommandResponseSchema,
-} from "@dx/api";
+import { AnswerPluginPromptEndpoint, RunPluginCommandEndpoint } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { request } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { invalidatePluginUi } from "../thread-queries.js";
 
 /** Answering plugins' prompts and running their commands in a Thread. */
@@ -18,12 +14,10 @@ export const answerPluginPrompt = async (
   answer: null | boolean | string | Readonly<Record<string, string>>,
 ) => {
   try {
-    const response = await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/plugin-ui/prompts/${encodeURIComponent(promptId)}`,
-      AnswerPluginPromptResponseSchema,
-      { method: "POST", body: JSON.stringify({ answer }) },
-      PluginThreadUiErrorResponseSchema,
-    );
+    const response = await dxClient.call(AnswerPluginPromptEndpoint, {
+      params: { threadId, promptId },
+      body: { answer },
+    });
     return response.data;
   } finally {
     await invalidatePluginUi(client, threadId);
@@ -37,12 +31,10 @@ export const runPluginCommand = async (
   title: string,
 ) => {
   try {
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/plugin-ui/commands`,
-      RunPluginCommandResponseSchema,
-      { method: "POST", body: JSON.stringify({ command }) },
-      PluginThreadUiErrorResponseSchema,
-    );
+    await dxClient.call(RunPluginCommandEndpoint, {
+      params: { threadId },
+      body: { command },
+    });
   } catch (error) {
     const detail =
       error !== null &&

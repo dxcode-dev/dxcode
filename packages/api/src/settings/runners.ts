@@ -63,3 +63,14 @@ export const RunnersUnavailableResponseSchema = errorResponse(
 // or not the domain's provider list names `runner` yet.
 export const RUNNER_PROVIDER_ID: string = "runner";
 export const RUNNER_PROFILE_ID: string = "rn.machine";
+
+/** Runners are hidden until the person turns on the experimental feature. */
+export const RunnersNotOfferedResponseSchema = errorResponse(
+  "NOT_FOUND",
+  "Not found.",
+);
+
+export const RunnerNotFoundResponseSchema = errorResponse(
+  "RUNNER_NOT_FOUND",
+  "Runner not found.",
+);

@@ -3,17 +3,10 @@ import {
   type ThreadQueuedMessage,
   withMessageAttachments,
 } from "@dx/api";
-import type { UseFlueAgentResult } from "@flue/react";
-import * as React from "react";
-import { toast } from "sonner";
-import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
-import { settle } from "../../shared/settle.js";
-import { lazyComponent } from "../../shared/stale-chunk.js";
-import { Button } from "../../shared/ui/button.js";
+import type { TranscriptViewModel } from "@dx/client";
 import {
   editingNotes,
   type MessageEditing,
-  type MessageEditOptions,
   type MessageEditTarget,
   messageTarget,
   othersRemovedNotice,
@@ -21,13 +14,20 @@ import {
   targetOriginal,
   targetRead,
   type UserPromptRow,
-} from "./message-edit-model.js";
+} from "@dx/client";
+import type { UseFlueAgentResult } from "@flue/react";
+import * as React from "react";
+import { toast } from "sonner";
+import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
+import { settle } from "../../shared/settle.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
+import { Button } from "../../shared/ui/button.js";
+import type { MessageEditOptions } from "./message-edit-model.js";
 import { editThreadMessageFailure } from "./message-edit-mutations.js";
 import {
   messageQueueFailure,
   messageReadBeforeChange,
 } from "./message-queue-queries.js";
-import type { TranscriptViewModel } from "./transcript-view-model.js";
 import {
   type AgentSource,
   useAgentSelection,

@@ -1,3 +1,4 @@
+import { MCP_OAUTH_CALLBACK_PATH } from "@dx/api";
 import { ApiError, type McpServerInput } from "../../../shared/api/client.js";
 import { MCP_TEMPLATES, type McpTemplate } from "./mcp-catalog.js";
 import type { McpServerData } from "./mcp-queries.js";
@@ -145,7 +146,7 @@ export const mcpFieldsFor = (server: McpServerData): McpServerFields => ({
 
 /** The URL OAuth providers send people back to after signing in. */
 export const mcpOAuthCallbackUrl = () =>
-  `${window.location.origin}/v1/settings/personal/mcp-servers/oauth/callback`;
+  `${window.location.origin}${MCP_OAUTH_CALLBACK_PATH}`;
 
 /** Header names and values that usually carry credentials. */
 export const looksSecret = (name: string, value: string) =>

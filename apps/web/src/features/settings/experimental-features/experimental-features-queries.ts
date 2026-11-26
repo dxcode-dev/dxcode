@@ -1,16 +1,39 @@
-import type { UserId } from "@dx/domain";
+import {
+  GetPersonalExperimentalFeaturesEndpoint,
+  type PersonalExperimentalFeaturesData,
+  UpdatePersonalExperimentalFeatureEndpoint,
+} from "@dx/api";
+import type {
+  ExperimentalFeatureId,
+  ExperimentalFeaturePreferencesRevision,
+  UserId,
+} from "@dx/domain";
 import {
   mutationOptions,
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  getPersonalExperimentalFeatures,
-  updatePersonalExperimentalFeature,
-} from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { mailboxKeys } from "../../mailbox/mailbox-cache-queries.js";
 import { orbProviderKeys } from "../orb-providers/orb-providers-queries.js";
 import { settingsKeys } from "../settings-context-queries.js";
+
+const getPersonalExperimentalFeatures = async (
+  signal?: AbortSignal,
+): Promise<PersonalExperimentalFeaturesData> =>
+  (await dxClient.call(GetPersonalExperimentalFeaturesEndpoint, {}, { signal }))
+    .data;
+
+const updatePersonalExperimentalFeature = async (
+  featureId: ExperimentalFeatureId,
+  enabled: boolean,
+  expectedRevision: ExperimentalFeaturePreferencesRevision,
+): Promise<PersonalExperimentalFeaturesData> =>
+  (
+    await dxClient.call(UpdatePersonalExperimentalFeatureEndpoint, {
+      body: { featureId, enabled, expectedRevision },
+    })
+  ).data;
 
 export const experimentalFeatureKeys = {
   personal: (userId: UserId) => ["experimental-features", userId] as const,

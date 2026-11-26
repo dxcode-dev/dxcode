@@ -60,7 +60,7 @@ import { ThreadArchiveContext } from "../../../shared/thread-archive.js";
 import { ThreadEditingContext } from "../../../shared/thread-editing.js";
 import { ThreadSnoozeContext } from "../../../shared/thread-snooze.js";
 import { settingsContextQueryOptions } from "../../settings/settings-context-queries.js";
-import { orbMemoryKeys } from "../orb-memory/orb-memory-queries.js";
+import { orbMemoryKeys } from "../orb-memory/orb-memory-cache-queries.js";
 import { ThreadMenu } from "../thread-menu.js";
 import { ThreadUsageDialog } from "./thread-usage-dialog.js";
 import { threadUsageQueryOptions } from "./thread-usage-queries.js";

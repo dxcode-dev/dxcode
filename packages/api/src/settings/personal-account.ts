@@ -16,6 +16,7 @@ import {
   UpdatePersonalComposerDefaultsInput,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import { SettingsFieldErrorSchema } from "./field-error.js";
 
@@ -177,3 +178,101 @@ export type GetPersonalAccountResponse =
   typeof GetPersonalAccountResponseSchema.Encoded;
 export type UpdatePersonalAccountResponse =
   typeof UpdatePersonalAccountResponseSchema.Encoded;
+
+const personalAccountRefusals = [
+  { status: 403, schema: PersonalAccountForbiddenResponseSchema },
+  { status: 404, schema: PersonalAccountNotFoundResponseSchema },
+  { status: 503, schema: PersonalAccountPersistenceUnavailableResponseSchema },
+];
+
+export const GetPersonalAccountEndpoint = defineEndpoint({
+  id: "settings.personalAccount.get",
+  method: "GET",
+  path: "/v1/settings/personal/account",
+  success: GetPersonalAccountResponseSchema,
+  refusals: personalAccountRefusals,
+});
+
+export const UpdatePersonalAccountEndpoint = defineEndpoint({
+  id: "settings.personalAccount.update",
+  method: "PATCH",
+  path: "/v1/settings/personal/account",
+  body: UpdatePersonalAccountRequestSchema,
+  success: UpdatePersonalAccountResponseSchema,
+  refusals: [
+    { status: 400, schema: PersonalAccountInvalidRequestResponseSchema },
+    { status: 409, schema: PersonalAccountUsernameUnavailableResponseSchema },
+    { status: 409, schema: PersonalAccountUsernameChangeLockedResponseSchema },
+    ...personalAccountRefusals,
+  ],
+});
+
+export const GetPersonalAccountThreadCountEndpoint = defineEndpoint({
+  id: "settings.personalAccount.threadCount",
+  method: "GET",
+  path: "/v1/settings/personal/account/thread-count",
+  success: GetPersonalAccountThreadCountResponseSchema,
+  refusals: [
+    { status: 403, schema: PersonalAccountForbiddenResponseSchema },
+    {
+      status: 503,
+      schema: PersonalAccountPersistenceUnavailableResponseSchema,
+    },
+  ],
+});
+
+/** Replaces the caller's picture with an image file. */
+export const SetPersonalAvatarEndpoint = defineEndpoint({
+  id: "settings.personalAccount.avatar.set",
+  method: "PUT",
+  path: "/v1/settings/personal/account/avatar",
+  upload: "bytes",
+  success: UpdatePersonalAccountResponseSchema,
+  refusals: [
+    { status: 400, schema: PersonalAccountInvalidRequestResponseSchema },
+    ...personalAccountRefusals,
+  ],
+});
+
+export const RemovePersonalAvatarEndpoint = defineEndpoint({
+  id: "settings.personalAccount.avatar.remove",
+  method: "DELETE",
+  path: "/v1/settings/personal/account/avatar",
+  success: UpdatePersonalAccountResponseSchema,
+  refusals: [
+    { status: 400, schema: PersonalAccountInvalidRequestResponseSchema },
+    ...personalAccountRefusals,
+  ],
+});
+
+export const UpdatePersonalAppearanceEndpoint = defineEndpoint({
+  id: "settings.personalAccount.appearance.update",
+  method: "PATCH",
+  path: "/v1/settings/personal/account/appearance",
+  body: UpdatePersonalAppearanceRequestSchema,
+  success: UpdatePersonalAppearanceResponseSchema,
+  refusals: [
+    { status: 400, schema: PersonalAccountInvalidRequestResponseSchema },
+    ...personalAccountRefusals,
+  ],
+});
+
+export const GetPersonalComposerDefaultsEndpoint = defineEndpoint({
+  id: "settings.personalAccount.composer.get",
+  method: "GET",
+  path: "/v1/settings/personal/account/composer",
+  success: GetPersonalComposerDefaultsResponseSchema,
+  refusals: personalAccountRefusals,
+});
+
+export const UpdatePersonalComposerDefaultsEndpoint = defineEndpoint({
+  id: "settings.personalAccount.composer.update",
+  method: "PATCH",
+  path: "/v1/settings/personal/account/composer",
+  body: UpdatePersonalComposerDefaultsRequestSchema,
+  success: UpdatePersonalComposerDefaultsResponseSchema,
+  refusals: [
+    { status: 400, schema: PersonalAccountInvalidRequestResponseSchema },
+    ...personalAccountRefusals,
+  ],
+});

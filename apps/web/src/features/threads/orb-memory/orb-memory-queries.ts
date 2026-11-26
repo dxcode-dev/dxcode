@@ -1,22 +1,20 @@
 import {
-  GetThreadOrbMemoryResponseSchema,
+  GetThreadOrbMemoryEndpoint,
   type OrbProcessId,
-  StopThreadOrbProcessResponseSchema,
+  StopThreadOrbProcessEndpoint,
   type ThreadOrbMemoryData,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import {
-  type QueryClient,
   queryOptions,
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import { ApiError, request } from "../../../shared/api/client.js";
-
-export const orbMemoryKeys = {
-  all: ["thread-orb-memory"] as const,
-  thread: (threadId: ThreadId) => ["thread-orb-memory", threadId] as const,
-};
+import { ApiError, dxClient } from "../../../shared/api/client.js";
+import {
+  invalidateOrbMemory,
+  orbMemoryKeys,
+} from "./orb-memory-cache-queries.js";
 
 /** Live while the card has something to show; a slow fallback otherwise. */
 const refetchInterval = (data: ThreadOrbMemoryData | undefined) =>
@@ -35,9 +33,9 @@ export const threadOrbMemoryQueryOptions = (threadId: ThreadId) =>
     queryKey: orbMemoryKeys.thread(threadId),
     queryFn: async ({ signal }) =>
       (
-        await request(
-          `/v1/threads/${encodeURIComponent(threadId)}/memory`,
-          GetThreadOrbMemoryResponseSchema,
+        await dxClient.call(
+          GetThreadOrbMemoryEndpoint,
+          { params: { threadId } },
           { signal },
         )
       ).data,
@@ -46,12 +44,6 @@ export const threadOrbMemoryQueryOptions = (threadId: ThreadId) =>
     refetchIntervalInBackground: false,
   });
 
-export const invalidateOrbMemory = (client: QueryClient, threadId: ThreadId) =>
-  client.invalidateQueries({ queryKey: orbMemoryKeys.thread(threadId) });
-
-export const invalidateAllOrbMemory = (client: QueryClient) =>
-  client.invalidateQueries({ queryKey: orbMemoryKeys.all });
-
 /** Stops one listed process; the card then reads its state from the Orb. */
 export const useStopOrbProcess = (threadId: ThreadId) => {
   const client = useQueryClient();
@@ -59,11 +51,9 @@ export const useStopOrbProcess = (threadId: ThreadId) => {
     mutationKey: [...orbMemoryKeys.thread(threadId), "stop"],
     mutationFn: async (process: OrbProcessId) =>
       (
-        await request(
-          `/v1/threads/${encodeURIComponent(threadId)}/memory/processes/${encodeURIComponent(process)}/stop`,
-          StopThreadOrbProcessResponseSchema,
-          { method: "POST" },
-        )
+        await dxClient.call(StopThreadOrbProcessEndpoint, {
+          params: { threadId, processId: process },
+        })
       ).data,
     onSettled: () => invalidateOrbMemory(client, threadId),
   });

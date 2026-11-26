@@ -122,13 +122,13 @@ vi.mock("./changes/changes-pane.js", async (importOriginal) => ({
   },
 }));
 
+import { deriveTranscriptViewModel } from "@dx/client";
 import { AuthContext } from "../../shared/auth/auth-context.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";
 import { ThreadSessionRegistry } from "./thread-session-registry.js";
 import { ThreadTranscript } from "./thread-transcript.js";
 import { ThreadSession } from "./thread-workspace.js";
-import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 
 type Message = FlueConversationMessage;
 const userId = "usr_render_scope" as UserId;

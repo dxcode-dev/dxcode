@@ -1,24 +1,23 @@
 import {
+  GetThreadAutomationsEndpoint,
   type ThreadAutomationsData,
-  ThreadAutomationsResponseSchema,
+  UpdateTimeZoneEndpoint,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import {
   type QueryClient,
   queryOptions,
-  useMutation,
   useQuery,
-  useQueryClient,
 } from "@tanstack/react-query";
-import { request, updateTimeZone } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
+
+const updateTimeZone = async (timeZone: string) =>
+  (await dxClient.call(UpdateTimeZoneEndpoint, { body: { timeZone } })).data;
 
 export const automationKeys = {
   all: ["thread-automations"] as const,
   thread: (threadId: ThreadId) => ["thread-automations", threadId] as const,
 };
-
-const base = (threadId: ThreadId) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/automations`;
 
 /**
  * The Thread's schedule and GitHub subscriptions, for its owner. A
@@ -30,9 +29,11 @@ export const threadAutomationsQueryOptions = (threadId: ThreadId) =>
     queryKey: automationKeys.thread(threadId),
     queryFn: async ({ signal }) =>
       (
-        await request(base(threadId), ThreadAutomationsResponseSchema, {
-          signal,
-        })
+        await dxClient.call(
+          GetThreadAutomationsEndpoint,
+          { params: { threadId } },
+          { signal },
+        )
       ).data,
     staleTime: 30_000,
   });
@@ -77,39 +78,6 @@ export const invalidateThreadAutomations = (
 
 export const invalidateAllThreadAutomations = (client: QueryClient) =>
   client.invalidateQueries({ queryKey: automationKeys.all });
-
-export type AutomationAction =
-  | { readonly kind: "schedule"; readonly enabled?: boolean }
-  | {
-      readonly kind: "github";
-      readonly id: string;
-      readonly enabled?: boolean;
-    };
-
-/** Pauses, resumes, or (without `enabled`) deletes one automation. */
-export const useAutomationAction = (threadId: ThreadId) => {
-  const client = useQueryClient();
-  return useMutation({
-    mutationKey: [...automationKeys.thread(threadId), "action"],
-    mutationFn: async (action: AutomationAction) =>
-      (
-        await request(
-          action.kind === "schedule"
-            ? `${base(threadId)}/schedule`
-            : `${base(threadId)}/github/${encodeURIComponent(action.id)}`,
-          ThreadAutomationsResponseSchema,
-          action.enabled === undefined
-            ? { method: "DELETE" }
-            : {
-                method: "PATCH",
-                body: JSON.stringify({ enabled: action.enabled }),
-              },
-        )
-      ).data,
-    onSuccess: (data: ThreadAutomationsData) =>
-      client.setQueryData(automationKeys.thread(threadId), data),
-  });
-};
 
 /** Records the browser's zone, where schedules without DTSTART run. */
 export const recordBrowserTimeZone = () =>

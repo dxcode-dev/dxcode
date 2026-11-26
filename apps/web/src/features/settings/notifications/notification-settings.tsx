@@ -14,7 +14,7 @@ import {
   removePushDeviceMutationOptions,
   testPushMutationOptions,
   updateNotificationPreferenceMutationOptions,
-} from "../../notifications/notifications-queries.js";
+} from "../../notifications/notification-settings-queries.js";
 import {
   SettingsBackgroundError,
   SettingsCard,

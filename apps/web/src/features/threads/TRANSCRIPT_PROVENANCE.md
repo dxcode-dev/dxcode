@@ -1,7 +1,7 @@
 # Transcript implementation provenance gate
 
-The transcript view-model is original dx code derived only from Flue's public native
-types. External projects are design evidence, not copied runtime dependencies.
+The transcript view-model ([`packages/client/src/transcript`](../../../../../packages/client/src/transcript))
+is original dx code derived only from Flue's public native types. External projects are design evidence, not copied runtime dependencies.
 
 - Vercel AI Elements is Apache-2.0. Any later source intake must retain its required
   notice and receive a component-level provenance review.

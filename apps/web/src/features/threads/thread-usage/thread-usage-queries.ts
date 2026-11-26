@@ -1,9 +1,9 @@
 import {
-  GetThreadClaudePlanResponseSchema,
-  GetThreadOrbMetricsResponseSchema,
-  GetThreadOrbSessionsResponseSchema,
-  GetThreadUsageRequestsResponseSchema,
-  GetThreadUsageResponseSchema,
+  GetThreadClaudePlanEndpoint,
+  GetThreadOrbMetricsEndpoint,
+  GetThreadOrbSessionsEndpoint,
+  GetThreadUsageEndpoint,
+  GetThreadUsageRequestsEndpoint,
   type ThreadClaudePlanData,
   type ThreadOrbMetricsData,
   type ThreadOrbSessionsData,
@@ -12,27 +12,20 @@ import {
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
-import { request } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 
 /** A Thread's Cost & Usage: the menu's cost row and its dialog. */
-
-const threadPath = (threadId: ThreadId) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/usage`;
-
-const withCursor = (path: string, query: URLSearchParams, cursor?: string) => {
-  if (cursor !== undefined) query.set("cursor", cursor);
-  const search = query.toString();
-  return search === "" ? path : `${path}?${search}`;
-};
 
 export const getThreadUsage = async (
   threadId: ThreadId,
   signal?: AbortSignal,
 ): Promise<ThreadUsageData> =>
   (
-    await request(threadPath(threadId), GetThreadUsageResponseSchema, {
-      signal,
-    })
+    await dxClient.call(
+      GetThreadUsageEndpoint,
+      { params: { threadId } },
+      { signal },
+    )
   ).data;
 
 export const getThreadUsageRequests = async (
@@ -45,16 +38,16 @@ export const getThreadUsageRequests = async (
   signal?: AbortSignal,
 ): Promise<ThreadUsageRequestsData> =>
   (
-    await request(
-      withCursor(
-        `${threadPath(threadId)}/requests`,
-        new URLSearchParams({
+    await dxClient.call(
+      GetThreadUsageRequestsEndpoint,
+      {
+        params: { threadId },
+        query: {
           providerId: input.providerId,
           modelId: input.modelId,
-        }),
-        input.cursor,
-      ),
-      GetThreadUsageRequestsResponseSchema,
+          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        },
+      },
       { signal },
     )
   ).data;
@@ -65,13 +58,12 @@ export const getThreadOrbSessions = async (
   signal?: AbortSignal,
 ): Promise<ThreadOrbSessionsData> =>
   (
-    await request(
-      withCursor(
-        `${threadPath(threadId)}/orb-sessions`,
-        new URLSearchParams(),
-        cursor,
-      ),
-      GetThreadOrbSessionsResponseSchema,
+    await dxClient.call(
+      GetThreadOrbSessionsEndpoint,
+      {
+        params: { threadId },
+        query: cursor === undefined ? {} : { cursor },
+      },
       { signal },
     )
   ).data;
@@ -81,9 +73,9 @@ export const getThreadOrbMetrics = async (
   signal?: AbortSignal,
 ): Promise<ThreadOrbMetricsData> =>
   (
-    await request(
-      `${threadPath(threadId)}/orb-metrics`,
-      GetThreadOrbMetricsResponseSchema,
+    await dxClient.call(
+      GetThreadOrbMetricsEndpoint,
+      { params: { threadId } },
       { signal },
     )
   ).data;
@@ -181,9 +173,9 @@ export const threadClaudePlanQueryOptions = (
     queryKey: ["threads", userId, "detail", threadId, "claude-plan"] as const,
     queryFn: async ({ signal }): Promise<ThreadClaudePlanData> =>
       (
-        await request(
-          `${threadPath(threadId)}/claude-plan`,
-          GetThreadClaudePlanResponseSchema,
+        await dxClient.call(
+          GetThreadClaudePlanEndpoint,
+          { params: { threadId } },
           { signal },
         )
       ).data,

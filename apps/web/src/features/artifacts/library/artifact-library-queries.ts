@@ -1,13 +1,19 @@
 import {
   type ArtifactFolder,
-  ArtifactFolderResponseSchema,
   type ArtifactLibraryFilter,
   type ArtifactLibraryItem,
-  ArtifactLibraryItemResponseSchema,
-  ArtifactLibraryResponseSchema,
   type ArtifactSharing,
-  DeleteArtifactFolderResponseSchema,
+  CreateArtifactFolderEndpoint,
+  CreateStandaloneArtifactEndpoint,
+  DeleteArtifactFolderEndpoint,
+  GetArtifactLibraryItemEndpoint,
+  ListArtifactLibraryEndpoint,
+  MoveArtifactToFolderEndpoint,
+  PinArtifactEndpoint,
+  RenameArtifactFolderEndpoint,
   type ThreadArtifactKind,
+  UnpinArtifactEndpoint,
+  UpdateArtifactSharingEndpoint,
 } from "@dx/api";
 import {
   keepPreviousData,
@@ -15,47 +21,18 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { Schema } from "effect";
-import { noticeUnauthenticated } from "../../../shared/auth/session-ended.js";
-import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
-import { ArtifactApiError } from "../artifacts-api.js";
+import {
+  ArtifactApiError,
+  sendArtifactRequest,
+} from "../artifacts-api-queries.js";
 import { ARTIFACT_LIBRARY_KEY } from "../artifacts-queries.js";
 
 /**
- * The Artifacts library's data: every artifact the person may open
- * (`/v1/artifacts`), one artifact's location for an `/artifacts/<id>` link,
+ * The Artifacts library's data: every artifact the person may open, one artifact's location for an `/artifacts/<id>` link,
  * creating a standalone artifact, and sharing it. Reading and saving the
  * artifact itself use the artifact queries with the item's scope
  * (`scopeOf`): its Thread, or the standalone artifact itself.
  */
-
-const send = async <S extends Schema.ConstraintDecoder<unknown>>(
-  url: string,
-  schema: S,
-  init: RequestInit = {},
-): Promise<S["Type"]> => {
-  const response = await sameOriginFetch(url, {
-    credentials: "same-origin",
-    ...init,
-    headers: {
-      accept: "application/json",
-      ...(init.body === undefined
-        ? {}
-        : { "content-type": "application/json" }),
-    },
-  });
-  noticeUnauthenticated(response);
-  const body = (await response.json().catch(() => undefined)) as
-    | { data?: { code?: string; message?: string } }
-    | undefined;
-  if (!response.ok)
-    throw new ArtifactApiError(
-      response.status,
-      body?.data?.code ?? "ARTIFACTS_UNAVAILABLE",
-      body?.data?.message ?? "Artifacts are temporarily unavailable.",
-    );
-  return Schema.decodeUnknownPromise(schema)(body);
-};
 
 export const libraryKeys = {
   all: ARTIFACT_LIBRARY_KEY,
@@ -77,15 +54,19 @@ export const artifactLibraryOptions = (
 ) =>
   queryOptions({
     queryKey: libraryKeys.list(filter, query),
-    queryFn: async ({ signal }) => {
-      const search = new URLSearchParams({ filter });
-      if (query.trim() !== "") search.set("q", query.trim());
-      return (
-        await send(`/v1/artifacts?${search}`, ArtifactLibraryResponseSchema, {
-          signal,
-        })
-      ).data;
-    },
+    queryFn: async ({ signal }) =>
+      (
+        await sendArtifactRequest(
+          ListArtifactLibraryEndpoint,
+          {
+            query: {
+              filter,
+              ...(query.trim() === "" ? {} : { q: query.trim() }),
+            },
+          },
+          { signal },
+        )
+      ).data,
     staleTime: 10_000,
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: "always",
@@ -108,9 +89,9 @@ export const artifactLibraryItemOptions = (artifactId: string) =>
     queryKey: libraryKeys.item(artifactId),
     queryFn: async ({ signal }) =>
       (
-        await send(
-          `/v1/artifacts/${encodeURIComponent(artifactId)}`,
-          ArtifactLibraryItemResponseSchema,
+        await sendArtifactRequest(
+          GetArtifactLibraryItemEndpoint,
+          { params: { artifactId } },
           { signal },
         )
       ).data.item,
@@ -134,9 +115,8 @@ export const createStandaloneArtifactMutation = (
       readonly kind: ThreadArtifactKind;
     }) =>
       (
-        await send("/v1/artifacts", ArtifactLibraryItemResponseSchema, {
-          method: "POST",
-          body: JSON.stringify(input),
+        await sendArtifactRequest(CreateStandaloneArtifactEndpoint, {
+          body: input,
         })
       ).data.item,
     onSuccess: (item) => {
@@ -152,11 +132,10 @@ export const shareArtifactMutation = (
   mutationOptions({
     mutationFn: async (sharing: ArtifactSharing) =>
       (
-        await send(
-          `/v1/artifacts/${encodeURIComponent(artifactId)}/sharing`,
-          ArtifactLibraryItemResponseSchema,
-          { method: "PUT", body: JSON.stringify({ sharing }) },
-        )
+        await sendArtifactRequest(UpdateArtifactSharingEndpoint, {
+          params: { artifactId },
+          body: { sharing },
+        })
       ).data.item,
     onSuccess: (item) => accept(client, item),
   });
@@ -166,10 +145,9 @@ export const pinArtifactMutation = (client: QueryClient, artifactId: string) =>
   mutationOptions({
     mutationFn: async (pinned: boolean) =>
       (
-        await send(
-          `/v1/artifacts/${encodeURIComponent(artifactId)}/pin`,
-          ArtifactLibraryItemResponseSchema,
-          { method: pinned ? "PUT" : "DELETE" },
+        await sendArtifactRequest(
+          pinned ? PinArtifactEndpoint : UnpinArtifactEndpoint,
+          { params: { artifactId } },
         )
       ).data.item,
     onSuccess: (item) => accept(client, item),
@@ -180,11 +158,10 @@ export const fileArtifactMutation = (client: QueryClient, artifactId: string) =>
   mutationOptions({
     mutationFn: async (folderId: string | null) =>
       (
-        await send(
-          `/v1/artifacts/${encodeURIComponent(artifactId)}/folder`,
-          ArtifactLibraryItemResponseSchema,
-          { method: "PUT", body: JSON.stringify({ folderId }) },
-        )
+        await sendArtifactRequest(MoveArtifactToFolderEndpoint, {
+          params: { artifactId },
+          body: { folderId },
+        })
       ).data.item,
     onSuccess: (item) => accept(client, item),
   });
@@ -199,17 +176,14 @@ export const saveFolderMutation = (
       readonly folderId?: string;
       readonly name: string;
     }) =>
-      (
-        await send(
-          input.folderId === undefined
-            ? "/v1/artifacts/folders"
-            : `/v1/artifacts/folders/${encodeURIComponent(input.folderId)}`,
-          ArtifactFolderResponseSchema,
-          {
-            method: input.folderId === undefined ? "POST" : "PATCH",
-            body: JSON.stringify({ name: input.name.trim() }),
-          },
-        )
+      (input.folderId === undefined
+        ? await sendArtifactRequest(CreateArtifactFolderEndpoint, {
+            body: { name: input.name.trim() },
+          })
+        : await sendArtifactRequest(RenameArtifactFolderEndpoint, {
+            params: { folderId: input.folderId },
+            body: { name: input.name.trim() },
+          })
       ).data.folder,
     onSuccess: (folder) => {
       void client.invalidateQueries({ queryKey: libraryKeys.lists() });
@@ -221,11 +195,9 @@ export const saveFolderMutation = (
 export const deleteFolderMutation = (client: QueryClient) =>
   mutationOptions({
     mutationFn: (folderId: string) =>
-      send(
-        `/v1/artifacts/folders/${encodeURIComponent(folderId)}`,
-        DeleteArtifactFolderResponseSchema,
-        { method: "DELETE" },
-      ),
+      sendArtifactRequest(DeleteArtifactFolderEndpoint, {
+        params: { folderId },
+      }),
     onSuccess: () =>
       client.invalidateQueries({ queryKey: libraryKeys.lists() }),
   });

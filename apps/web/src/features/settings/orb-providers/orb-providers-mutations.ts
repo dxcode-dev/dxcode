@@ -1,16 +1,73 @@
 import type { OrbProviderId } from "@dx/api";
-import type { OrbProviderCredentials, UserId } from "@dx/domain";
-import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
-  deleteOrbProviderConnection,
-  retryOrbProviderConnection,
-  setOrbProviderConnection,
-  setOrbProviderWorkspacePolicy,
-} from "../../../shared/api/client.js";
+  DeletePersonalOrbProviderConnectionEndpoint,
+  DeleteWorkspaceOrbProviderConnectionEndpoint,
+  RetryPersonalOrbProviderConnectionEndpoint,
+  RetryWorkspaceOrbProviderConnectionEndpoint,
+  SetPersonalOrbProviderConnectionEndpoint,
+  SetWorkspaceOrbProviderConnectionEndpoint,
+  SetWorkspaceOrbProviderPolicyEndpoint,
+} from "@dx/api";
+import type { OrbProviderCredentials, UserId, WorkspaceSlug } from "@dx/domain";
+import { mutationOptions, type QueryClient } from "@tanstack/react-query";
+import { dxClient } from "../../../shared/api/client.js";
 import {
   orbProviderKeys,
   type PluginsTarget,
 } from "./orb-providers-queries.js";
+
+const setOrbProviderConnection = async (
+  target: PluginsTarget,
+  providerId: OrbProviderId,
+  credentials: OrbProviderCredentials,
+) =>
+  (target.scope === "personal"
+    ? await dxClient.call(SetPersonalOrbProviderConnectionEndpoint, {
+        params: { providerId },
+        body: { credentials },
+      })
+    : await dxClient.call(SetWorkspaceOrbProviderConnectionEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug, providerId },
+        body: { credentials },
+      })
+  ).data;
+
+const retryOrbProviderConnection = async (
+  target: PluginsTarget,
+  providerId: OrbProviderId,
+) =>
+  (target.scope === "personal"
+    ? await dxClient.call(RetryPersonalOrbProviderConnectionEndpoint, {
+        params: { providerId },
+      })
+    : await dxClient.call(RetryWorkspaceOrbProviderConnectionEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug, providerId },
+      })
+  ).data;
+
+const deleteOrbProviderConnection = async (
+  target: PluginsTarget,
+  providerId: OrbProviderId,
+) =>
+  (target.scope === "personal"
+    ? await dxClient.call(DeletePersonalOrbProviderConnectionEndpoint, {
+        params: { providerId },
+      })
+    : await dxClient.call(DeleteWorkspaceOrbProviderConnectionEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug, providerId },
+      })
+  ).data;
+
+const setOrbProviderWorkspacePolicy = async (
+  workspaceSlug: WorkspaceSlug,
+  allowPersonalKeysOnWorkspaceProjects: boolean,
+) =>
+  (
+    await dxClient.call(SetWorkspaceOrbProviderPolicyEndpoint, {
+      params: { workspaceSlug },
+      body: { allowPersonalKeysOnWorkspaceProjects },
+    })
+  ).data;
 
 export type OrbProviderAction =
   | {

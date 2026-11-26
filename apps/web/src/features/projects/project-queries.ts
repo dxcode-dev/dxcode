@@ -1,3 +1,8 @@
+import {
+  GetProjectEndpoint,
+  ListProjectsEndpoint,
+  type ProjectData,
+} from "@dx/api";
 import type { PageCursor, ProjectId, UserId } from "@dx/domain";
 import {
   type InfiniteData,
@@ -7,10 +12,34 @@ import {
 } from "@tanstack/react-query";
 import {
   ApiError,
-  getProject,
-  listProjects,
+  dxClient,
   type ProjectPage,
 } from "../../shared/api/client.js";
+
+/** One page of the person's Projects, 100 at a time. */
+export const listProjects = async (
+  cursor?: PageCursor,
+  signal?: AbortSignal,
+): Promise<ProjectPage> =>
+  (
+    await dxClient.call(
+      ListProjectsEndpoint,
+      { query: cursor === undefined ? { limit: 100 } : { limit: 100, cursor } },
+      { signal },
+    )
+  ).data;
+
+export const getProject = async (
+  projectId: ProjectId,
+  signal?: AbortSignal,
+): Promise<ProjectData> =>
+  (
+    await dxClient.call(
+      GetProjectEndpoint,
+      { params: { projectId } },
+      { signal },
+    )
+  ).data;
 
 /** `GET /v1/projects/<id>` answered that the project does not exist. */
 export const isMissingProjectError = (error: unknown) =>

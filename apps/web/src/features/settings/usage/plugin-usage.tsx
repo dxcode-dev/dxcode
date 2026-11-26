@@ -4,12 +4,12 @@ import { AlertTriangle } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
-import { SettingsCard, SettingsHeading } from "../settings-primitives.js";
-import type { SettingsSectionProps } from "../settings-registration.js";
 import {
   UsageBreakdown,
   UsageTotalCard,
 } from "../../../shared/ui/usage-summary.js";
+import { SettingsCard, SettingsHeading } from "../settings-primitives.js";
+import type { SettingsSectionProps } from "../settings-registration.js";
 import { UsageRangeTabs } from "./usage-components.js";
 import {
   personalUsageQueryOptions,

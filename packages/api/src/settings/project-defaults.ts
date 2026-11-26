@@ -9,7 +9,9 @@ import {
   WorkspaceSlug,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
+import { WorkspaceSettingsParamsSchema } from "./workspace-params.js";
 
 const ProjectDefaultsRevisionSchema = Schema.Int.check(
   Schema.isGreaterThanOrEqualTo(0),
@@ -96,3 +98,47 @@ export type UpdatePersonalProjectDefaultsRequest =
   typeof UpdatePersonalProjectDefaultsRequestSchema.Type;
 export type UpdateWorkspaceProjectDefaultsRequest =
   typeof UpdateWorkspaceProjectDefaultsRequestSchema.Type;
+
+const projectDefaultsRefusals = [
+  { status: 400, schema: ProjectDefaultsInvalidRequestResponseSchema },
+  { status: 400, schema: RunnerProfileUnavailableResponseSchema },
+  { status: 403, schema: ProjectDefaultsForbiddenResponseSchema },
+  { status: 409, schema: ProjectDefaultsConflictResponseSchema },
+  { status: 503, schema: ProjectDefaultsPersistenceUnavailableResponseSchema },
+];
+
+export const GetPersonalProjectDefaultsEndpoint = defineEndpoint({
+  id: "settings.projectDefaults.personal.get",
+  method: "GET",
+  path: "/v1/settings/personal/projects",
+  success: GetProjectDefaultsResponseSchema,
+  refusals: projectDefaultsRefusals,
+});
+
+export const UpdatePersonalProjectDefaultsEndpoint = defineEndpoint({
+  id: "settings.projectDefaults.personal.update",
+  method: "PUT",
+  path: "/v1/settings/personal/projects",
+  body: UpdatePersonalProjectDefaultsRequestSchema,
+  success: UpdateProjectDefaultsResponseSchema,
+  refusals: projectDefaultsRefusals,
+});
+
+export const GetWorkspaceProjectDefaultsEndpoint = defineEndpoint({
+  id: "settings.projectDefaults.workspace.get",
+  method: "GET",
+  path: "/v1/settings/workspaces/:workspaceSlug/projects",
+  params: WorkspaceSettingsParamsSchema,
+  success: GetProjectDefaultsResponseSchema,
+  refusals: projectDefaultsRefusals,
+});
+
+export const UpdateWorkspaceProjectDefaultsEndpoint = defineEndpoint({
+  id: "settings.projectDefaults.workspace.update",
+  method: "PUT",
+  path: "/v1/settings/workspaces/:workspaceSlug/projects",
+  params: WorkspaceSettingsParamsSchema,
+  body: UpdateWorkspaceProjectDefaultsRequestSchema,
+  success: UpdateProjectDefaultsResponseSchema,
+  refusals: projectDefaultsRefusals,
+});

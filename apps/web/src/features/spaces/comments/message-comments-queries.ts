@@ -1,11 +1,11 @@
 import {
   type CommentedMessage,
+  CreateMessageCommentEndpoint,
   type CreateMessageCommentRequest,
+  ListMessageCommentSummariesEndpoint,
+  ListMessageCommentsEndpoint,
   type MessageComment,
-  MessageCommentListResponseSchema,
-  MessageCommentResponseSchema,
   type MessageCommentSummary,
-  MessageCommentSummaryListResponseSchema,
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import {
@@ -13,7 +13,7 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import { request } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import {
   invalidateMessageComments,
   messageCommentKeys,
@@ -22,20 +22,15 @@ import {
 const staleTime = 30_000;
 const gcTime = 5 * 60_000;
 
-const commentsPath = (threadId: ThreadId, messageId?: string) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/message-comments${
-    messageId === undefined ? "" : `/${encodeURIComponent(messageId)}`
-  }`;
-
 /** Every commented message of a Space, in the order the messages were sent. */
 const listSummaries = async (
   threadId: ThreadId,
   signal?: AbortSignal,
 ): Promise<ReadonlyArray<MessageCommentSummary>> =>
   (
-    await request(
-      commentsPath(threadId),
-      MessageCommentSummaryListResponseSchema,
+    await dxClient.call(
+      ListMessageCommentSummariesEndpoint,
+      { params: { threadId } },
       { signal },
     )
   ).data.items;
@@ -50,9 +45,9 @@ const listComments = async (
   readonly comments: ReadonlyArray<MessageComment>;
 }> =>
   (
-    await request(
-      commentsPath(threadId, messageId),
-      MessageCommentListResponseSchema,
+    await dxClient.call(
+      ListMessageCommentsEndpoint,
+      { params: { threadId, messageId } },
       { signal },
     )
   ).data;
@@ -63,11 +58,10 @@ const addComment = async (
   input: CreateMessageCommentRequest,
 ): Promise<MessageComment> =>
   (
-    await request(
-      commentsPath(threadId, messageId),
-      MessageCommentResponseSchema,
-      { method: "POST", body: JSON.stringify(input) },
-    )
+    await dxClient.call(CreateMessageCommentEndpoint, {
+      params: { threadId, messageId },
+      body: input,
+    })
   ).data.comment;
 
 export const messageCommentSummariesQueryOptions = (

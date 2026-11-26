@@ -1,4 +1,5 @@
 import type { ProjectData, ThreadDetailData } from "@dx/api";
+import type { TranscriptViewModel } from "@dx/client";
 import { Link } from "@tanstack/react-router";
 import { DateTime } from "effect";
 import {
@@ -51,7 +52,6 @@ import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
 import type { DictationRecord } from "./dictation/dictation-session.js";
 import { ThreadPresentationContext } from "./thread-session-context.js";
-import type { TranscriptViewModel } from "./transcript-view-model.js";
 
 // The Orb and cost rows read the Orb and usage once the menu opens, so their
 // code stays out of the Thread page's first load. It loads once the page is

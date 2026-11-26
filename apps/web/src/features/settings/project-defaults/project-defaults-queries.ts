@@ -1,10 +1,27 @@
 import type { ProjectDefaultsData } from "@dx/api";
+import {
+  GetPersonalProjectDefaultsEndpoint,
+  GetWorkspaceProjectDefaultsEndpoint,
+} from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
 import {
-  getProjectDefaults,
+  dxClient,
   type ProjectDefaultsTarget,
 } from "../../../shared/api/client.js";
+
+const getProjectDefaults = async (
+  target: ProjectDefaultsTarget,
+  signal?: AbortSignal,
+): Promise<ProjectDefaultsData> =>
+  (target.scope === "personal"
+    ? await dxClient.call(GetPersonalProjectDefaultsEndpoint, {}, { signal })
+    : await dxClient.call(
+        GetWorkspaceProjectDefaultsEndpoint,
+        { params: { workspaceSlug: target.workspaceSlug } },
+        { signal },
+      )
+  ).data;
 
 export type { ProjectDefaultsData, ProjectDefaultsTarget };
 

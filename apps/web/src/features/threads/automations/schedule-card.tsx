@@ -6,7 +6,7 @@ import { Button } from "../../../shared/ui/button.js";
 import { SettingsToggle } from "../../../shared/ui/settings.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { errorText, runText } from "./automation-text.js";
-import { useAutomationAction } from "./automations-queries.js";
+import { useAutomationAction } from "./automations-mutations.js";
 
 /** The schedule: pause or resume, delete, and its prompt to read or copy. */
 export function ScheduleCard({

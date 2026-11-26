@@ -17,6 +17,7 @@ export const APP_ROUTE_PATHS = [
   "/join/$token",
   "/welcome",
   "/welcome/tour",
+  "/native-sign-in",
   "/huddle/$workspace/$code",
   "/projects",
   "/projects/$projectId",

@@ -2,6 +2,7 @@ import {
   type ListMessageReactionsResponse,
   type MessageReaction,
   type MessageReactionErrorCode,
+  MessageReactionErrorResponseSchema,
   MessageReactionSchema,
   type MessageReactions,
   type MessageReactionsResponse,
@@ -42,14 +43,14 @@ const STATUS = {
 const refuse = (context: Context<AppEnv>, code: MessageReactionErrorCode) => {
   context.header("Cache-Control", "no-store");
   return context.json(
-    {
+    Schema.encodeUnknownSync(MessageReactionErrorResponseSchema)({
       status: "error",
       data: {
         code,
         message: MESSAGES[code],
         requestId: context.get("requestId"),
       },
-    },
+    }),
     STATUS[code],
   );
 };

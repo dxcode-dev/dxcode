@@ -6,6 +6,7 @@ import {
 import type { RunnerProfileId, UserId } from "@dx/domain";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import * as React from "react";
+import { usePairThisMachine } from "../../shared/native-shell/use-pair-this-machine.js";
 import {
   type AddRunnerSession,
   effectiveRunner,
@@ -49,6 +50,7 @@ export const useNewThreadRunner = (
     enabled: offered,
     session,
   });
+  const thisMachine = usePairThisMachine(pairing.data?.code);
   const runners = list.data?.runners;
   const runner = effectiveRunner(runners, chosenId);
   const runnerMachineId =
@@ -73,6 +75,7 @@ export const useNewThreadRunner = (
             : { connectedName: connected.name })}
           onRetry={() => void pairing.refetch()}
           onClose={() => setSession(undefined)}
+          {...(thisMachine === undefined ? {} : { thisMachine })}
           onUse={() => {
             if (connected !== undefined) setChosenId(connected.id);
             input.chooseRunnerProfile(RUNNER_PROFILE_ID as RunnerProfileId);

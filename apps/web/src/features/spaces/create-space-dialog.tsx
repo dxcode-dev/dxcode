@@ -29,6 +29,7 @@ import { cn } from "../../shared/utils.js";
 import { projectsQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { useComposerDraft } from "../threads/composer-draft-queries.js";
+import { CreateSpaceError } from "./create-space-error.js";
 import {
   refreshSpaceAgentModel,
   spaceAgentModelQueryOptions,
@@ -40,7 +41,6 @@ import {
   SpaceProjectCombobox,
   SpaceSharingSelect,
 } from "./space-form-fields.js";
-import { CreateSpaceError } from "./create-space-error.js";
 import type { SpaceModelPick } from "./space-model-field.js";
 import { SpaceModelRows } from "./space-model-rows.js";
 import {

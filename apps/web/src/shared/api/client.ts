@@ -1,30 +1,18 @@
 import {
   AcceptWorkspaceInviteResponseSchema,
-  AddVerificationKeyResponseSchema,
-  ApplyBulkEnvironmentVariablesResponseSchema,
   ArchiveThreadInvalidRequestResponseSchema,
   ArchiveThreadNotFoundResponseSchema,
   ArchiveThreadPersistenceUnavailableResponseSchema,
   ArchiveThreadProjectDeletedResponseSchema,
   ArchiveThreadResponseSchema,
-  BeginGitHubCeremonyResponseSchema,
-  BeginGitHubInstallationResponseSchema,
-  BeginMcpOAuthResponseSchema,
   BeginPersonalModelSubscriptionAuthorizationResponseSchema,
-  type BrowserSessionData,
-  type BulkEnvironmentVariablePreviewItem,
   CatalogResponseSchema,
   ChoicesResponseSchema,
   type ConnectionData,
   ConnectionResponseSchema,
   type CreateConnectionRequestSchema,
-  CreateEnvironmentVariableResponseSchema,
   type CreateExternalApiApplicationRequest,
   CreateExternalApiApplicationResponseSchema,
-  CreateManagedSigningKeyResponseSchema,
-  CreateMcpServerResponseSchema,
-  type CreatePersonalApiTokenRequest,
-  CreatePersonalApiTokenResponseSchema,
   CreatePluginTriggerResponseSchema,
   CreateProjectForbiddenResponseSchema,
   CreateProjectInvalidRequestResponseSchema,
@@ -32,7 +20,6 @@ import {
   CreateProjectPersistenceUnavailableResponseSchema,
   CreateProjectPolicyDeniedResponseSchema,
   type CreateProjectRequestSchema,
-  CreateProjectResponseSchema,
   CreateProjectRunnerUnavailableResponseSchema,
   CreateThreadAlreadyStartedResponseSchema,
   CreateThreadClaudePlanRefusedResponseSchema,
@@ -49,287 +36,148 @@ import {
   CreateThreadProjectNotFoundResponseSchema,
   CreateThreadRunnerUnavailableResponseSchema,
   type CreateWorkspaceInviteLinkRequest,
-  CreateWorkspaceResponseSchema,
   DeleteConnectionResponseSchema,
-  DeleteEnvironmentVariableResponseSchema,
-  DeleteMcpServerResponseSchema,
   DeleteProjectInvalidRequestResponseSchema,
   DeleteProjectNameMismatchResponseSchema,
   DeleteProjectNotFoundResponseSchema,
   DeleteProjectPersistenceUnavailableResponseSchema,
-  type DeleteProjectRequest,
-  DeleteProjectResponseSchema,
   DeleteThreadInvalidRequestResponseSchema,
   DeleteThreadNotFoundResponseSchema,
   DeleteThreadPersistenceUnavailableResponseSchema,
   DeleteThreadResponseSchema,
   type DeleteWorkspaceRequest,
   DeleteWorkspaceResponseSchema,
-  type DictationVocabularyData,
-  DictationVocabularyErrorResponseSchema,
-  DictationVocabularyResponseSchema,
   DisconnectPersonalModelSubscriptionResponseSchema,
-  DiscoverMcpServerResponseSchema,
-  type EnvironmentVariableAuditEventData,
-  type EnvironmentVariableData,
-  EnvironmentVariablesErrorResponseSchema,
-  ExperimentalFeaturesErrorResponseSchema,
-  ExportWorkspaceUsageAuditResponseSchema,
-  ExportWorkspaceUsageResponseSchema,
   type ExternalApiApplicationAuditEventData,
   type ExternalApiApplicationData,
   ExternalApiApplicationsErrorResponseSchema,
-  FirstPartyPluginErrorResponseSchema,
-  FirstPartyPluginListResponseSchema,
-  GetIntegrationDisconnectImpactResponseSchema,
-  GetOrbUsageResponseSchema,
-  GetPersonalAccountResponseSchema,
-  GetPersonalAgentInstructionsResponseSchema,
-  GetPersonalComposerDefaultsResponseSchema,
-  GetPersonalExperimentalFeaturesResponseSchema,
-  GetPersonalUsageResponseSchema,
-  GetProjectDefaultsResponseSchema,
-  GetProjectResponseSchema,
-  GetSettingsContextErrorResponseSchema,
-  GetSettingsContextResponseSchema,
-  GetSigningKeysResponseSchema,
+  GetSidebarLayoutEndpoint,
   GetSpaceAgentModelResponseSchema,
+  GetThreadDraftEndpoint,
   GetThreadListItemResponseSchema,
   GetThreadMembersResponseSchema,
+  GetThreadPaneLayoutEndpoint,
   GetThreadReadinessResponseSchema,
   GetThreadResponseSchema,
-  GetWorkspacePolicyResponseSchema,
-  GetWorkspaceProfileResponseSchema,
-  GetWorkspaceUsageResponseSchema,
-  GitHubDisconnectResponseSchema,
-  type GitHubGrantData,
+  GetWorkspaceDraftEndpoint,
   GraphResponseSchema,
-  InspectWorkspacePrivateThreadResponseSchema,
   IntegrationsErrorResponseSchema,
   LeaveWorkspaceResponseSchema,
-  ListBrowserSessionsResponseSchema,
   ListConnectionsResponseSchema,
-  ListEnvironmentVariableHistoryResponseSchema,
-  ListEnvironmentVariablesResponseSchema,
   ListExternalApiApplicationAuditResponseSchema,
   ListExternalApiApplicationsResponseSchema,
-  ListGitHubGrantsResponseSchema,
-  ListMcpServersResponseSchema,
-  ListNotificationsResponseSchema,
-  ListPersonalApiTokensResponseSchema,
-  ListPersonalIntegrationsResponseSchema,
   ListPersonalModelSubscriptionsResponseSchema,
   ListPluginTriggersResponseSchema,
-  ListProjectsResponseSchema,
   ListSharedThreadsResponseSchema,
   ListThreadsResponseSchema,
   ListWorkspaceInviteLinksResponseSchema,
   ListWorkspaceMembersResponseSchema,
-  ListWorkspaceUsageAuditResponseSchema,
-  MarkNotificationsReadResponseSchema,
-  MarkThreadSeenResponseSchema,
-  type McpServerData,
-  McpServersErrorResponseSchema,
+  MarkThreadSeenEndpoint,
   ModelRoutingErrorResponseSchema,
-  NotificationPreferencesResponseSchema,
-  OrbProviderErrorResponseSchema,
-  type OrbProviderId,
-  OrbProviderListResponseSchema,
-  type OrbUsageData,
-  type PersonalAccountData,
-  PersonalAccountErrorResponseSchema,
-  type PersonalAgentInstructionsData,
-  PersonalAgentInstructionsErrorResponseSchema,
-  type PersonalApiTokenData,
-  type PersonalApiTokenSecretData,
-  type PersonalComposerDefaultsData,
-  type PersonalExperimentalFeaturesData,
+  PersonalAccountPersistenceUnavailableResponseSchema,
   PersonalModelSubscriptionBrowserSessionRequiredResponseSchema,
   PersonalModelSubscriptionInUseResponseSchema,
   PersonalModelSubscriptionNotFoundResponseSchema,
   PersonalModelSubscriptionUnavailableResponseSchema,
-  PersonalSecurityErrorResponseSchema,
-  type PersonalUsageData,
-  PersonalUsageErrorResponseSchema,
-  type PersonalUsageExportData,
-  PinThreadResponseSchema,
+  PinThreadEndpoint,
   PluginBundlesErrorResponseSchema,
   PluginTriggersErrorResponseSchema,
   PollPersonalModelSubscriptionAuthorizationResponseSchema,
-  PreviewBulkEnvironmentVariablesResponseSchema,
   ProfileResponseSchema,
   type ProjectData,
-  type ProjectDefaultsData,
-  ProjectDefaultsErrorResponseSchema,
   ProjectIconNotImageResponseSchema,
   ProjectIconTooLargeResponseSchema,
   ProjectOrbScriptsForbiddenResponseSchema,
-  PushStateResponseSchema,
   type PutModeRequestSchema,
-  RebindProjectSourceResponseSchema,
   RefreshPersonalModelSubscriptionResponseSchema,
-  type RegisterPushDeviceRequest,
-  type RemovePushDeviceRequest,
   RemoveWorkspaceMemberResponseSchema,
   type ReorderConnectionsRequestSchema,
   ReorderConnectionsResponseSchema,
   RetryInitialDispatchResponseSchema,
   RetryPluginTriggerDeliveryResponseSchema,
-  ReviewMcpToolResponseSchema,
-  RevokeBrowserSessionResponseSchema,
   RevokeExternalApiApplicationResponseSchema,
-  RevokeManagedSigningKeyResponseSchema,
-  RevokeOtherBrowserSessionsResponseSchema,
-  RevokePersonalApiTokenResponseSchema,
   RevokePluginTriggerResponseSchema,
-  RevokeVerificationKeyResponseSchema,
   RevokeWorkspaceInviteLinkResponseSchema,
-  RotateEnvironmentVariableResponseSchema,
   RotateExternalApiApplicationResponseSchema,
-  RotateManagedSigningKeyResponseSchema,
-  RotatePersonalApiTokenResponseSchema,
   RotatePluginTriggerResponseSchema,
-  SearchThreadsInvalidRequestResponseSchema,
+  SearchThreadsEndpoint,
   type SearchThreadsItem,
-  SearchThreadsResponseSchema,
-  SearchThreadsUnavailableResponseSchema,
-  SendTestPushResponseSchema,
   type SetClaudePlanRequestSchema,
   type SetConnectionEnabledRequestSchema,
   SetExternalApiApplicationStatusResponseSchema,
-  type SetFirstPartyPluginConfigurationRequest,
-  type SettingsContextData,
-  type SettingsFieldError,
   type SidebarLayoutChoice,
-  SidebarLayoutResponseSchema,
-  type SigningKeySetupGuidance,
-  type SigningKeysData,
-  SigningKeysErrorResponseSchema,
-  SignOutMcpOAuthResponseSchema,
   SkillsErrorResponseSchema,
-  SnoozeThreadResponseSchema,
+  SnoozeThreadEndpoint,
   SourceControlDeniedResponseSchema,
   SourceControlProviderFailureResponseSchema,
   SpaceErrorResponseSchema,
   type ThreadData,
   ThreadDeletedResponseSchema,
   type ThreadDetailData,
-  ThreadDraftResponseSchema,
   type ThreadDraftSlot,
   ThreadFollowResponseSchema,
   ThreadIdUnavailableResponseSchema,
   type ThreadListItem,
-  ThreadOrbProcessErrorResponseSchema,
   type ThreadPaneLayout,
-  ThreadPaneLayoutResponseSchema,
-  ThreadPortalPublicErrorResponseSchema,
   ThreadSharingErrorResponseSchema,
-  TimeZoneResponseSchema,
   type UpdateConnectionRequestSchema,
-  UpdateEnvironmentVariableResponseSchema,
   type UpdateExternalApiApplicationRequest,
   UpdateExternalApiApplicationResponseSchema,
-  UpdateMcpServerResponseSchema,
-  UpdateMcpWorkspacePolicyResponseSchema,
-  type UpdateNotificationPreferenceRequest,
-  UpdatePersonalAccountResponseSchema,
-  UpdatePersonalAgentInstructionsResponseSchema,
-  type UpdatePersonalAppearanceRequest,
-  UpdatePersonalAppearanceResponseSchema,
-  type UpdatePersonalComposerDefaultsRequest,
-  UpdatePersonalComposerDefaultsResponseSchema,
-  UpdatePersonalExperimentalFeatureResponseSchema,
   UpdatePluginTriggerStateResponseSchema,
-  UpdateProjectDefaultsResponseSchema,
   UpdateProjectNameConflictResponseSchema,
-  UpdateProjectResponseSchema,
+  UpdateSidebarLayoutEndpoint,
   type UpdateSpaceAgentModelRequestSchema,
+  UpdateThreadDraftEndpoint,
+  UpdateThreadPaneLayoutEndpoint,
   type UpdateThreadRequest,
   UpdateThreadResponseSchema,
   type UpdateThreadSharingRequest,
   UpdateThreadSharingResponseSchema,
-  UpdateWorkspacePolicyResponseSchema,
-  UpdateWorkspaceProfileResponseSchema,
-  type WorkspaceAgentInstructionsData,
-  WorkspaceAgentInstructionsErrorResponseSchema,
-  WorkspaceAgentInstructionsResponseSchema,
+  UpdateWorkspaceDraftEndpoint,
   type WorkspaceDraftSlot,
   WorkspaceInviteLinkResponseSchema,
   WorkspaceInvitePreviewResponseSchema,
   WorkspaceMemberResponseSchema,
   WorkspaceMembersErrorResponseSchema,
-  type WorkspacePolicyData,
   WorkspacePolicyErrorResponseSchema,
-  type WorkspacePrivateThreadInspectionData,
-  type WorkspaceProfileData,
-  WorkspaceProfileErrorResponseSchema,
-  type WorkspaceUsageAuditExportData,
-  type WorkspaceUsageAuditPageData,
-  type WorkspaceUsageData,
-  WorkspaceUsageErrorResponseSchema,
 } from "@dx/api";
+import { ApiError, createDxClient } from "@dx/client";
 import type {
-  BrowserSessionId,
   EnvironmentVariableConfigReference,
-  ExperimentalFeatureId,
-  ExperimentalFeaturePreferencesRevision,
   ExternalApiApplicationId,
   ExternalApiApplicationRotationOverlapSeconds,
-  IntegrationConnectionId,
-  IntegrationDisconnectImpact,
-  McpServerId,
-  McpToolName,
-  McpToolSchemaHash,
-  OrbProviderCredentials,
   PageCursor,
-  PersonalApiTokenId,
   PluginId,
   PluginTriggerDeliveryId,
   PluginTriggerId,
   PluginVersion,
-  ProjectDefaultOverrides,
   ProjectId,
-  ProviderRepositoryId,
-  RunnerProfileId,
   ThreadId,
   WorkspacePermission,
-  WorkspacePolicyRestrictions,
-  WorkspaceProjectPolicy,
   WorkspaceSlug,
 } from "@dx/domain";
-import { Schema } from "effect";
+import { DateTime, Schema } from "effect";
 import { noticeUnauthenticated } from "../auth/session-ended.js";
 import { observeRequest } from "../diagnostics/client-diagnostics.js";
 import { takeBootRead } from "../same-origin-fetch.js";
 
-export class ApiError extends Error {
-  readonly status: number;
-  readonly code?: string;
-  readonly currentRevision?: number;
-  readonly fieldErrors?: ReadonlyArray<SettingsFieldError>;
-  readonly hasValidatedPayload: boolean;
-  /** The decoded error's own fields, for a caller that offers a next step. */
-  readonly data?: Readonly<Record<string, unknown>>;
+export { ApiError };
 
-  constructor(
-    status: number,
-    message: string,
-    code?: string,
-    fieldErrors?: ReadonlyArray<SettingsFieldError>,
-    currentRevision?: number,
-    hasValidatedPayload = false,
-    data?: Readonly<Record<string, unknown>>,
-  ) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.code = code;
-    this.fieldErrors = fieldErrors;
-    this.currentRevision = currentRevision;
-    this.hasValidatedPayload = hasValidatedPayload;
-    if (data !== undefined) this.data = data;
-  }
-}
+/**
+ * The web's dx client: same-origin cookies, the boot's prefetched reads, and
+ * request diagnostics. Call endpoints from `@dx/api` with it instead of
+ * writing a `/v1/` path here (wiki/headless-client.md).
+ */
+export const dxClient = createDxClient({
+  takePrefetched: takeBootRead,
+  fetch: async (path, init) => {
+    const response = await observeRequest(path, init.method, () =>
+      fetch(path, { ...init, credentials: "same-origin" }),
+    );
+    noticeUnauthenticated(response);
+    return response;
+  },
+});
 
 /** A feature's own error answers, which `request` reads before the shared ones. */
 type RefusalSchema = Schema.ConstraintDecoder<{
@@ -432,32 +280,19 @@ export const request = async <
       );
     const settingsError = await Schema.decodeUnknownPromise(
       Schema.Union([
-        GetSettingsContextErrorResponseSchema,
-        PersonalAccountErrorResponseSchema,
-        PersonalAgentInstructionsErrorResponseSchema,
-        WorkspaceAgentInstructionsErrorResponseSchema,
-        PersonalSecurityErrorResponseSchema,
-        WorkspaceProfileErrorResponseSchema,
+        // Deployment admin's username reset sends it.
+        PersonalAccountPersistenceUnavailableResponseSchema,
         WorkspaceMembersErrorResponseSchema,
+        // Skill routes send it too.
         WorkspacePolicyErrorResponseSchema,
-        EnvironmentVariablesErrorResponseSchema,
         ExternalApiApplicationsErrorResponseSchema,
         ModelRoutingErrorResponseSchema,
         PersonalModelSubscriptionNotFoundResponseSchema,
         PersonalModelSubscriptionBrowserSessionRequiredResponseSchema,
         PersonalModelSubscriptionInUseResponseSchema,
         PersonalModelSubscriptionUnavailableResponseSchema,
-        PersonalUsageErrorResponseSchema,
-        WorkspaceUsageErrorResponseSchema,
-        McpServersErrorResponseSchema,
         SkillsErrorResponseSchema,
         PluginBundlesErrorResponseSchema,
-        FirstPartyPluginErrorResponseSchema,
-        DictationVocabularyErrorResponseSchema,
-        OrbProviderErrorResponseSchema,
-        ExperimentalFeaturesErrorResponseSchema,
-        ProjectDefaultsErrorResponseSchema,
-        SigningKeysErrorResponseSchema,
         IntegrationsErrorResponseSchema,
         PluginTriggersErrorResponseSchema,
         CreateProjectInvalidRequestResponseSchema,
@@ -500,10 +335,6 @@ export const request = async <
         SourceControlDeniedResponseSchema,
         SourceControlProviderFailureResponseSchema,
         ThreadSharingErrorResponseSchema,
-        ThreadPortalPublicErrorResponseSchema,
-        ThreadOrbProcessErrorResponseSchema,
-        SearchThreadsInvalidRequestResponseSchema,
-        SearchThreadsUnavailableResponseSchema,
         SpaceErrorResponseSchema,
       ]),
     )(body).catch(() => undefined);
@@ -563,151 +394,9 @@ export interface ThreadPage {
   readonly nextCursor?: PageCursor;
 }
 
-export const listProjects = async (
-  cursor?: PageCursor,
-  signal?: AbortSignal,
-): Promise<ProjectPage> => {
-  const query = new URLSearchParams({ limit: "100" });
-  if (cursor !== undefined) query.set("cursor", cursor);
-  return (
-    await request(`/v1/projects?${query}`, ListProjectsResponseSchema, {
-      signal,
-    })
-  ).data;
-};
-
-export type EnvironmentVariablesTarget =
-  | { readonly scope: "personal" }
-  | { readonly scope: "project"; readonly projectId: ProjectId }
-  | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
-
-const environmentVariablesBase = (target: EnvironmentVariablesTarget) =>
-  target.scope === "workspace"
-    ? `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/environment-variables`
-    : "/v1/settings/personal/environment-variables";
-
-const environmentVariablesQuery = (target: EnvironmentVariablesTarget) => {
-  if (target.scope === "workspace") return "";
-  const query = new URLSearchParams({ scope: target.scope });
-  if (target.scope === "project") query.set("projectId", target.projectId);
-  return `?${query}`;
-};
-
-const environmentVariablesScope = (target: EnvironmentVariablesTarget) =>
-  target.scope === "project"
-    ? { scope: target.scope, projectId: target.projectId }
-    : { scope: target.scope };
-
-export const listEnvironmentVariables = async (
-  target: EnvironmentVariablesTarget,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(
-      `${environmentVariablesBase(target)}${environmentVariablesQuery(target)}`,
-      ListEnvironmentVariablesResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const createEnvironmentVariable = async (
-  target: EnvironmentVariablesTarget,
-  input: {
-    readonly name: string;
-    readonly kind: "secret" | "variable";
-    readonly value: string;
-  },
-): Promise<EnvironmentVariableData> =>
-  (
-    await request(
-      environmentVariablesBase(target),
-      CreateEnvironmentVariableResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          ...environmentVariablesScope(target),
-          ...input,
-        }),
-      },
-    )
-  ).data;
-
-export const updateEnvironmentVariable = async (
-  target: EnvironmentVariablesTarget,
-  item: EnvironmentVariableData,
-  input: { readonly enabled?: boolean },
-): Promise<EnvironmentVariableData> =>
-  (
-    await request(
-      `${environmentVariablesBase(target)}/${encodeURIComponent(item.reference.id)}${environmentVariablesQuery(target)}`,
-      UpdateEnvironmentVariableResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const rotateEnvironmentVariable = async (
-  target: EnvironmentVariablesTarget,
-  item: EnvironmentVariableData,
-  value: string,
-): Promise<EnvironmentVariableData> =>
-  (
-    await request(
-      `${environmentVariablesBase(target)}/${encodeURIComponent(item.reference.id)}/rotate${environmentVariablesQuery(target)}`,
-      RotateEnvironmentVariableResponseSchema,
-      { method: "POST", body: JSON.stringify({ value }) },
-    )
-  ).data;
-
-export const deleteEnvironmentVariable = async (
-  target: EnvironmentVariablesTarget,
-  item: EnvironmentVariableData,
-) =>
-  (
-    await request(
-      `${environmentVariablesBase(target)}/${encodeURIComponent(item.reference.id)}${environmentVariablesQuery(target)}`,
-      DeleteEnvironmentVariableResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data.deletedEnvironmentVariableId;
-
-export const listEnvironmentVariableHistory = async (
-  target: EnvironmentVariablesTarget,
-  cursor?: PageCursor,
-  signal?: AbortSignal,
-): Promise<{
-  readonly items: ReadonlyArray<EnvironmentVariableAuditEventData>;
-  readonly nextCursor?: PageCursor;
-}> => {
-  const query = new URLSearchParams({ scope: target.scope, limit: "20" });
-  if (target.scope === "project") query.set("projectId", target.projectId);
-  if (cursor !== undefined) query.set("cursor", cursor);
-  return (
-    await request(
-      `${environmentVariablesBase(target)}/history?${query}`,
-      ListEnvironmentVariableHistoryResponseSchema,
-      { signal },
-    )
-  ).data;
-};
-
 export type McpServersTarget =
   | { readonly scope: "personal" }
   | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
-
-const mcpServersBase = (target: McpServersTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/mcp-servers"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/mcp-servers`;
-
-export const listMcpServers = async (
-  target: McpServersTarget,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(mcpServersBase(target), ListMcpServersResponseSchema, {
-      signal,
-    })
-  ).data;
 
 export type SkillsTarget =
   | { readonly scope: "personal" }
@@ -716,188 +405,6 @@ export type SkillsTarget =
 export type PluginsTarget =
   | { readonly scope: "personal" }
   | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
-
-/** First-party plugins (Search, …): enablement, provider, and credential per scope. */
-const firstPartyPluginsBase = (target: PluginsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/first-party-plugins"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/first-party-plugins`;
-
-export const listFirstPartyPlugins = async (
-  target: PluginsTarget,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(
-      firstPartyPluginsBase(target),
-      FirstPartyPluginListResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const setFirstPartyPluginEnablement = async (
-  target: PluginsTarget,
-  pluginId: string,
-  enablement: "enabled" | "disabled" | null,
-) =>
-  (
-    await request(
-      `${firstPartyPluginsBase(target)}/${encodeURIComponent(pluginId)}/enablement`,
-      FirstPartyPluginListResponseSchema,
-      { method: "PUT", body: JSON.stringify({ enablement }) },
-    )
-  ).data;
-
-export const setFirstPartyPluginConfiguration = async (
-  target: PluginsTarget,
-  pluginId: string,
-  input: SetFirstPartyPluginConfigurationRequest,
-) =>
-  (
-    await request(
-      `${firstPartyPluginsBase(target)}/${encodeURIComponent(pluginId)}/configuration`,
-      FirstPartyPluginListResponseSchema,
-      { method: "PUT", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const deleteFirstPartyPluginConfiguration = async (
-  target: PluginsTarget,
-  pluginId: string,
-) =>
-  (
-    await request(
-      `${firstPartyPluginsBase(target)}/${encodeURIComponent(pluginId)}/configuration`,
-      FirstPartyPluginListResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
-
-export const setFirstPartyPluginWorkspacePolicy = async (
-  workspaceSlug: WorkspaceSlug,
-  allowPersonalOverrides: boolean,
-) =>
-  (
-    await request(
-      `${firstPartyPluginsBase({ scope: "workspace", workspaceSlug })}/policy`,
-      FirstPartyPluginListResponseSchema,
-      { method: "PUT", body: JSON.stringify({ allowPersonalOverrides }) },
-    )
-  ).data;
-
-/** Dictation vocabulary per scope; dictation merges personal, then workspace. */
-const dictationVocabularyPath = (target: PluginsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/dictation-vocabulary"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/dictation-vocabulary`;
-
-export const getDictationVocabulary = async (
-  target: PluginsTarget,
-  signal?: AbortSignal,
-): Promise<DictationVocabularyData> =>
-  (
-    await request(
-      dictationVocabularyPath(target),
-      DictationVocabularyResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const updateDictationVocabulary = async (
-  target: PluginsTarget,
-  terms: ReadonlyArray<string>,
-): Promise<DictationVocabularyData> =>
-  (
-    await request(
-      dictationVocabularyPath(target),
-      DictationVocabularyResponseSchema,
-      { method: "PUT", body: JSON.stringify({ terms }) },
-    )
-  ).data;
-
-/** Orb providers: each scope's own provider connections. */
-const orbProvidersBase = (target: PluginsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/orb-providers"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/orb-providers`;
-
-export const listOrbProviders = async (
-  target: PluginsTarget,
-  projectId?: ProjectId,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(
-      projectId === undefined
-        ? orbProvidersBase(target)
-        : `${orbProvidersBase(target)}?projectId=${encodeURIComponent(projectId)}`,
-      OrbProviderListResponseSchema,
-      { signal },
-    )
-  ).data;
-
-const orbConnectionPath = (target: PluginsTarget, providerId: OrbProviderId) =>
-  `${orbProvidersBase(target)}/${encodeURIComponent(providerId)}/connection`;
-
-export const setOrbProviderConnection = async (
-  target: PluginsTarget,
-  providerId: OrbProviderId,
-  credentials: OrbProviderCredentials,
-) =>
-  (
-    await request(
-      orbConnectionPath(target, providerId),
-      OrbProviderListResponseSchema,
-      { method: "PUT", body: JSON.stringify({ credentials }) },
-    )
-  ).data;
-
-export const retryOrbProviderConnection = async (
-  target: PluginsTarget,
-  providerId: OrbProviderId,
-) =>
-  (
-    await request(
-      `${orbConnectionPath(target, providerId)}/retry`,
-      OrbProviderListResponseSchema,
-      { method: "POST" },
-    )
-  ).data;
-
-export const deleteOrbProviderConnection = async (
-  target: PluginsTarget,
-  providerId: OrbProviderId,
-) =>
-  (
-    await request(
-      orbConnectionPath(target, providerId),
-      OrbProviderListResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
-
-export const setOrbProviderWorkspacePolicy = async (
-  workspaceSlug: WorkspaceSlug,
-  allowPersonalKeysOnWorkspaceProjects: boolean,
-) =>
-  (
-    await request(
-      `${orbProvidersBase({ scope: "workspace", workspaceSlug })}/policy`,
-      OrbProviderListResponseSchema,
-      {
-        method: "PUT",
-        body: JSON.stringify({ allowPersonalKeysOnWorkspaceProjects }),
-      },
-    )
-  ).data;
-
-export const updateTimeZone = async (timeZone: string) =>
-  (
-    await request("/v1/settings/personal/time-zone", TimeZoneResponseSchema, {
-      method: "PUT",
-      body: JSON.stringify({ timeZone }),
-    })
-  ).data;
 
 const pluginTriggersBase = "/v1/settings/personal/triggers";
 
@@ -992,333 +499,7 @@ export interface McpServerInput {
   readonly roles?: ReadonlyArray<string>;
 }
 
-export const createMcpServer = async (
-  target: McpServersTarget,
-  input: McpServerInput,
-): Promise<McpServerData> =>
-  (
-    await request(mcpServersBase(target), CreateMcpServerResponseSchema, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
-  ).data;
-
-export const updateMcpServer = async (
-  target: McpServersTarget,
-  serverId: McpServerId,
-  input: Omit<Partial<McpServerInput>, "authReference" | "authType"> & {
-    readonly authType?: "none" | "bearer" | "oauth";
-    readonly authReference?: EnvironmentVariableConfigReference | null;
-    readonly enabled?: boolean;
-  },
-): Promise<McpServerData> =>
-  (
-    await request(
-      `${mcpServersBase(target)}/${encodeURIComponent(serverId)}`,
-      UpdateMcpServerResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const discoverMcpServer = async (
-  target: McpServersTarget,
-  serverId: McpServerId,
-): Promise<McpServerData> =>
-  (
-    await request(
-      `${mcpServersBase(target)}/${encodeURIComponent(serverId)}/discover`,
-      DiscoverMcpServerResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-  ).data;
-
-export const reviewMcpTool = async (
-  target: McpServersTarget,
-  serverId: McpServerId,
-  toolName: McpToolName,
-  schemaHash: McpToolSchemaHash,
-  approved: boolean,
-): Promise<McpServerData> =>
-  (
-    await request(
-      `${mcpServersBase(target)}/${encodeURIComponent(serverId)}/tools/${encodeURIComponent(toolName)}/review`,
-      ReviewMcpToolResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({ schemaHash, approved }),
-      },
-    )
-  ).data;
-
-/** Starts an OAuth sign-in; the caller sends the browser to the returned URL. */
-export const beginMcpOAuth = async (
-  target: McpServersTarget,
-  serverId: McpServerId,
-): Promise<string> =>
-  (
-    await request(
-      `${mcpServersBase(target)}/${encodeURIComponent(serverId)}/oauth/authorize`,
-      BeginMcpOAuthResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-  ).data.authorizationUrl;
-
-/** Removes the person's own sign-in to the server. */
-export const signOutMcpOAuth = async (
-  target: McpServersTarget,
-  serverId: McpServerId,
-): Promise<McpServerData> =>
-  (
-    await request(
-      `${mcpServersBase(target)}/${encodeURIComponent(serverId)}/oauth`,
-      SignOutMcpOAuthResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
-
-export const deleteMcpServer = async (
-  target: McpServersTarget,
-  serverId: McpServerId,
-): Promise<McpServerId> =>
-  (
-    await request(
-      `${mcpServersBase(target)}/${encodeURIComponent(serverId)}`,
-      DeleteMcpServerResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data.deletedMcpServerId;
-
-export const updateMcpWorkspacePolicy = async (
-  target: Extract<McpServersTarget, { readonly scope: "workspace" }>,
-  allowPersonalServers: boolean,
-): Promise<boolean> =>
-  (
-    await request(
-      `${mcpServersBase(target)}/policy`,
-      UpdateMcpWorkspacePolicyResponseSchema,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ allowPersonalServers }),
-      },
-    )
-  ).data.allowPersonalServers;
-
-export const previewBulkEnvironmentVariables = async (
-  target: EnvironmentVariablesTarget,
-  input: {
-    readonly kind: "secret" | "variable" | "auto";
-    readonly contents: string;
-  },
-): Promise<{
-  readonly items: ReadonlyArray<BulkEnvironmentVariablePreviewItem>;
-  readonly canApply: boolean;
-}> =>
-  (
-    await request(
-      `${environmentVariablesBase(target)}/bulk/preview`,
-      PreviewBulkEnvironmentVariablesResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          ...environmentVariablesScope(target),
-          ...input,
-        }),
-      },
-    )
-  ).data;
-
-export const applyBulkEnvironmentVariables = async (
-  target: EnvironmentVariablesTarget,
-  input: {
-    readonly kind: "secret" | "variable" | "auto";
-    readonly contents: string;
-    readonly conflictBehavior: "reject" | "replace";
-  },
-) =>
-  (
-    await request(
-      `${environmentVariablesBase(target)}/bulk`,
-      ApplyBulkEnvironmentVariablesResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          ...environmentVariablesScope(target),
-          ...input,
-        }),
-      },
-    )
-  ).data;
-
-export const listPersonalIntegrations = async (signal?: AbortSignal) =>
-  (
-    await request(
-      "/v1/settings/personal/integrations",
-      ListPersonalIntegrationsResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const getIntegrationDisconnectImpact = async (
-  connectionId: IntegrationConnectionId,
-  signal?: AbortSignal,
-): Promise<IntegrationDisconnectImpact> =>
-  (
-    await request(
-      `/v1/settings/personal/integrations/connections/${encodeURIComponent(connectionId)}/disconnect-impact`,
-      GetIntegrationDisconnectImpactResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const getProject = async (
-  projectId: ProjectId,
-  signal?: AbortSignal,
-): Promise<ProjectData> =>
-  (
-    await request(
-      `/v1/projects/${encodeURIComponent(projectId)}`,
-      GetProjectResponseSchema,
-      { signal },
-    )
-  ).data;
-
 export type CreateProjectInput = typeof CreateProjectRequestSchema.Encoded;
-
-export const listGitHubSourceGrants = async (
-  signal?: AbortSignal,
-): Promise<ReadonlyArray<GitHubGrantData>> => {
-  const base = "/v1/integrations/github/personal";
-  return (
-    await request(`${base}/grants`, ListGitHubGrantsResponseSchema, { signal })
-  ).data.grants;
-};
-
-export const getGitHubIntegrationStatus = async (signal?: AbortSignal) =>
-  (
-    await request(
-      "/v1/integrations/github/personal/grants",
-      ListGitHubGrantsResponseSchema,
-      { signal },
-    )
-  ).data;
-
-const githubReturnToQuery = (returnTo?: string) => {
-  if (returnTo === undefined) return "";
-  return `?${new URLSearchParams({ return_to: returnTo })}`;
-};
-
-export const beginGitHubAuthorization = async (
-  returnTo?: string,
-): Promise<string> =>
-  (
-    await request(
-      `/v1/integrations/github/personal/authorize${githubReturnToQuery(returnTo)}`,
-      BeginGitHubCeremonyResponseSchema,
-      { method: "POST" },
-    )
-  ).data.authorizationUrl;
-
-export const beginGitHubInstallation = async (
-  returnTo?: string,
-): Promise<string> => {
-  const base = "/v1/integrations/github/personal";
-  return (
-    await request(
-      `${base}/install${githubReturnToQuery(returnTo)}`,
-      BeginGitHubInstallationResponseSchema,
-      { method: "POST" },
-    )
-  ).data.installationUrl;
-};
-
-export const disconnectGitHub = async (grantId: string): Promise<void> => {
-  await request(
-    `/v1/integrations/github/personal/grants/${encodeURIComponent(grantId)}`,
-    GitHubDisconnectResponseSchema,
-    { method: "DELETE" },
-  );
-};
-
-export const createProject = async (
-  input: CreateProjectInput,
-): Promise<ProjectData> =>
-  (
-    await request("/v1/projects", CreateProjectResponseSchema, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
-  ).data;
-
-export const updateProject = async (
-  projectId: ProjectId,
-  input: {
-    readonly revision: number;
-    readonly name?: string;
-    readonly description?: string;
-    readonly runnerProfileId?: RunnerProfileId;
-    readonly additionalRepositories?: ReadonlyArray<string>;
-    readonly remoteAliases?: ReadonlyArray<string>;
-  },
-): Promise<ProjectData> =>
-  (
-    await request(
-      `/v1/projects/${encodeURIComponent(projectId)}`,
-      UpdateProjectResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const deleteProject = async (
-  projectId: ProjectId,
-  input: DeleteProjectRequest,
-) =>
-  (
-    await request(
-      `/v1/projects/${encodeURIComponent(projectId)}/delete`,
-      DeleteProjectResponseSchema,
-      { method: "POST", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const rebindProjectSource = async (
-  projectId: ProjectId,
-  input:
-    | {
-        readonly revision: number;
-        readonly grantId: string;
-        readonly providerRepositoryId: ProviderRepositoryId;
-        readonly provider?: "github" | "bitbucket";
-        readonly workspaceId?: string;
-      }
-    | { readonly revision: number; readonly url: string },
-): Promise<ProjectData> =>
-  (
-    await request(
-      `/v1/projects/${encodeURIComponent(projectId)}/source`,
-      RebindProjectSourceResponseSchema,
-      { method: "PUT", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const uploadProjectIcon = async (
-  projectId: ProjectId,
-  revision: number,
-  file: File,
-): Promise<ProjectData> =>
-  (
-    await request(
-      `/v1/projects/${encodeURIComponent(projectId)}/icon`,
-      UpdateProjectResponseSchema,
-      {
-        method: "PUT",
-        body: file,
-        headers: {
-          "content-type": file.type,
-          "x-project-revision": String(revision),
-        },
-      },
-    )
-  ).data;
 
 export const listThreads = async (
   projectId?: ProjectId,
@@ -1348,37 +529,35 @@ export const searchThreads = async (
   query: string,
   cursor?: string,
   signal?: AbortSignal,
-): Promise<ThreadSearchPage> => {
-  const parameters = new URLSearchParams({ q: query, limit: "30" });
-  if (cursor !== undefined) parameters.set("cursor", cursor);
-  return (
-    await request(
-      `/v1/thread-search?${parameters}`,
-      SearchThreadsResponseSchema,
+): Promise<ThreadSearchPage> =>
+  (
+    await dxClient.call(
+      SearchThreadsEndpoint,
+      {
+        query: {
+          q: query,
+          limit: 30,
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+      },
       { signal },
     )
   ).data;
-};
 
 export const setThreadPinned = async (
   threadId: ThreadId,
   pinned: boolean,
 ): Promise<ThreadData> =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/pin`,
-      PinThreadResponseSchema,
-      { method: "PATCH", body: JSON.stringify({ pinned }) },
-    )
+    await dxClient.call(PinThreadEndpoint, {
+      params: { threadId },
+      body: { pinned },
+    })
   ).data;
 
 /** The requester opened the Thread: what it finished is seen. */
 export const markThreadSeen = async (threadId: ThreadId): Promise<void> => {
-  await request(
-    `/v1/threads/${encodeURIComponent(threadId)}/seen`,
-    MarkThreadSeenResponseSchema,
-    { method: "POST" },
-  );
+  await dxClient.call(MarkThreadSeenEndpoint, { params: { threadId } });
 };
 
 /** Hands a new Thread's first message that failed to start to its agent again. */
@@ -1397,16 +576,13 @@ export const setThreadSnoozed = async (
   snoozedUntil: Date | null,
 ): Promise<ThreadData> =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/snooze`,
-      SnoozeThreadResponseSchema,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          snoozedUntil: snoozedUntil?.toISOString() ?? null,
-        }),
+    await dxClient.call(SnoozeThreadEndpoint, {
+      params: { threadId },
+      body: {
+        snoozedUntil:
+          snoozedUntil === null ? null : DateTime.fromDateUnsafe(snoozedUntil),
       },
-    )
+    })
   ).data;
 
 export const updateThread = async (
@@ -2003,180 +1179,9 @@ export const getThread = async (
     )
   ).data;
 
-type SettingsContextRequest =
-  | { readonly scope: "personal" }
-  | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
-
-export const getSettingsContext = async (
-  input: SettingsContextRequest,
-  signal?: AbortSignal,
-): Promise<SettingsContextData> => {
-  if (input.scope === "personal") {
-    return (
-      await request("/v1/settings/personal", GetSettingsContextResponseSchema, {
-        signal,
-      })
-    ).data;
-  }
-  return {
-    activeScope: "workspace",
-    workspace: await getWorkspaceProfile(input.workspaceSlug, signal),
-  };
-};
-
-export const getPersonalExperimentalFeatures = async (
-  signal?: AbortSignal,
-): Promise<PersonalExperimentalFeaturesData> =>
-  (
-    await request(
-      "/v1/settings/personal/experimental-features",
-      GetPersonalExperimentalFeaturesResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const updatePersonalExperimentalFeature = async (
-  featureId: ExperimentalFeatureId,
-  enabled: boolean,
-  expectedRevision: ExperimentalFeaturePreferencesRevision,
-): Promise<PersonalExperimentalFeaturesData> =>
-  (
-    await request(
-      "/v1/settings/personal/experimental-features",
-      UpdatePersonalExperimentalFeatureResponseSchema,
-      {
-        method: "PUT",
-        body: JSON.stringify({ featureId, enabled, expectedRevision }),
-      },
-    )
-  ).data;
-
 export type ProjectDefaultsTarget =
   | { readonly scope: "personal" }
   | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
-
-const projectDefaultsPath = (target: ProjectDefaultsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/projects"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/projects`;
-
-export const getProjectDefaults = async (
-  target: ProjectDefaultsTarget,
-  signal?: AbortSignal,
-): Promise<ProjectDefaultsData> =>
-  (
-    await request(
-      projectDefaultsPath(target),
-      GetProjectDefaultsResponseSchema,
-      {
-        signal,
-      },
-    )
-  ).data;
-
-export const updatePersonalProjectDefaults = async (
-  expectedRevision: number,
-  overrides: ProjectDefaultOverrides,
-): Promise<ProjectDefaultsData> =>
-  (
-    await request(
-      "/v1/settings/personal/projects",
-      UpdateProjectDefaultsResponseSchema,
-      {
-        method: "PUT",
-        body: JSON.stringify({ expectedRevision, overrides }),
-      },
-    )
-  ).data;
-
-export const updateWorkspaceProjectDefaults = async (
-  workspaceSlug: WorkspaceSlug,
-  expectedRevision: number,
-  overrides: ProjectDefaultOverrides,
-  policy: WorkspaceProjectPolicy,
-): Promise<ProjectDefaultsData> =>
-  (
-    await request(
-      `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}/projects`,
-      UpdateProjectDefaultsResponseSchema,
-      {
-        method: "PUT",
-        body: JSON.stringify({ expectedRevision, overrides, policy }),
-      },
-    )
-  ).data;
-
-export const getSigningKeys = async (
-  signal?: AbortSignal,
-): Promise<SigningKeysData> =>
-  (
-    await request("/v1/settings/personal/keys", GetSigningKeysResponseSchema, {
-      signal,
-    })
-  ).data;
-
-export const createManagedSigningKey = async (): Promise<{
-  readonly key: NonNullable<SigningKeysData["managedKey"]>;
-  readonly setup: SigningKeySetupGuidance;
-}> =>
-  (
-    await request(
-      "/v1/settings/personal/keys/managed",
-      CreateManagedSigningKeyResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-  ).data;
-
-export const rotateManagedSigningKey = async (signingKeyId: string) =>
-  (
-    await request(
-      `/v1/settings/personal/keys/managed/${encodeURIComponent(signingKeyId)}/rotate`,
-      RotateManagedSigningKeyResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-  ).data;
-
-export const revokeManagedSigningKey = async (signingKeyId: string) =>
-  (
-    await request(
-      `/v1/settings/personal/keys/managed/${encodeURIComponent(signingKeyId)}`,
-      RevokeManagedSigningKeyResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data.revokedSigningKeyId;
-
-export const addVerificationKey = async (input: {
-  readonly name: string;
-  readonly publicKey: string;
-}) =>
-  (
-    await request(
-      "/v1/settings/personal/keys/verification",
-      AddVerificationKeyResponseSchema,
-      { method: "POST", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const revokeVerificationKey = async (verificationKeyId: string) =>
-  (
-    await request(
-      `/v1/settings/personal/keys/verification/${encodeURIComponent(verificationKeyId)}`,
-      RevokeVerificationKeyResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data.revokedVerificationKeyId;
-
-export const getWorkspaceProfile = async (
-  workspaceSlug: WorkspaceSlug,
-  signal?: AbortSignal,
-): Promise<WorkspaceProfileData> =>
-  (
-    await request(
-      `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}`,
-      GetWorkspaceProfileResponseSchema,
-      { signal },
-    )
-  ).data;
 
 export interface ExternalApiApplicationPage {
   readonly items: ReadonlyArray<ExternalApiApplicationData>;
@@ -2288,526 +1293,27 @@ export const listExternalApiApplicationAudit = async (
   ).data;
 };
 
-export const createWorkspace = async (input: {
-  readonly displayName: string;
-  readonly shortName: string;
-}): Promise<WorkspaceProfileData> =>
-  (
-    await request("/v1/settings/workspaces", CreateWorkspaceResponseSchema, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
-  ).data;
-
-export const updateWorkspaceProfile = async (
-  workspaceSlug: WorkspaceSlug,
-  input: {
-    readonly displayName: string;
-    readonly shortName: string;
-    readonly expectedRevision: number;
-  },
-): Promise<WorkspaceProfileData> =>
-  (
-    await request(
-      `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}`,
-      UpdateWorkspaceProfileResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-/** Replaces the workspace's picture with `file`, or removes it with `null`. */
-export const setWorkspaceAvatar = async (
-  workspaceSlug: WorkspaceSlug,
-  file: File | null,
-): Promise<WorkspaceProfileData> =>
-  (
-    await request(
-      `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}/avatar`,
-      UpdateWorkspaceProfileResponseSchema,
-      file === null
-        ? { method: "DELETE" }
-        : {
-            method: "PUT",
-            body: file,
-            headers: { "content-type": file.type },
-          },
-    )
-  ).data;
-
-export const getWorkspacePolicy = async (
-  workspaceSlug: WorkspaceSlug,
-  signal?: AbortSignal,
-): Promise<WorkspacePolicyData> =>
-  (
-    await request(
-      `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}/policy`,
-      GetWorkspacePolicyResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const updateWorkspacePolicy = async (
-  workspaceSlug: WorkspaceSlug,
-  expectedRevision: number,
-  input: {
-    readonly restrictions: WorkspacePolicyRestrictions;
-  },
-): Promise<WorkspacePolicyData> =>
-  (
-    await request(
-      `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}/policy`,
-      UpdateWorkspacePolicyResponseSchema,
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          expectedRevision,
-          restrictions: input.restrictions,
-        }),
-      },
-    )
-  ).data;
-
-export const getPersonalAccount = async (
-  signal?: AbortSignal,
-): Promise<PersonalAccountData> =>
-  (
-    await request(
-      "/v1/settings/personal/account",
-      GetPersonalAccountResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const updatePersonalAccount = async (input: {
-  readonly displayName: string;
-  readonly username: string;
-}): Promise<PersonalAccountData> =>
-  (
-    await request(
-      "/v1/settings/personal/account",
-      UpdatePersonalAccountResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-/** Replaces the caller's picture with `file`, or removes it with `null`. */
-export const setPersonalAvatar = async (
-  file: File | null,
-): Promise<PersonalAccountData> =>
-  (
-    await request(
-      "/v1/settings/personal/account/avatar",
-      UpdatePersonalAccountResponseSchema,
-      file === null
-        ? { method: "DELETE" }
-        : {
-            method: "PUT",
-            body: file,
-            headers: { "content-type": file.type },
-          },
-    )
-  ).data;
-
-export const updatePersonalAppearance = async (
-  input: UpdatePersonalAppearanceRequest,
-): Promise<PersonalAccountData> =>
-  (
-    await request(
-      "/v1/settings/personal/account/appearance",
-      UpdatePersonalAppearanceResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const getPersonalComposerDefaults = async (
-  signal?: AbortSignal,
-): Promise<PersonalComposerDefaultsData> =>
-  (
-    await request(
-      "/v1/settings/personal/account/composer",
-      GetPersonalComposerDefaultsResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const updatePersonalComposerDefaults = async (
-  input: UpdatePersonalComposerDefaultsRequest,
-): Promise<PersonalComposerDefaultsData> =>
-  (
-    await request(
-      "/v1/settings/personal/account/composer",
-      UpdatePersonalComposerDefaultsResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const getPersonalAgentInstructions = async (
-  signal?: AbortSignal,
-): Promise<PersonalAgentInstructionsData> =>
-  (
-    await request(
-      "/v1/settings/personal/agent-instructions",
-      GetPersonalAgentInstructionsResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const updatePersonalAgentInstructions = async (input: {
-  readonly instructions: string;
-  readonly expectedRevision: number;
-}): Promise<PersonalAgentInstructionsData> =>
-  (
-    await request(
-      "/v1/settings/personal/agent-instructions",
-      UpdatePersonalAgentInstructionsResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-/** A workspace's AGENTS.md: members read it, admins change it. */
-const workspaceAgentInstructionsPath = (workspaceSlug: string) =>
-  `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}/agent-instructions`;
-
-export const getWorkspaceAgentInstructions = async (
-  workspaceSlug: string,
-  signal?: AbortSignal,
-): Promise<WorkspaceAgentInstructionsData> =>
-  (
-    await request(
-      workspaceAgentInstructionsPath(workspaceSlug),
-      WorkspaceAgentInstructionsResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const updateWorkspaceAgentInstructions = async (
-  workspaceSlug: string,
-  input: {
-    readonly instructions: string;
-    readonly expectedRevision: number;
-  },
-): Promise<WorkspaceAgentInstructionsData> =>
-  (
-    await request(
-      workspaceAgentInstructionsPath(workspaceSlug),
-      WorkspaceAgentInstructionsResponseSchema,
-      { method: "PUT", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const listPersonalApiTokens = async (
-  signal?: AbortSignal,
-): Promise<ReadonlyArray<PersonalApiTokenData>> =>
-  (
-    await request(
-      "/v1/settings/personal/security/tokens",
-      ListPersonalApiTokensResponseSchema,
-      { signal },
-    )
-  ).data.items;
-
-export const createPersonalApiToken = async (
-  input: CreatePersonalApiTokenRequest,
-): Promise<PersonalApiTokenSecretData> =>
-  (
-    await request(
-      "/v1/settings/personal/security/tokens",
-      CreatePersonalApiTokenResponseSchema,
-      { method: "POST", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const rotatePersonalApiToken = async (
-  tokenId: PersonalApiTokenId,
-): Promise<PersonalApiTokenSecretData> =>
-  (
-    await request(
-      `/v1/settings/personal/security/tokens/${encodeURIComponent(tokenId)}/rotate`,
-      RotatePersonalApiTokenResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-  ).data;
-
-export const revokePersonalApiToken = async (
-  tokenId: PersonalApiTokenId,
-): Promise<PersonalApiTokenId> =>
-  (
-    await request(
-      `/v1/settings/personal/security/tokens/${encodeURIComponent(tokenId)}`,
-      RevokePersonalApiTokenResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data.revokedTokenId;
-
-export interface BrowserSessionPage {
-  readonly items: ReadonlyArray<BrowserSessionData>;
-  readonly nextOffset?: number;
-}
-
-export const listBrowserSessions = async (
-  offset?: number,
-  signal?: AbortSignal,
-): Promise<BrowserSessionPage> => {
-  const query = new URLSearchParams({ limit: "25" });
-  if (offset !== undefined) query.set("offset", String(offset));
-  return (
-    await request(
-      `/v1/settings/personal/security/sessions?${query}`,
-      ListBrowserSessionsResponseSchema,
-      { signal },
-    )
-  ).data;
-};
-
-export const revokeBrowserSession = async (
-  sessionId: BrowserSessionId,
-): Promise<BrowserSessionId> =>
-  (
-    await request(
-      `/v1/settings/personal/security/sessions/${encodeURIComponent(sessionId)}`,
-      RevokeBrowserSessionResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data.revokedSessionId;
-
-export const revokeOtherBrowserSessions = async (): Promise<void> => {
-  await request(
-    "/v1/settings/personal/security/sessions/revoke-others",
-    RevokeOtherBrowserSessionsResponseSchema,
-    { method: "POST", body: JSON.stringify({}) },
-  );
-};
-
-export interface PersonalUsageQuery {
-  readonly from: string;
-  readonly to: string;
-  readonly timezoneOffsetMinutes: number;
-  readonly projectId?: string;
-  readonly threadId?: string;
-  readonly providerId?: string;
-  readonly modelId?: string;
-  readonly cursor?: string;
-  readonly limit?: number;
-}
-
-const personalUsageSearch = (input: PersonalUsageQuery) => {
-  const query = new URLSearchParams({
-    from: input.from,
-    to: input.to,
-    timezoneOffsetMinutes: String(input.timezoneOffsetMinutes),
-  });
-  for (const [key, value] of [
-    ["projectId", input.projectId],
-    ["threadId", input.threadId],
-    ["providerId", input.providerId],
-    ["modelId", input.modelId],
-    ["cursor", input.cursor],
-  ] as const) {
-    if (value !== undefined && value !== "") query.set(key, value);
-  }
-  if (input.limit !== undefined) query.set("limit", String(input.limit));
-  return query.toString();
-};
-
-export const getPersonalUsage = async (
-  input: PersonalUsageQuery,
-  signal?: AbortSignal,
-): Promise<PersonalUsageData> =>
-  (
-    await request(
-      `/v1/settings/personal/usage?${personalUsageSearch(input)}`,
-      GetPersonalUsageResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const getOrbUsage = async (
-  signal?: AbortSignal,
-): Promise<OrbUsageData> =>
-  (
-    await request(
-      "/v1/settings/personal/orb-usage",
-      GetOrbUsageResponseSchema,
-      {
-        signal,
-      },
-    )
-  ).data;
-
-export interface WorkspaceUsageQuery {
-  readonly from: string;
-  readonly to: string;
-  readonly timezoneOffsetMinutes: number;
-  readonly userId?: string;
-  readonly projectId?: string;
-  readonly providerId?: string;
-  readonly modelId?: string;
-  readonly ranking: "users" | "projects";
-  readonly cursor?: string;
-  readonly limit?: number;
-}
-
-const workspaceUsageSearch = (input: WorkspaceUsageQuery) => {
-  const query = new URLSearchParams({
-    from: input.from,
-    to: input.to,
-    timezoneOffsetMinutes: String(input.timezoneOffsetMinutes),
-    ranking: input.ranking,
-  });
-  for (const [key, value] of [
-    ["userId", input.userId],
-    ["projectId", input.projectId],
-    ["providerId", input.providerId],
-    ["modelId", input.modelId],
-    ["cursor", input.cursor],
-  ] as const) {
-    if (value !== undefined && value !== "") query.set(key, value);
-  }
-  if (input.limit !== undefined) query.set("limit", String(input.limit));
-  return query.toString();
-};
-
-const workspaceUsagePath = (workspaceSlug: WorkspaceSlug) =>
-  `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}/usage`;
-
-export const getWorkspaceUsage = async (
-  workspaceSlug: WorkspaceSlug,
-  input: WorkspaceUsageQuery,
-  signal?: AbortSignal,
-): Promise<WorkspaceUsageData> =>
-  (
-    await request(
-      `${workspaceUsagePath(workspaceSlug)}?${workspaceUsageSearch(input)}`,
-      GetWorkspaceUsageResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const exportWorkspaceUsage = async (
-  workspaceSlug: WorkspaceSlug,
-  input: WorkspaceUsageQuery,
-): Promise<PersonalUsageExportData> =>
-  (
-    await request(
-      `${workspaceUsagePath(workspaceSlug)}/export?${workspaceUsageSearch(input)}`,
-      ExportWorkspaceUsageResponseSchema,
-    )
-  ).data;
-
-export const inspectWorkspacePrivateThread = async (
-  workspaceSlug: WorkspaceSlug,
-  input: { readonly threadId: string; readonly reason: string },
-): Promise<WorkspacePrivateThreadInspectionData> =>
-  (
-    await request(
-      `${workspaceUsagePath(workspaceSlug)}/private-inspections`,
-      InspectWorkspacePrivateThreadResponseSchema,
-      { method: "POST", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export interface WorkspaceUsageAuditQuery {
-  readonly from: string;
-  readonly to: string;
-  readonly actorUserId?: string;
-  readonly threadId?: string;
-  readonly result?:
-    | "success"
-    | "permission_denied"
-    | "browser_session_required"
-    | "recent_authentication_required"
-    | "thread_unavailable"
-    | "thread_not_private";
-  readonly cursor?: string;
-  readonly limit?: number;
-}
-
-const workspaceUsageAuditSearch = (input: WorkspaceUsageAuditQuery) => {
-  const query = new URLSearchParams({ from: input.from, to: input.to });
-  for (const [key, value] of [
-    ["actorUserId", input.actorUserId],
-    ["threadId", input.threadId],
-    ["result", input.result],
-    ["cursor", input.cursor],
-  ] as const) {
-    if (value !== undefined && value !== "") query.set(key, value);
-  }
-  if (input.limit !== undefined) query.set("limit", String(input.limit));
-  return query.toString();
-};
-
-export const listWorkspaceUsageAudit = async (
-  workspaceSlug: WorkspaceSlug,
-  input: WorkspaceUsageAuditQuery,
-  signal?: AbortSignal,
-): Promise<WorkspaceUsageAuditPageData> =>
-  (
-    await request(
-      `${workspaceUsagePath(workspaceSlug)}/audit?${workspaceUsageAuditSearch(input)}`,
-      ListWorkspaceUsageAuditResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const exportWorkspaceUsageAudit = async (
-  workspaceSlug: WorkspaceSlug,
-  input: WorkspaceUsageAuditQuery,
-): Promise<WorkspaceUsageAuditExportData> =>
-  (
-    await request(
-      `${workspaceUsagePath(workspaceSlug)}/audit/export?${workspaceUsageAuditSearch(input)}`,
-      ExportWorkspaceUsageAuditResponseSchema,
-    )
-  ).data;
-
-export const listNotifications = async (signal?: AbortSignal) =>
-  (
-    await request("/v1/notifications", ListNotificationsResponseSchema, {
-      signal,
-    })
-  ).data;
-
-export const markNotificationsRead = async (ids: ReadonlyArray<string>) =>
-  (
-    await request(
-      "/v1/notifications/read",
-      MarkNotificationsReadResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({ ids }),
-      },
-    )
-  ).data;
-
 /** The signed-in person's sidebar layout, shared by their devices. */
 export const getSidebarLayout = async (signal?: AbortSignal) =>
-  (await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, { signal }))
-    .data;
+  (await dxClient.call(GetSidebarLayoutEndpoint, {}, { signal })).data;
 
 /** Records one sidebar choice and returns the whole layout. */
 export const putSidebarLayoutEntry = async (entry: SidebarLayoutChoice) =>
-  (
-    await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, {
-      method: "PUT",
-      body: JSON.stringify(entry),
-    })
-  ).data;
+  (await dxClient.call(UpdateSidebarLayoutEndpoint, { body: entry })).data;
 
 /** Records the desktop sidebar's width and returns the whole layout. */
 export const putSidebarWidth = async (width: number) =>
   (
-    await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, {
-      method: "PUT",
-      body: JSON.stringify({ kind: "width", width }),
+    await dxClient.call(UpdateSidebarLayoutEndpoint, {
+      body: { kind: "width", width },
     })
   ).data;
 
 /** Records whether the desktop sidebar is collapsed; returns the layout. */
 export const putSidebarCollapsed = async (collapsed: boolean) =>
   (
-    await request("/v1/sidebar-layout", SidebarLayoutResponseSchema, {
-      method: "PUT",
-      body: JSON.stringify({ kind: "collapsed", collapsed }),
+    await dxClient.call(UpdateSidebarLayoutEndpoint, {
+      body: { kind: "collapsed", collapsed },
     })
   ).data;
 
@@ -2817,9 +1323,9 @@ export const getThreadPaneLayout = async (
   signal?: AbortSignal,
 ) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/layout`,
-      ThreadPaneLayoutResponseSchema,
+    await dxClient.call(
+      GetThreadPaneLayoutEndpoint,
+      { params: { threadId } },
       { signal },
     )
   ).data.layout;
@@ -2830,108 +1336,66 @@ export const putThreadPaneLayout = async (
   layout: ThreadPaneLayout,
 ) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/layout`,
-      ThreadPaneLayoutResponseSchema,
-      { method: "PUT", body: JSON.stringify(layout) },
-    )
+    await dxClient.call(UpdateThreadPaneLayoutEndpoint, {
+      params: { threadId },
+      body: layout,
+    })
   ).data.layout;
 
 /**
- * Where a composer's draft lives: `/v1/threads/:threadId/draft` with an
- * optional `?slot=`, or `/v1/drafts/workspaces/:workspace/:slot`.
+ * A composer's draft: a Thread's, `/v1/threads/:threadId/draft` with an
+ * optional `?slot=`, or a workspace's, `/v1/drafts/workspaces/:workspace/:slot`.
  */
-const draftPath = (
-  draft:
-    | { readonly threadId: ThreadId; readonly slot?: ThreadDraftSlot }
-    | { readonly workspace: string; readonly slot: WorkspaceDraftSlot },
-) =>
-  "threadId" in draft
-    ? `/v1/threads/${encodeURIComponent(draft.threadId)}/draft${
-        draft.slot === undefined
-          ? ""
-          : `?slot=${encodeURIComponent(draft.slot)}`
-      }`
-    : `/v1/drafts/workspaces/${encodeURIComponent(draft.workspace)}/${draft.slot}`;
+export type ComposerDraftLocation =
+  | { readonly threadId: ThreadId; readonly slot?: ThreadDraftSlot }
+  | { readonly workspace: string; readonly slot: WorkspaceDraftSlot };
 
 /** The signed-in person's unsent text in one composer; "" if none. */
 export const getComposerDraft = async (
-  draft: Parameters<typeof draftPath>[0],
+  draft: ComposerDraftLocation,
   signal?: AbortSignal,
 ) =>
-  (await request(draftPath(draft), ThreadDraftResponseSchema, { signal })).data
-    .text;
+  ("threadId" in draft
+    ? await dxClient.call(
+        GetThreadDraftEndpoint,
+        {
+          params: { threadId: draft.threadId },
+          query: draft.slot === undefined ? {} : { slot: draft.slot },
+        },
+        { signal },
+      )
+    : await dxClient.call(
+        GetWorkspaceDraftEndpoint,
+        { params: { workspace: draft.workspace, slot: draft.slot } },
+        { signal },
+      )
+  ).data.text;
 
 /**
  * Saves the person's draft in one composer; `""` removes it. `keepalive`
  * lets a save started as the page unloads finish.
  */
 export const putComposerDraft = async (
-  draft: Parameters<typeof draftPath>[0],
+  draft: ComposerDraftLocation,
   text: string,
   keepalive: boolean,
 ) =>
-  (
-    await request(draftPath(draft), ThreadDraftResponseSchema, {
-      method: "PUT",
-      body: JSON.stringify({ text }),
-      ...(keepalive ? { keepalive: true } : {}),
-    })
+  ("threadId" in draft
+    ? await dxClient.call(
+        UpdateThreadDraftEndpoint,
+        {
+          params: { threadId: draft.threadId },
+          query: draft.slot === undefined ? {} : { slot: draft.slot },
+          body: { text },
+        },
+        { keepalive },
+      )
+    : await dxClient.call(
+        UpdateWorkspaceDraftEndpoint,
+        {
+          params: { workspace: draft.workspace, slot: draft.slot },
+          body: { text },
+        },
+        { keepalive },
+      )
   ).data.text;
-
-export const markAllNotificationsRead = async () =>
-  (
-    await request(
-      "/v1/notifications/read-all",
-      MarkNotificationsReadResponseSchema,
-      { method: "POST" },
-    )
-  ).data;
-
-export const getNotificationPreferences = async (signal?: AbortSignal) =>
-  (
-    await request(
-      "/v1/settings/personal/notifications",
-      NotificationPreferencesResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const updateNotificationPreference = async (
-  input: UpdateNotificationPreferenceRequest,
-) =>
-  (
-    await request(
-      "/v1/settings/personal/notifications",
-      NotificationPreferencesResponseSchema,
-      { method: "PUT", body: JSON.stringify(input) },
-    )
-  ).data;
-
-/** Whether this deployment can push, and which browsers are registered. */
-export const getPushState = async (signal?: AbortSignal) =>
-  (await request("/v1/notifications/push", PushStateResponseSchema, { signal }))
-    .data;
-
-export const registerPushDevice = async (input: RegisterPushDeviceRequest) =>
-  (
-    await request("/v1/notifications/push/devices", PushStateResponseSchema, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
-  ).data;
-
-export const removePushDevice = async (input: RemovePushDeviceRequest) =>
-  (
-    await request("/v1/notifications/push/devices", PushStateResponseSchema, {
-      method: "DELETE",
-      body: JSON.stringify(input),
-    })
-  ).data;
-
-export const sendTestPush = async () =>
-  (
-    await request("/v1/notifications/push/test", SendTestPushResponseSchema, {
-      method: "POST",
-    })
-  ).data;

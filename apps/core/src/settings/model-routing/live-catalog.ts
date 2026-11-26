@@ -68,7 +68,15 @@ const DISCOVERED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 
 let current: LiveCatalog = EMPTY;
 let loadedAt = Number.NEGATIVE_INFINITY;
-let loading: Promise<void> | undefined;
+/**
+ * When a read of this isolate started, so a loaded isolate starts one read a
+ * minute. A timestamp, never a shared promise: in a Worker a promise belongs
+ * to the request that created it, and once that request ends the promise can
+ * never settle, so another request awaiting it would throw forever (#2486).
+ */
+let readingSince = Number.NEGATIVE_INFINITY;
+/** A read this old is taken as lost (its request ended before it settled). */
+const READ_TIMEOUT_MS = 30 * 1_000;
 
 /**
  * Whether this isolate has read D1 since it started or was told to read it
@@ -163,26 +171,29 @@ export const loadLiveCatalog = async (
   now = Date.now(),
 ): Promise<LiveCatalog> => {
   if (db === undefined || now - loadedAt < RELOAD_MS) return current;
-  loading ??= (async () => {
-    try {
-      const { results } = await db
-        .prepare(
-          "SELECT source, models_json, fetched_at FROM model_catalog_source",
-        )
-        .all<SourceRow>();
-      setCatalog(parseRows(results), now);
-    } catch (cause) {
-      // The table is missing until the migration runs; keep the pinned catalog.
-      loadedAt = now;
-      settingsPersistenceLogger.warn("Live model catalog read failed.", {
-        event: "live_model_catalog_read_failed",
-        cause,
-      });
-    }
-  })().finally(() => {
-    loading = undefined;
-  });
-  await loading;
+  // A loaded isolate keeps what it holds while another request reads. An
+  // isolate with nothing loaded reads for each request instead of waiting on
+  // another request's read.
+  if (liveCatalogLoaded() && now - readingSince < READ_TIMEOUT_MS)
+    return current;
+  readingSince = now;
+  try {
+    const { results } = await db
+      .prepare(
+        "SELECT source, models_json, fetched_at FROM model_catalog_source",
+      )
+      .all<SourceRow>();
+    setCatalog(parseRows(results), now);
+  } catch (cause) {
+    // The table is missing until the migration runs; keep the pinned catalog.
+    loadedAt = now;
+    settingsPersistenceLogger.warn("Live model catalog read failed.", {
+      event: "live_model_catalog_read_failed",
+      cause,
+    });
+  } finally {
+    readingSince = Number.NEGATIVE_INFINITY;
+  }
   return current;
 };
 
@@ -329,7 +340,10 @@ export const refreshModelsDev = async (
   }
 };
 
-let seeding: Promise<unknown> | undefined;
+/** When this isolate started reading models.dev; a timestamp, as above. */
+let seedingSince = Number.NEGATIVE_INFINITY;
+/** refreshModelsDev's fetch gives up after 30 s; allow the D1 writes too. */
+const SEED_TIMEOUT_MS = 2 * 60 * 1_000;
 
 /**
  * A deployment whose D1 holds no models.dev copy yet (a new install, a
@@ -340,9 +354,15 @@ export const seedModelsDev = (
   db: D1Database | undefined,
   waitUntil: (promise: Promise<unknown>) => void,
 ) => {
-  if (db === undefined || current.modelsDevFetchedAt !== undefined || seeding)
+  const now = Date.now();
+  if (
+    db === undefined ||
+    current.modelsDevFetchedAt !== undefined ||
+    now - seedingSince < SEED_TIMEOUT_MS
+  )
     return;
-  seeding = refreshModelsDev(db)
+  seedingSince = now;
+  const seeding = refreshModelsDev(db)
     .then(() => loadLiveCatalog(db))
     .catch((cause) =>
       settingsPersistenceLogger.warn("models.dev catalog seed failed.", {
@@ -351,7 +371,7 @@ export const seedModelsDev = (
       }),
     )
     .finally(() => {
-      seeding = undefined;
+      seedingSince = Number.NEGATIVE_INFINITY;
     });
   waitUntil(seeding);
 };

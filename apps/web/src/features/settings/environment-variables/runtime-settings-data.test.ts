@@ -3,24 +3,15 @@ import {
   MutationObserver,
   QueryClient,
 } from "@tanstack/react-query";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
-  applyBulkEnvironmentVariables: vi.fn(),
-  createEnvironmentVariable: vi.fn(),
   createPluginTrigger: vi.fn(),
-  deleteMcpServer: vi.fn(),
-  getProjectDefaults: vi.fn(),
-  listEnvironmentVariableHistory: vi.fn(),
-  listEnvironmentVariables: vi.fn(),
-  listMcpServers: vi.fn(),
   listPluginTriggers: vi.fn(),
   listSkills: vi.fn(),
-  previewBulkEnvironmentVariables: vi.fn(),
   previewSkill: vi.fn(),
   removeSkill: vi.fn(),
   revokePluginTrigger: vi.fn(),
-  updatePersonalProjectDefaults: vi.fn(),
 }));
 
 vi.mock("../../../shared/api/client.js", async (importOriginal) => ({
@@ -60,6 +51,65 @@ import {
   environmentVariableKeys,
 } from "./environment-variables-queries.js";
 
+/**
+ * dx's answers by method and path, in order; environment variables call
+ * dx through `dxClient`, so the test answers its requests, not its functions.
+ */
+const answers: Array<{
+  readonly method: string;
+  readonly path: string;
+  readonly answer: () => Response;
+}> = [];
+const requests: Array<{ readonly method: string; readonly url: string }> = [];
+
+const answer = (method: string, path: string, data: unknown) =>
+  answers.push({
+    method,
+    path,
+    answer: () =>
+      new Response(JSON.stringify({ status: "success", data }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+const fail = (method: string, path: string, error: Error) =>
+  answers.push({
+    method,
+    path,
+    answer: () => {
+      throw error;
+    },
+  });
+
+const environmentPath = "/v1/settings/personal/environment-variables";
+
+const environmentVariable = (name: string) => ({
+  reference: { version: 1, kind: "environment-variable", id: "env_test" },
+  name,
+  kind: "secret",
+  enabled: true,
+  scope: "personal",
+  source: "personal",
+  value: "••••••••",
+  hidden: true,
+  createdAt: "2026-08-25T10:00:00.000Z",
+  updatedAt: "2026-08-25T10:00:00.000Z",
+  rotatedAt: "2026-08-25T10:00:00.000Z",
+});
+
+const historyEvent = (id: string) => ({
+  id,
+  variableId: "env_test",
+  name: "TOKEN",
+  kind: "secret",
+  action: "create",
+  actorUserId: "usr_test",
+  actorName: "Test User",
+  requestId: `request-${id}`,
+  occurredAt: "2026-08-25T10:00:00.000Z",
+});
+
 const userId = "usr_test" as never;
 const personal = { scope: "personal" } as const;
 const projectDefaultOverrides = {
@@ -80,51 +130,65 @@ describe("runtime settings data ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     for (const request of Object.values(api)) request.mockResolvedValue({});
+    answers.length = 0;
+    requests.length = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        requests.push({ method, url: input });
+        const path = input.split("?")[0];
+        const index = answers.findIndex(
+          (candidate) => candidate.method === method && candidate.path === path,
+        );
+        if (index === -1) throw new Error(`No answer for ${method} ${input}`);
+        const [next] = answers.splice(index, 1);
+        return next?.answer();
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("keeps loaded history when a continuation fails and retries its cursor", async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    const first = {
-      items: [{ id: "history-first" }],
+    const historyPath = `${environmentPath}/history`;
+    answer("GET", historyPath, {
+      items: [historyEvent("history-first")],
       nextCursor: "history-cursor",
-    };
-    const second = {
-      items: [{ id: "history-second" }],
-      nextCursor: undefined,
-    };
-    api.listEnvironmentVariableHistory.mockResolvedValueOnce(first);
+    });
     const observer = new InfiniteQueryObserver(
       client,
       environmentVariableHistoryQueryOptions(userId, personal),
     );
     const unsubscribe = observer.subscribe(() => undefined);
+    const ids = (
+      pages: ReadonlyArray<{ items: ReadonlyArray<{ id: string }> }>,
+    ) => pages.map((page) => page.items.map((item) => item.id));
 
     await observer.refetch();
-    api.listEnvironmentVariableHistory.mockRejectedValueOnce(
-      new Error("Older history is unavailable."),
-    );
+    fail("GET", historyPath, new Error("Older history is unavailable."));
     const failed = await observer.fetchNextPage();
 
     expect(failed.isFetchNextPageError).toBe(true);
-    expect(failed.data?.pages).toEqual([first]);
+    expect(ids(failed.data?.pages ?? [])).toEqual([["history-first"]]);
 
-    api.listEnvironmentVariableHistory.mockResolvedValueOnce(second);
+    answer("GET", historyPath, { items: [historyEvent("history-second")] });
     const retried = await observer.fetchNextPage();
-    expect(retried.data?.pages).toEqual([first, second]);
-    expect(api.listEnvironmentVariableHistory).toHaveBeenNthCalledWith(
-      2,
-      personal,
-      "history-cursor",
-      expect.anything(),
-    );
-    expect(api.listEnvironmentVariableHistory).toHaveBeenNthCalledWith(
-      3,
-      personal,
-      "history-cursor",
-      expect.anything(),
-    );
+    expect(ids(retried.data?.pages ?? [])).toEqual([
+      ["history-first"],
+      ["history-second"],
+    ]);
+    // The failed page and its retry both ask for the same cursor.
+    expect(requests.map((request) => request.url)).toEqual([
+      `${historyPath}?scope=personal&limit=20`,
+      `${historyPath}?scope=personal&limit=20&cursor=history-cursor`,
+      `${historyPath}?scope=personal&limit=20&cursor=history-cursor`,
+    ]);
 
     unsubscribe();
   });
@@ -148,6 +212,10 @@ describe("runtime settings data ownership", () => {
     ])
       client.setQueryData(key, { items: [] });
 
+    answer("POST", `${environmentPath}/bulk`, {
+      items: [],
+      conflictBehavior: "reject",
+    });
     await client
       .getMutationCache()
       .build(
@@ -162,10 +230,14 @@ describe("runtime settings data ownership", () => {
           conflictBehavior: "reject",
         },
       });
+    const serverId = "mcp_00000000-0000-4000-8000-000000000000";
+    answer("DELETE", `/v1/settings/personal/mcp-servers/${serverId}`, {
+      deletedMcpServerId: serverId,
+    });
     await client
       .getMutationCache()
       .build(client, mcpServersMutationOptions(client, userId, personal))
-      .execute({ type: "delete", serverId: "mcp_test" as never });
+      .execute({ type: "delete", serverId: serverId as never });
     await client
       .getMutationCache()
       .build(client, skillsMutationOptions(client, userId, personal))
@@ -184,23 +256,56 @@ describe("runtime settings data ownership", () => {
     ])
       expect(client.getQueryState(key)?.isInvalidated).toBe(true);
 
-    const saved = { revision: 4, marker: "authoritative" } as never;
-    api.updatePersonalProjectDefaults.mockResolvedValueOnce(saved);
+    const saved = {
+      scope: "personal",
+      revision: 4,
+      overrides: projectDefaultOverrides,
+      resolved: {
+        shipAction: { value: "ship", source: "deployment" },
+        commitAuthor: { value: "dx", source: "deployment" },
+        signingPreference: { value: "disabled", source: "deployment" },
+        runnerProfileId: { value: "e2b-standard", source: "deployment" },
+        dxCoAuthor: { value: true, source: "deployment" },
+      },
+      catalog: {
+        version: 1,
+        defaultProfileId: "e2b-standard",
+        profiles: [],
+        adapterStates: [],
+      },
+      restrictions: {
+        allowProjectCreation: true,
+        allowPublicCodeAccess: false,
+        allowedRunnerProfileIds: null,
+        source: "deployment",
+      },
+      canUpdate: true,
+    };
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(Response.json({ status: "success", data: saved }));
+    vi.stubGlobal("fetch", fetch);
     await client
       .getMutationCache()
       .build(client, projectDefaultsMutationOptions(client, userId, personal))
       .execute({ expectedRevision: 3, overrides: projectDefaultOverrides });
+    vi.unstubAllGlobals();
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect([url, init?.method, JSON.parse(String(init?.body))]).toEqual([
+      "/v1/settings/personal/projects",
+      "PUT",
+      { expectedRevision: 3, overrides: projectDefaultOverrides },
+    ]);
     expect(
       client.getQueryData(projectDefaultsKeys.detail(userId, personal)),
-    ).toBe(saved);
+    ).toMatchObject({ revision: 4, canUpdate: true });
   });
 
   it("removes environment secret inputs and trigger capabilities after delivery", async () => {
     const client = new QueryClient();
     const secret = "environment-secret-input";
     const capability = "one-time-trigger-capability";
-    const created = { id: "environment-metadata" };
-    api.createEnvironmentVariable.mockResolvedValueOnce(created);
+    answer("POST", environmentPath, environmentVariable("TOKEN"));
     api.createPluginTrigger.mockResolvedValueOnce({
       capability: { secret: capability },
     });
@@ -214,7 +319,8 @@ describe("runtime settings data ownership", () => {
       kind: "secret",
       value: secret,
     });
-    expect(deliveredEnvironment).toBe(created);
+    expect(deliveredEnvironment.name).toBe("TOKEN");
+    expect(deliveredEnvironment.value).not.toContain(secret);
     environmentObserver.reset();
 
     const triggerObserver = new MutationObserver(
@@ -244,8 +350,9 @@ describe("runtime settings data ownership", () => {
   it("delivers previews locally without retaining them in Query caches", async () => {
     const client = new QueryClient();
     const previewMarker = "preview-only-contents";
-    api.previewBulkEnvironmentVariables.mockResolvedValueOnce({
-      previewMarker,
+    answer("POST", `${environmentPath}/bulk/preview`, {
+      items: [{ line: 1, name: previewMarker, status: "ready" }],
+      canApply: true,
     });
     api.previewSkill.mockResolvedValueOnce({ previewMarker });
     const environmentObserver = new MutationObserver(
@@ -264,7 +371,13 @@ describe("runtime settings data ownership", () => {
       }),
       skillObserver.mutate({} as never),
     ]);
-    expect(delivered).toEqual([{ previewMarker }, { previewMarker }]);
+    expect(delivered).toEqual([
+      {
+        items: [{ line: 1, name: previewMarker, status: "ready" }],
+        canApply: true,
+      },
+      { previewMarker },
+    ]);
     expect(client.getQueryCache().getAll()).toEqual([]);
 
     environmentObserver.reset();
@@ -276,7 +389,9 @@ describe("runtime settings data ownership", () => {
   it("evicts rejected secret inputs after observer completion", async () => {
     const client = new QueryClient();
     const marker = "rejected-secret-input";
-    api.previewBulkEnvironmentVariables.mockRejectedValueOnce(
+    fail(
+      "POST",
+      `${environmentPath}/bulk/preview`,
       new Error("preview rejected"),
     );
     const observer = new MutationObserver(

@@ -1,18 +1,15 @@
 import {
-  DeleteThreadMessageResponseSchema,
-  EditQueuedThreadMessageResponseSchema,
-  ListThreadQueuedMessagesResponseSchema,
-  ThreadMessageQueueErrorResponseSchema,
+  DeleteQueuedThreadMessageEndpoint,
+  DeleteThreadMessageEndpoint,
+  EditQueuedThreadMessageEndpoint,
+  ListThreadQueuedMessagesEndpoint,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { request } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import type {
   DeleteThreadMessageInput,
   EditQueuedThreadMessageInput,
 } from "./message-queue-queries.js";
-
-const messagesPath = (threadId: ThreadId) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/messages`;
 
 /**
  * The requests for queued messages and deletes, loaded when the page first
@@ -20,12 +17,9 @@ const messagesPath = (threadId: ThreadId) =>
  */
 export const listQueuedThreadMessages = async (threadId: ThreadId) =>
   (
-    await request(
-      `${messagesPath(threadId)}/queued`,
-      ListThreadQueuedMessagesResponseSchema,
-      undefined,
-      ThreadMessageQueueErrorResponseSchema,
-    )
+    await dxClient.call(ListThreadQueuedMessagesEndpoint, {
+      params: { threadId },
+    })
   ).data.messages;
 
 export const editQueuedThreadMessage = async (
@@ -33,12 +27,10 @@ export const editQueuedThreadMessage = async (
   { submissionId, body, idempotencyKey }: EditQueuedThreadMessageInput,
 ) =>
   (
-    await request(
-      `${messagesPath(threadId)}/queued/${encodeURIComponent(submissionId)}/edit`,
-      EditQueuedThreadMessageResponseSchema,
-      { method: "POST", body: JSON.stringify({ body, idempotencyKey }) },
-      ThreadMessageQueueErrorResponseSchema,
-    )
+    await dxClient.call(EditQueuedThreadMessageEndpoint, {
+      params: { threadId, submissionId },
+      body: { body, idempotencyKey },
+    })
   ).data;
 
 export const deleteThreadMessage = async (
@@ -46,22 +38,16 @@ export const deleteThreadMessage = async (
   input: DeleteThreadMessageInput,
 ) =>
   (
-    await request(
-      input.kind === "queued"
-        ? `${messagesPath(threadId)}/queued/${encodeURIComponent(input.submissionId)}/delete`
-        : `${messagesPath(threadId)}/${encodeURIComponent(input.entryId)}/delete`,
-      DeleteThreadMessageResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify(
-          input.kind === "queued"
-            ? { idempotencyKey: input.idempotencyKey }
-            : {
-                idempotencyKey: input.idempotencyKey,
-                original: input.original,
-              },
-        ),
-      },
-      ThreadMessageQueueErrorResponseSchema,
-    )
+    await (input.kind === "queued"
+      ? dxClient.call(DeleteQueuedThreadMessageEndpoint, {
+          params: { threadId, submissionId: input.submissionId },
+          body: { idempotencyKey: input.idempotencyKey },
+        })
+      : dxClient.call(DeleteThreadMessageEndpoint, {
+          params: { threadId, entryId: input.entryId },
+          body: {
+            idempotencyKey: input.idempotencyKey,
+            original: input.original,
+          },
+        }))
   ).data;

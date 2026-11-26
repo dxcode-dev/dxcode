@@ -7,6 +7,9 @@
    them. Storybook's Foundations pages show them. See
    wiki/ui-design-system.md. */
 :root {
+  /* Room a native shell's window controls take at the start of the page's
+     top row (the Mac app's traffic lights); none in a browser. */
+  --shell-window-controls: 0px;
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -305,4 +308,9 @@
     U+131, U+152-153, U+2bc, U+2c6, U+2da, U+2dc, U+304, U+308, U+2013-2014,
     U+2018-201a, U+201c-201e, U+2020, U+2022, U+2024-2026, U+2030,
     U+2039-203a, U+20ac, U+2122, U+2212;
+}
+
+/* The Mac app draws no title bar: its traffic lights sit in the top row. */
+:root[data-shell="macos"] {
+  --shell-window-controls: 72px;
 }

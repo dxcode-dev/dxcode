@@ -1,13 +1,12 @@
 import {
-  CreateRunnerPairingResponseSchema,
-  ListRunnersResponseSchema,
+  CreateRunnerPairingEndpoint,
+  ListRunnersEndpoint,
   type RunnerListData,
   type RunnerMachine,
-  RunnersUnavailableResponseSchema,
 } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { queryOptions, useQuery } from "@tanstack/react-query";
-import { request } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import { retryQuery } from "../../shared/query/query-retry.js";
 
 export type { RunnerListData, RunnerMachine };
@@ -15,27 +14,11 @@ export type { RunnerListData, RunnerMachine };
 // Runners: the person's own machines that Threads can run on. The requests
 // live here, not in the shared client, so the Thread page's first load
 // carries none of them.
-export const runnersBase = "/v1/settings/personal/runners";
-
 const listRunners = async (signal?: AbortSignal) =>
-  (
-    await request(
-      runnersBase,
-      ListRunnersResponseSchema,
-      { signal },
-      RunnersUnavailableResponseSchema,
-    )
-  ).data;
+  (await dxClient.call(ListRunnersEndpoint, {}, { signal })).data;
 
 const createRunnerPairing = async () =>
-  (
-    await request(
-      `${runnersBase}/pairings`,
-      CreateRunnerPairingResponseSchema,
-      { method: "POST" },
-      RunnersUnavailableResponseSchema,
-    )
-  ).data;
+  (await dxClient.call(CreateRunnerPairingEndpoint)).data;
 
 export const runnerKeys = {
   all: (userId: UserId) => ["runners", userId] as const,

@@ -1,3 +1,21 @@
+import type { TranscriptRow } from "@dx/client";
+import {
+  ARTIFACT_TOOL_NAME,
+  categoryForPart,
+  isArtifactCardPart,
+  isMcpAppPart,
+  mcpAppCardSet,
+  parseShellResult,
+  projectTranscriptActivities,
+  type SkillActivation,
+  shellCommandOperations,
+  skillActivation,
+  skillActivationLabel,
+  type ToolCategory,
+  type ToolPart,
+  toolPart,
+  type WorkRow,
+} from "@dx/client";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { ChevronRight, FileSymlink, Sparkles } from "lucide-react";
 import * as React from "react";
@@ -5,24 +23,10 @@ import { defaultUrlTransform } from "react-markdown";
 import { FileContextMenu } from "../../shared/ui/file-context-menu.js";
 import { ArtifactToolCard } from "./artifact-tool-card.js";
 import { ArtifactToolLabel } from "./artifact-tool-label.js";
-import {
-  ARTIFACT_TOOL_NAME,
-  isArtifactCardPart,
-} from "./artifact-tool-part.js";
 import { MailToolLabel, MailToolOpener } from "./mail-tool-label.js";
 import { isMailToolPart } from "./mail-tool-part.js";
-import { isMcpAppPart, mcpAppCardSet } from "./mcp-app-part.js";
 import { PluginToolIcon } from "./plugin-ui/lazy-plugin-ui-icons.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
-import {
-  parseShellResult,
-  shellCommandOperations,
-} from "./shell-command-operation.js";
-import {
-  type SkillActivation,
-  skillActivation,
-  skillActivationLabel,
-} from "./skill-activation.js";
 import { SubagentActivity } from "./subagent-activity.js";
 import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
 import { ThreadToolDetail, ThreadToolLabel } from "./thread-tool-activity.js";
@@ -32,14 +36,6 @@ import {
   toolContentText,
 } from "./tool-output-media-model.js";
 import { presentTool } from "./tool-presentation.js";
-import {
-  categoryForPart,
-  projectTranscriptActivities,
-  type ToolCategory,
-  type ToolPart,
-  toolPart,
-  type WorkRow,
-} from "./transcript-activity-projection.js";
 import {
   activitySummary,
   commandFor,
@@ -58,7 +54,6 @@ import {
 } from "./transcript-code-preview-model.js";
 import { resolveTranscriptFileLink } from "./transcript-file-link.js";
 import { TranscriptMarkdown } from "./transcript-markdown.js";
-import type { TranscriptRow } from "./transcript-view-model.js";
 
 const numberField = (value: unknown, ...names: ReadonlyArray<string>) => {
   const fields = record(value);

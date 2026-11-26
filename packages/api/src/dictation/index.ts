@@ -65,24 +65,30 @@ export const DictationVocabularyResponseSchema = successResponse(
   DictationVocabularyDataSchema,
 );
 
-export const DictationVocabularyErrorResponseSchema = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("error"),
-    data: Schema.Struct({
-      code: Schema.Literal("INVALID_DICTATION_VOCABULARY"),
-      message: Schema.String,
-      requestId: Schema.String,
-      fieldErrors: Schema.Array(SettingsFieldErrorSchema),
-    }),
+export const DictationVocabularyInvalidResponseSchema = Schema.Struct({
+  status: Schema.Literal("error"),
+  data: Schema.Struct({
+    code: Schema.Literal("INVALID_DICTATION_VOCABULARY"),
+    message: Schema.String,
+    requestId: Schema.String,
+    fieldErrors: Schema.Array(SettingsFieldErrorSchema),
   }),
-  errorResponse(
-    "DICTATION_VOCABULARY_FORBIDDEN",
-    "Only workspace admins can change the workspace vocabulary.",
-  ),
-  errorResponse(
-    "DICTATION_VOCABULARY_UNAVAILABLE",
-    "Dictation vocabulary is temporarily unavailable.",
-  ),
+});
+
+export const DictationVocabularyForbiddenResponseSchema = errorResponse(
+  "DICTATION_VOCABULARY_FORBIDDEN",
+  "Only workspace admins can change the workspace vocabulary.",
+);
+
+export const DictationVocabularyUnavailableResponseSchema = errorResponse(
+  "DICTATION_VOCABULARY_UNAVAILABLE",
+  "Dictation vocabulary is temporarily unavailable.",
+);
+
+export const DictationVocabularyErrorResponseSchema = Schema.Union([
+  DictationVocabularyInvalidResponseSchema,
+  DictationVocabularyForbiddenResponseSchema,
+  DictationVocabularyUnavailableResponseSchema,
 ]);
 export type DictationVocabularyErrorResponse =
   typeof DictationVocabularyErrorResponseSchema.Type;

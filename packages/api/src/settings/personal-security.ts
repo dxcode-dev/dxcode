@@ -7,6 +7,7 @@ import {
   SecurityPageOffset,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { PageLimitQuerySchema } from "../http/page-limit-query.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import { SettingsFieldErrorSchema } from "./field-error.js";
@@ -164,3 +165,94 @@ export type CreatePersonalApiTokenRequest =
   typeof CreatePersonalApiTokenRequestSchema.Type;
 export type BrowserSessionPageData =
   typeof ListBrowserSessionsResponseSchema.Type.data;
+
+/** Every security route answers its failures through one mapping in Core. */
+const personalSecurityRefusals = [
+  { status: 400, schema: PersonalSecurityInvalidRequestResponseSchema },
+  { status: 403, schema: PersonalSecurityScopeForbiddenResponseSchema },
+  { status: 403, schema: PersonalSecurityBrowserSessionRequiredResponseSchema },
+  { status: 404, schema: PersonalApiTokenNotFoundResponseSchema },
+  { status: 404, schema: BrowserSessionNotFoundResponseSchema },
+  { status: 409, schema: CurrentBrowserSessionProtectedResponseSchema },
+  { status: 503, schema: PersonalSecurityPersistenceUnavailableResponseSchema },
+];
+
+export const GetPersonalSecurityEndpoint = defineEndpoint({
+  id: "settings.personalSecurity.get",
+  summary: "Read security settings",
+  method: "GET",
+  path: "/v1/settings/personal/security",
+  success: GetPersonalSecurityResponseSchema,
+  refusals: personalSecurityRefusals,
+});
+
+export const ListPersonalApiTokensEndpoint = defineEndpoint({
+  id: "settings.personalSecurity.tokens.list",
+  summary: "List personal API tokens",
+  method: "GET",
+  path: "/v1/settings/personal/security/tokens",
+  success: ListPersonalApiTokensResponseSchema,
+  refusals: personalSecurityRefusals,
+});
+
+export const CreatePersonalApiTokenEndpoint = defineEndpoint({
+  id: "settings.personalSecurity.tokens.create",
+  summary: "Create a personal API token",
+  method: "POST",
+  path: "/v1/settings/personal/security/tokens",
+  body: CreatePersonalApiTokenRequestSchema,
+  success: CreatePersonalApiTokenResponseSchema,
+  successStatus: 201,
+  refusals: personalSecurityRefusals,
+});
+
+export const RotatePersonalApiTokenEndpoint = defineEndpoint({
+  id: "settings.personalSecurity.tokens.rotate",
+  summary: "Rotate a personal API token",
+  method: "POST",
+  path: "/v1/settings/personal/security/tokens/:tokenId/rotate",
+  params: PersonalApiTokenParamsSchema,
+  body: Schema.Struct({}),
+  success: RotatePersonalApiTokenResponseSchema,
+  refusals: personalSecurityRefusals,
+});
+
+export const RevokePersonalApiTokenEndpoint = defineEndpoint({
+  id: "settings.personalSecurity.tokens.revoke",
+  summary: "Revoke a personal API token",
+  method: "DELETE",
+  path: "/v1/settings/personal/security/tokens/:tokenId",
+  params: PersonalApiTokenParamsSchema,
+  success: RevokePersonalApiTokenResponseSchema,
+  refusals: personalSecurityRefusals,
+});
+
+export const ListBrowserSessionsEndpoint = defineEndpoint({
+  id: "settings.personalSecurity.sessions.list",
+  summary: "List browser sessions",
+  method: "GET",
+  path: "/v1/settings/personal/security/sessions",
+  query: ListBrowserSessionsQuerySchema,
+  success: ListBrowserSessionsResponseSchema,
+  refusals: personalSecurityRefusals,
+});
+
+export const RevokeBrowserSessionEndpoint = defineEndpoint({
+  id: "settings.personalSecurity.sessions.revoke",
+  summary: "Sign out a browser session",
+  method: "DELETE",
+  path: "/v1/settings/personal/security/sessions/:sessionId",
+  params: BrowserSessionParamsSchema,
+  success: RevokeBrowserSessionResponseSchema,
+  refusals: personalSecurityRefusals,
+});
+
+export const RevokeOtherBrowserSessionsEndpoint = defineEndpoint({
+  id: "settings.personalSecurity.sessions.revokeOthers",
+  summary: "Sign out every other browser session",
+  method: "POST",
+  path: "/v1/settings/personal/security/sessions/revoke-others",
+  body: Schema.Struct({}),
+  success: RevokeOtherBrowserSessionsResponseSchema,
+  refusals: personalSecurityRefusals,
+});

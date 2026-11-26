@@ -1,11 +1,35 @@
 import type { OrbProviderListData } from "@dx/api";
+import {
+  ListPersonalOrbProvidersEndpoint,
+  ListWorkspaceOrbProvidersEndpoint,
+} from "@dx/api";
 import type { ProjectId, UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import {
-  listOrbProviders,
-  type PluginsTarget,
-} from "../../../shared/api/client.js";
+import type { PluginsTarget } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { retryQuery } from "../../../shared/query/query-retry.js";
+
+/** Orb providers: each scope's own provider connections. */
+export const listOrbProviders = async (
+  target: PluginsTarget,
+  projectId?: ProjectId,
+  signal?: AbortSignal,
+) => {
+  const query = projectId === undefined ? {} : { projectId };
+  return (
+    target.scope === "personal"
+      ? await dxClient.call(
+          ListPersonalOrbProvidersEndpoint,
+          { query },
+          { signal },
+        )
+      : await dxClient.call(
+          ListWorkspaceOrbProvidersEndpoint,
+          { params: { workspaceSlug: target.workspaceSlug }, query },
+          { signal },
+        )
+  ).data;
+};
 
 export type { OrbProviderListData, PluginsTarget };
 

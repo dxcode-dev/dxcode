@@ -8,11 +8,12 @@ import type {
   UpdateThreadRequest,
 } from "@dx/api";
 import {
-  CreateThreadResponseSchema,
-  MailErrorResponseSchema,
+  CreateThreadEndpoint,
+  StartMailThreadEndpoint,
   threadAgentUrl,
 } from "@dx/api";
 import type {
+  ModelConnectionId,
   ProjectId,
   RunnerProfileId,
   ThreadId,
@@ -34,7 +35,7 @@ import {
   ApiError,
   type ArchivedThread,
   deleteThread,
-  request,
+  dxClient,
   retryInitialDispatch,
   setThreadArchived,
   setThreadPinned,
@@ -42,7 +43,7 @@ import {
   type ThreadPage,
   updateThread,
 } from "../../shared/api/client.js";
-import { seedProjectDetail } from "../projects/project-mutations.js";
+import { seedProjectDetail } from "../projects/project-cache-mutations.js";
 import {
   invalidateSpaceForThread,
   spaceKeys,
@@ -85,33 +86,32 @@ const createThread = async (
   pluginThreadType?: string,
   fromMailId?: string,
   runnerMachineId?: string,
-): Promise<typeof CreateThreadResponseSchema.Type> =>
-  request(
-    // Start thread on an email sends the same request to Mail, which puts
-    // the email in the first message and answers as `/v1/threads` does.
-    fromMailId === undefined
-      ? "/v1/threads"
-      : `/v1/mailbox/messages/${encodeURIComponent(fromMailId)}/start-thread`,
-    CreateThreadResponseSchema,
-    {
-      method: "POST",
-      ...(signal === undefined ? {} : { signal }),
-      body: JSON.stringify({
-        ...(projectId === undefined ? {} : { projectId }),
-        title,
-        ...(selection === undefined ? {} : { selection }),
-        ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
-        ...(runnerMachineId === undefined ? {} : { runnerMachineId }),
-        ...(initialMessage === undefined ? {} : { initialMessage }),
-        ...(threadId === undefined ? {} : { threadId }),
-        ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
-        ...(visibility === undefined ? {} : { visibility }),
-        ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
-        ...(pluginThreadType === undefined ? {} : { pluginThreadType }),
-      }),
-    },
-    fromMailId === undefined ? undefined : MailErrorResponseSchema,
-  );
+): Promise<typeof CreateThreadEndpoint.success.Type> => {
+  const body = {
+    ...(projectId === undefined ? {} : { projectId }),
+    title,
+    ...(selection === undefined ? {} : { selection }),
+    ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
+    ...(runnerMachineId === undefined ? {} : { runnerMachineId }),
+    ...(initialMessage === undefined ? {} : { initialMessage }),
+    ...(threadId === undefined ? {} : { threadId }),
+    ...(claudeConnectionId === undefined
+      ? {}
+      : { claudeConnectionId: claudeConnectionId as ModelConnectionId }),
+    ...(visibility === undefined ? {} : { visibility }),
+    ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
+    ...(pluginThreadType === undefined ? {} : { pluginThreadType }),
+  };
+  // Start thread on an email sends the same request to Mail, which puts
+  // the email in the first message and answers as `/v1/threads` does.
+  return fromMailId === undefined
+    ? dxClient.call(CreateThreadEndpoint, { body }, { signal })
+    : dxClient.call(
+        StartMailThreadEndpoint,
+        { params: { id: fromMailId }, body },
+        { signal },
+      );
+};
 
 export type OptimisticThreadData = ThreadData & {
   readonly [optimisticCreation]: true;

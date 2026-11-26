@@ -93,3 +93,8 @@ export const GitHubControlPlaneUnavailableResponseSchema = errorResponse(
   "GITHUB_CONTROL_PLANE_UNAVAILABLE",
   "The GitHub control plane is temporarily unavailable.",
 );
+
+/** Where GitHub sends the person back to after the ceremony. */
+export const GitHubCeremonyQuerySchema = Schema.Struct({
+  return_to: Schema.optional(Schema.String),
+});

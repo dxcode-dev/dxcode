@@ -1,11 +1,11 @@
-import type { UseFlueAgentResult } from "@flue/react";
-import { ConfirmDialog } from "../../shared/ui/confirm-dialog.js";
 import {
   laterMessageCount,
   type MessageTarget,
   othersRemovedNotice,
   targetRead,
-} from "./message-edit-model.js";
+} from "@dx/client";
+import type { UseFlueAgentResult } from "@flue/react";
+import { ConfirmDialog } from "../../shared/ui/confirm-dialog.js";
 import {
   type AgentSource,
   useAgentSelection,

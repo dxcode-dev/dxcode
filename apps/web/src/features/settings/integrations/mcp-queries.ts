@@ -4,13 +4,30 @@ import type {
   McpToolData,
   ProjectData,
 } from "@dx/api";
+import {
+  ListPersonalMcpServersEndpoint,
+  ListWorkspaceMcpServersEndpoint,
+} from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
 import {
-  listMcpServers,
+  dxClient,
   type McpServerInput,
   type McpServersTarget,
 } from "../../../shared/api/client.js";
+
+export const listMcpServers = async (
+  target: McpServersTarget,
+  signal?: AbortSignal,
+) =>
+  (target.scope === "personal"
+    ? await dxClient.call(ListPersonalMcpServersEndpoint, {}, { signal })
+    : await dxClient.call(
+        ListWorkspaceMcpServersEndpoint,
+        { params: { workspaceSlug: target.workspaceSlug } },
+        { signal },
+      )
+  ).data;
 
 export type {
   EnvironmentVariableData,

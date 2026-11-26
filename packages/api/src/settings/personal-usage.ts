@@ -10,6 +10,7 @@ import {
   UsagePriceSource,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { PageLimitQuerySchema } from "../http/page-limit-query.js";
 import { errorResponse, successResponse } from "../http/response.js";
 
@@ -262,3 +263,27 @@ export const PersonalUsageErrorResponseSchema = Schema.Union([
   PersonalUsageForbiddenResponseSchema,
   PersonalUsageUnavailableResponseSchema,
 ]);
+
+const personalUsageRefusals = [
+  { status: 400, schema: PersonalUsageInvalidRequestResponseSchema },
+  { status: 403, schema: PersonalUsageForbiddenResponseSchema },
+  { status: 503, schema: PersonalUsageUnavailableResponseSchema },
+];
+
+export const GetPersonalUsageEndpoint = defineEndpoint({
+  id: "settings.personalUsage.get",
+  method: "GET",
+  path: "/v1/settings/personal/usage",
+  query: PersonalUsageQuerySchema,
+  success: GetPersonalUsageResponseSchema,
+  refusals: personalUsageRefusals,
+});
+
+export const ExportPersonalUsageEndpoint = defineEndpoint({
+  id: "settings.personalUsage.export",
+  method: "GET",
+  path: "/v1/settings/personal/usage/export",
+  query: PersonalUsageQuerySchema,
+  success: ExportPersonalUsageResponseSchema,
+  refusals: personalUsageRefusals,
+});

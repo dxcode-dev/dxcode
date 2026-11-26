@@ -1,7 +1,7 @@
-import { ThreadQuickActionsResponseSchema } from "@dx/api";
+import { GetThreadQuickActionsEndpoint } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import { request } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 
 const getThreadQuickActions = async (
   threadId: ThreadId,
@@ -9,9 +9,9 @@ const getThreadQuickActions = async (
   signal?: AbortSignal,
 ) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/quick-actions?messageId=${encodeURIComponent(messageId)}`,
-      ThreadQuickActionsResponseSchema,
+    await dxClient.call(
+      GetThreadQuickActionsEndpoint,
+      { params: { threadId }, query: { messageId } },
       { signal },
     )
   ).data;

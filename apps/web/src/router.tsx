@@ -42,7 +42,7 @@ import {
   projectQueryOptions,
   seedProjectDetailFromList,
 } from "./features/projects/project-queries.js";
-import { projectRepositoryPathSearch } from "./features/projects/project-repository-queries.js";
+import { projectRepositoryPathSearch } from "./features/projects/project-repository-path.js";
 import {
   ProjectRouteError,
   ProjectRouteNotFound,
@@ -875,6 +875,18 @@ const welcomeRoute = createRoute({
   component: page.welcome,
 });
 
+// The browser half of signing in to a dx app (Mac app): hands the session
+// to the app through its URL scheme. The page reads its own search, so
+// a browser's first load carries none of it.
+const nativeSignInRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/native-sign-in",
+  component: lazyRouteComponent(
+    () => import("./features/authentication/native-sign-in-route.js"),
+    "NativeSignInRoute",
+  ),
+});
+
 const threadTourRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/welcome/tour",
@@ -937,6 +949,7 @@ const routeTree = rootRoute.addChildren([
   joinWorkspaceRoute,
   welcomeRoute,
   threadTourRoute,
+  nativeSignInRoute,
   signInRoute,
   signUpRoute,
   // A deployment's own pages beside Settings, such as Admin.

@@ -96,10 +96,12 @@ export const BulkEnvironmentVariablesRequestSchema = Schema.Struct({
   contents: Schema.String,
 });
 
+/** Field order is the URL's: `scope`, `limit`, `projectId`, `cursor`. */
 export const EnvironmentVariableHistoryQuerySchema = Schema.Struct({
-  ...EnvironmentVariableScopeRequestSchema.fields,
-  cursor: Schema.optional(PageCursor),
+  scope: EnvironmentVariableScopeRequestSchema.fields.scope,
   limit: Schema.optional(PageLimitQuerySchema),
+  projectId: EnvironmentVariableScopeRequestSchema.fields.projectId,
+  cursor: Schema.optional(PageCursor),
 });
 
 export const EnvironmentVariableAuditEventDataSchema = Schema.Struct({

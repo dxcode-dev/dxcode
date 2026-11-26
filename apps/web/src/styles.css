@@ -2969,7 +2969,7 @@
 .settings-back {
   position: absolute;
   top: 50%;
-  left: 12px;
+  left: calc(12px + var(--shell-window-controls));
   transform: translateY(-50%);
 }
 .settings-back > svg {
@@ -9636,6 +9636,7 @@ body:has(.dx-app-shell) {
   flex-basis: 36px;
   height: 36px;
   padding: 0 var(--space-3);
+  padding-inline-start: calc(var(--space-3) + var(--shell-window-controls));
   gap: 0;
 }
 .product-sidebar .sidebar-topbar .dx-wordmark {
@@ -10740,7 +10741,7 @@ body:has(.dx-app-shell) {
 .product-sidebar-trigger {
   position: absolute;
   top: 6px;
-  left: 7px;
+  left: calc(7px + var(--shell-window-controls));
   z-index: 20;
 }
 .authenticated-home {
@@ -11483,7 +11484,7 @@ body:has(.boot-screen) {
 .product-sidebar-trigger + .standard-page .page-topbar,
 .product-sidebar-trigger + .thread-region .thread-title-bar,
 .product-sidebar-trigger + .library-artifact-page .artifact-header {
-  padding-left: 42px;
+  padding-left: calc(42px + var(--shell-window-controls));
 }
 @media (max-width: 767px) {
   /* A phone shows the app edge to edge, like a native app. */

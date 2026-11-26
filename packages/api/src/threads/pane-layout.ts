@@ -1,5 +1,6 @@
 import { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import {
   ThreadFilesPath,
@@ -7,6 +8,7 @@ import {
   ThreadSandboxFilePath,
 } from "./files.js";
 import { ThreadTerminalIdSchema } from "./terminal.js";
+import { ThreadNotFoundResponseSchema } from "./thread-not-found-response.js";
 
 /** Tabs a Thread page can hold; at most this many across every pane. */
 export const THREAD_PANE_LAYOUT_TAB_LIMIT = 64;
@@ -192,3 +194,32 @@ export const ThreadPaneLayoutErrorResponseSchema = Schema.Union([
     "Persistence is temporarily unavailable.",
   ),
 ]);
+
+/** A Space's Thread while Spaces are off answers as `hideSpaceThreads` does. */
+const threadPaneLayoutRefusals = [
+  { status: 400, schema: ThreadPaneLayoutErrorResponseSchema },
+  { status: 404, schema: ThreadPaneLayoutErrorResponseSchema },
+  { status: 503, schema: ThreadPaneLayoutErrorResponseSchema },
+  { status: 404, schema: ThreadNotFoundResponseSchema },
+];
+
+export const GetThreadPaneLayoutEndpoint = defineEndpoint({
+  id: "threads.getPaneLayout",
+  summary: "Read a Thread's pane layout",
+  method: "GET",
+  path: "/v1/threads/:threadId/layout",
+  params: ThreadPaneLayoutParamsSchema,
+  success: ThreadPaneLayoutResponseSchema,
+  refusals: threadPaneLayoutRefusals,
+});
+
+export const UpdateThreadPaneLayoutEndpoint = defineEndpoint({
+  id: "threads.updatePaneLayout",
+  summary: "Save a Thread's pane layout",
+  method: "PUT",
+  path: "/v1/threads/:threadId/layout",
+  params: ThreadPaneLayoutParamsSchema,
+  body: UpdateThreadPaneLayoutRequestSchema,
+  success: ThreadPaneLayoutResponseSchema,
+  refusals: threadPaneLayoutRefusals,
+});

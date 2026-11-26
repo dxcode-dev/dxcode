@@ -1,14 +1,31 @@
 import type { PersonalComposerDefaultsData } from "@dx/api";
+import {
+  GetPersonalComposerDefaultsEndpoint,
+  UpdatePersonalComposerDefaultsEndpoint,
+  type UpdatePersonalComposerDefaultsRequest,
+} from "@dx/api";
 import type { UserId } from "@dx/domain";
 import {
   mutationOptions,
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  getPersonalComposerDefaults,
-  updatePersonalComposerDefaults,
-} from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
+
+const getPersonalComposerDefaults = async (
+  signal?: AbortSignal,
+): Promise<PersonalComposerDefaultsData> =>
+  (await dxClient.call(GetPersonalComposerDefaultsEndpoint, {}, { signal }))
+    .data;
+
+const updatePersonalComposerDefaults = async (
+  input: UpdatePersonalComposerDefaultsRequest,
+): Promise<PersonalComposerDefaultsData> =>
+  (
+    await dxClient.call(UpdatePersonalComposerDefaultsEndpoint, {
+      body: input,
+    })
+  ).data;
 
 export const composerDefaultsKeys = {
   detail: (userId: UserId) => ["personal-composer-defaults", userId] as const,

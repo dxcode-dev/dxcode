@@ -1,5 +1,5 @@
+import type { WorkRow } from "@dx/client";
 import { describe, expect, it } from "vitest";
-import type { WorkRow } from "./transcript-activity-projection.js";
 import { activitySummary } from "./transcript-activity-summary.js";
 
 const tool = (

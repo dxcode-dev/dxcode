@@ -6,3 +6,10 @@ export const HostedLanding:
       readonly preload?: () => Promise<void> | undefined;
     })
   | undefined = undefined;
+
+/** The public release has no apps page either. */
+export const HostedApps:
+  | (React.ComponentType & {
+      readonly preload?: () => Promise<void> | undefined;
+    })
+  | undefined = undefined;

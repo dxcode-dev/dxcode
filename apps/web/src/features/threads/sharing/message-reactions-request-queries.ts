@@ -1,11 +1,13 @@
 import {
-  ListMessageReactionsResponseSchema,
+  AddMessageReactionEndpoint,
+  ListMessageReactionsEndpoint,
+  type ListMessageReactionsResponseSchema,
   type MessageReaction,
   type MessageReactions,
-  MessageReactionsResponseSchema,
+  RemoveMessageReactionEndpoint,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { request } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { toggledReactions } from "../../../shared/reactions/reaction-set.js";
 
 // A shared Thread's message reactions on the wire, and how a change lands in
@@ -20,17 +22,16 @@ export interface MessageReactionInput {
   readonly on: boolean;
 }
 
-const reactionsPath = (threadId: ThreadId, rest = "") =>
-  `/v1/threads/${encodeURIComponent(threadId)}/message-reactions${rest}`;
-
 export const listMessageReactions = async (
   threadId: ThreadId,
   signal?: AbortSignal,
 ) =>
   (
-    await request(reactionsPath(threadId), ListMessageReactionsResponseSchema, {
-      signal,
-    })
+    await dxClient.call(
+      ListMessageReactionsEndpoint,
+      { params: { threadId } },
+      { signal },
+    )
   ).data;
 
 export const setMessageReaction = async (
@@ -38,13 +39,15 @@ export const setMessageReaction = async (
   input: MessageReactionInput,
 ) =>
   (
-    await request(
-      reactionsPath(
-        threadId,
-        `/${encodeURIComponent(input.messageId)}/${input.reaction}`,
-      ),
-      MessageReactionsResponseSchema,
-      { method: input.on ? "PUT" : "DELETE" },
+    await dxClient.call(
+      input.on ? AddMessageReactionEndpoint : RemoveMessageReactionEndpoint,
+      {
+        params: {
+          threadId,
+          messageId: input.messageId,
+          reaction: input.reaction,
+        },
+      },
     )
   ).data;
 

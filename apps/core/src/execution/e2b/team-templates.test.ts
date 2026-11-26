@@ -4,10 +4,12 @@ import { Template } from "e2b";
 import { describe, expect, it, vi } from "vitest";
 import {
   advanceTeamTemplates,
+  E2BKeyRejected,
   E2BSizeRefused,
   type E2BTeamApi,
   inlineOrbDockerfile,
   type ListedTeamTemplate,
+  liveE2BTeamApi,
   orbTemplateRecipe,
   readyProfileTemplates,
   startTeamTemplates,
@@ -207,5 +209,15 @@ describe("building the Orb templates into a key's team", () => {
       error: `E2B could not build ${teamTemplateName(recipe)}.`,
     });
     expect(api.buildProfile).not.toHaveBeenCalled();
+  });
+});
+
+describe("liveE2BTeamApi", () => {
+  // The SDK refuses a key it can't parse before sending anything (#2540's
+  // preview: a malformed key answered 503 instead of "E2B rejected this API key.").
+  it("rejects a malformed key as a rejected key", async () => {
+    await expect(
+      liveE2BTeamApi.listTemplates("e2b_not_a_real_key"),
+    ).rejects.toBeInstanceOf(E2BKeyRejected);
   });
 });

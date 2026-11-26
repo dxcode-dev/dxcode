@@ -50,3 +50,27 @@ export const UpdateSpaceCoordinatorOrbRequestSchema = Schema.Struct({
 
 export type UpdateSpaceCoordinatorOrbRequest =
   typeof UpdateSpaceCoordinatorOrbRequestSchema.Encoded;
+
+const spaceCoordinatorOrbError = <const Code extends string>(code: Code) =>
+  Schema.Struct({
+    status: Schema.Literal("error"),
+    data: Schema.Struct({
+      code: Schema.Literal(code),
+      message: Schema.String,
+      requestId: Schema.String,
+    }),
+  });
+
+export const SpaceCoordinatorOrbInvalidRequestResponseSchema =
+  spaceCoordinatorOrbError("INVALID_REQUEST");
+/** A workspace the caller cannot see. */
+export const SpaceCoordinatorOrbNotFoundResponseSchema =
+  spaceCoordinatorOrbError("NOT_FOUND");
+/** A workspace member who is not an admin. */
+export const SpaceCoordinatorOrbForbiddenResponseSchema =
+  spaceCoordinatorOrbError("FORBIDDEN");
+export const SpaceCoordinatorOrbPersistenceUnavailableResponseSchema =
+  spaceCoordinatorOrbError("PERSISTENCE_UNAVAILABLE");
+/** The deployment has Spaces off. */
+export const SpaceCoordinatorOrbSpacesUnavailableResponseSchema =
+  spaceCoordinatorOrbError("SPACES_UNAVAILABLE");

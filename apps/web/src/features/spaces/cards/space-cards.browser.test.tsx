@@ -11,6 +11,7 @@
 // shows its links as links, or returns after it is dismissed.
 
 import type { SpaceThreadItem, SpaceThreadState } from "@dx/api";
+import { deriveTranscriptViewModel } from "@dx/client";
 import type { ThreadId, UserId } from "@dx/domain";
 import type { FlueConversationMessage } from "@flue/react";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -32,7 +33,6 @@ import { RichMarkdown } from "../../../shared/ui/rich-markdown.js";
 import { ThreadReferenceContext } from "../../../shared/ui/thread-reference-context.js";
 import { threadKeys } from "../../threads/thread-queries.js";
 import { ThreadSourceMessage } from "../../threads/thread-source-message.js";
-import { deriveTranscriptViewModel } from "../../threads/transcript-view-model.js";
 import { TranscriptTurn } from "../../threads/transcript-work.js";
 import { invalidateSpaceForThread } from "../space-cache-queries.js";
 import { SpaceThreadsContext } from "../use-open-space-thread.js";

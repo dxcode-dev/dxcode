@@ -1,4 +1,4 @@
-import type { FlueConversationPart } from "@flue/react";
+import type { FlueConversationPart } from "@flue/sdk";
 import {
   ARTIFACT_TOOL_NAME,
   isArtifactCardPart,

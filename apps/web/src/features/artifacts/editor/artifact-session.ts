@@ -44,7 +44,7 @@ import {
   type ArtifactDocument,
   type ArtifactsApi,
   isArtifactConflict,
-} from "../artifacts-api.js";
+} from "../artifacts-api-queries.js";
 import { artifactKeys } from "../artifacts-queries.js";
 import {
   type ArtifactMarkdownCodec,

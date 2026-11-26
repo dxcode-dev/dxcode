@@ -1,5 +1,6 @@
-import { Schema } from "effect";
-import { request } from "../../../shared/api/client.js";
+import { GetPluginPaneIceServersEndpoint } from "@dx/api";
+import type { ThreadId } from "@dx/domain";
+import { dxClient } from "../../../shared/api/client.js";
 
 /**
  * A trusted pane's WebRTC ICE servers: short-lived TURN credentials
@@ -7,19 +8,13 @@ import { request } from "../../../shared/api/client.js";
  * pane's live chunk only.
  */
 
-/** `GET …/ice-servers`: short-lived TURN credentials, or public STUN. */
-const IceServersResponse = Schema.Struct({
-  data: Schema.Struct({
-    iceServers: Schema.Array(
-      Schema.Struct({
-        urls: Schema.Union([Schema.String, Schema.Array(Schema.String)]),
-        username: Schema.optional(Schema.String),
-        credential: Schema.optional(Schema.String),
-      }),
-    ),
-  }),
-});
-
-export const paneIceServers = async (panePath: string) =>
-  (await request(`${panePath}/ice-servers`, IceServersResponse)).data
-    .iceServers;
+export const paneIceServers = async (
+  threadId: ThreadId,
+  plugin: string,
+  pane: string,
+) =>
+  (
+    await dxClient.call(GetPluginPaneIceServersEndpoint, {
+      params: { threadId, plugin, pane },
+    })
+  ).data.iceServers;

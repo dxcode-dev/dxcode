@@ -1,4 +1,4 @@
-import type { TranscriptRow } from "./transcript-view-model.js";
+import type { TranscriptRow } from "@dx/client";
 
 /** dx's name for a message that tags someone, which notifications link to. */
 const DX_MESSAGE_ID = /^msg_[0-9a-f]{24}$/;

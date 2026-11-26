@@ -1,6 +1,6 @@
+import type { ToolPart } from "@dx/client";
 import { createContext } from "react";
 import type { TileImage } from "./message-attachments-ui.js";
-import type { ToolPart } from "./transcript-activity-projection.js";
 import { record, stringField } from "./transcript-activity-summary.js";
 
 /** The same-origin URL of an image a tool call returned, by its Flue id. */

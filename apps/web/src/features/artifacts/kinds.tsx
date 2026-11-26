@@ -4,7 +4,7 @@ import { FileText, type LucideIcon, Shapes } from "lucide-react";
 import type * as React from "react";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 import type { ArtifactScope } from "./artifact-scope.js";
-import type { ArtifactDocument } from "./artifacts-api.js";
+import type { ArtifactDocument } from "./artifacts-api-queries.js";
 
 /** What every artifact type's editor receives from the Artifacts view. */
 export interface ArtifactEditorProps {

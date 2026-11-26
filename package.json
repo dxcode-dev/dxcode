@@ -1,7 +1,7 @@
 {
   "name": "dx",
   "private": true,
-  "version": "0.2.176",
+  "version": "0.2.177",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "packageManager": "pnpm@12.14.0",
@@ -15,7 +15,7 @@
     "build:dxd": "node scripts/build-dxd.mjs",
     "format": "biome format . --write",
     "format:check": "biome format .",
-    "lint": "biome lint . && node scripts/check-web-architecture.mjs && node scripts/check-web-tokens.mjs",
+    "lint": "biome lint . && node scripts/check-web-architecture.mjs && node scripts/check-web-tokens.mjs && node scripts/check-headless-client.mjs",
     "react:doctor": "pnpm --filter @dx/web run doctor",
     "typecheck": "tsc -b --pretty false",
     "test:lint-plugins": "node scripts/test-biome-plugins.mjs",

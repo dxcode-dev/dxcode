@@ -3,6 +3,16 @@ import type {
   PersonalApiTokenData,
   PersonalApiTokenSecretData,
 } from "@dx/api";
+import {
+  type BrowserSessionData,
+  CreatePersonalApiTokenEndpoint,
+  ListBrowserSessionsEndpoint,
+  ListPersonalApiTokensEndpoint,
+  RevokeBrowserSessionEndpoint,
+  RevokeOtherBrowserSessionsEndpoint,
+  RevokePersonalApiTokenEndpoint,
+  RotatePersonalApiTokenEndpoint,
+} from "@dx/api";
 import type { BrowserSessionId, PersonalApiTokenId, UserId } from "@dx/domain";
 import {
   infiniteQueryOptions,
@@ -10,16 +20,69 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  ApiError,
-  createPersonalApiToken,
-  listBrowserSessions,
-  listPersonalApiTokens,
-  revokeBrowserSession,
-  revokeOtherBrowserSessions,
-  revokePersonalApiToken,
-  rotatePersonalApiToken,
-} from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
+
+interface BrowserSessionPage {
+  readonly items: ReadonlyArray<BrowserSessionData>;
+  readonly nextOffset?: number;
+}
+
+const listPersonalApiTokens = async (
+  signal?: AbortSignal,
+): Promise<ReadonlyArray<PersonalApiTokenData>> =>
+  (await dxClient.call(ListPersonalApiTokensEndpoint, {}, { signal })).data
+    .items;
+
+const createPersonalApiToken = async (
+  input: CreatePersonalApiTokenRequest,
+): Promise<PersonalApiTokenSecretData> =>
+  (await dxClient.call(CreatePersonalApiTokenEndpoint, { body: input })).data;
+
+const rotatePersonalApiToken = async (
+  tokenId: PersonalApiTokenId,
+): Promise<PersonalApiTokenSecretData> =>
+  (
+    await dxClient.call(RotatePersonalApiTokenEndpoint, {
+      params: { tokenId },
+      body: {},
+    })
+  ).data;
+
+const revokePersonalApiToken = async (
+  tokenId: PersonalApiTokenId,
+): Promise<PersonalApiTokenId> =>
+  (await dxClient.call(RevokePersonalApiTokenEndpoint, { params: { tokenId } }))
+    .data.revokedTokenId;
+
+const listBrowserSessions = async (
+  offset?: number,
+  signal?: AbortSignal,
+): Promise<BrowserSessionPage> =>
+  (
+    await dxClient.call(
+      ListBrowserSessionsEndpoint,
+      {
+        query: {
+          limit: 25,
+          ...(offset === undefined ? {} : { offset }),
+        },
+      },
+      { signal },
+    )
+  ).data;
+
+const revokeBrowserSession = async (
+  sessionId: BrowserSessionId,
+): Promise<BrowserSessionId> =>
+  (
+    await dxClient.call(RevokeBrowserSessionEndpoint, {
+      params: { sessionId },
+    })
+  ).data.revokedSessionId;
+
+const revokeOtherBrowserSessions = async (): Promise<void> => {
+  await dxClient.call(RevokeOtherBrowserSessionsEndpoint, { body: {} });
+};
 
 export const securityKeys = {
   all: (userId: UserId) => ["personal-security", userId] as const,

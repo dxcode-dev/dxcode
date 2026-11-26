@@ -1,5 +1,11 @@
 import { E2B_ORB_PROFILES, type E2BOrbProfile } from "@dx/domain";
-import { ApiClient, ConnectionConfig, Template, waitForFile } from "e2b";
+import {
+  ApiClient,
+  AuthenticationError,
+  ConnectionConfig,
+  Template,
+  waitForFile,
+} from "e2b";
 import orbDockerfile from "../../../../../deploy/orb/Dockerfile?raw";
 import orbHostname from "../../../../../deploy/orb/dx-orb-hostname.sh?raw";
 import orbInit from "../../../../../deploy/orb/dx-orb-init?raw";
@@ -165,8 +171,18 @@ export class E2BSizeRefused extends Error {}
 /** The SDK names a refused request `<status>: <message>`. */
 const REFUSED = /^(400|403|422): /;
 
-const api = (apiKey: string) =>
-  new ApiClient(new ConnectionConfig({ apiKey })).api;
+/**
+ * The SDK refuses a key it can't parse (not `e2b_` and hex) while building
+ * the client, before any request: that is a rejected key too, not an outage.
+ */
+const api = (apiKey: string) => {
+  try {
+    return new ApiClient(new ConnectionConfig({ apiKey })).api;
+  } catch (cause) {
+    if (cause instanceof AuthenticationError) throw new E2BKeyRejected();
+    throw cause;
+  }
+};
 
 const buildStatusOf = (status: string): TeamTemplateBuildStatus =>
   status === "ready" ? "ready" : status === "error" ? "error" : "building";

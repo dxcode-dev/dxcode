@@ -22,6 +22,7 @@ import {
 } from "./admission.js";
 import { cloudflareMagicLink } from "./cloudflare-magic-link.js";
 import { emailPassword } from "./email-password.js";
+import { nativeHandoff } from "./native-handoff.js";
 import { fillMissingName } from "./profile-name.js";
 import type { AuthenticationRequirements } from "./requirements.js";
 import {
@@ -445,7 +446,12 @@ export const createAuth = (
         validateSchema: false,
       },
     },
-    plugins: [...providerPlugins, workspaceOrganization(bindings), dxApiKey()],
+    plugins: [
+      ...providerPlugins,
+      workspaceOrganization(bindings),
+      dxApiKey(),
+      nativeHandoff(),
+    ],
   });
   assertAuthApiKey(auth);
   return auth;

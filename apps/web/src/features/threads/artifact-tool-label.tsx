@@ -1,8 +1,5 @@
-import {
-  artifactAction as action,
-  artifactOutput as output,
-} from "./artifact-tool-part.js";
-import type { ToolPart } from "./transcript-activity-projection.js";
+import type { ToolPart } from "@dx/client";
+import { artifactAction as action, artifactOutput as output } from "@dx/client";
 
 const title = (part: ToolPart) => {
   const value =

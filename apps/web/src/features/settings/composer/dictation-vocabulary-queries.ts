@@ -1,4 +1,10 @@
 import type { DictationVocabularyData } from "@dx/api";
+import {
+  GetPersonalDictationVocabularyEndpoint,
+  GetWorkspaceDictationVocabularyEndpoint,
+  UpdatePersonalDictationVocabularyEndpoint,
+  UpdateWorkspaceDictationVocabularyEndpoint,
+} from "@dx/api";
 import type { UserId } from "@dx/domain";
 import {
   mutationOptions,
@@ -7,10 +13,41 @@ import {
 } from "@tanstack/react-query";
 import {
   ApiError,
-  getDictationVocabulary,
+  dxClient,
   type PluginsTarget,
-  updateDictationVocabulary,
 } from "../../../shared/api/client.js";
+
+/** Dictation vocabulary per scope; dictation merges personal, then workspace. */
+const getDictationVocabulary = async (
+  target: PluginsTarget,
+  signal?: AbortSignal,
+): Promise<DictationVocabularyData> =>
+  (target.scope === "personal"
+    ? await dxClient.call(
+        GetPersonalDictationVocabularyEndpoint,
+        {},
+        { signal },
+      )
+    : await dxClient.call(
+        GetWorkspaceDictationVocabularyEndpoint,
+        { params: { workspaceSlug: target.workspaceSlug } },
+        { signal },
+      )
+  ).data;
+
+const updateDictationVocabulary = async (
+  target: PluginsTarget,
+  terms: ReadonlyArray<string>,
+): Promise<DictationVocabularyData> =>
+  (target.scope === "personal"
+    ? await dxClient.call(UpdatePersonalDictationVocabularyEndpoint, {
+        body: { terms },
+      })
+    : await dxClient.call(UpdateWorkspaceDictationVocabularyEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug },
+        body: { terms },
+      })
+  ).data;
 
 export type DictationVocabularyTarget = PluginsTarget;
 

@@ -1,4 +1,5 @@
 import {
+  AutomationErrorResponseSchema,
   ThreadAutomationsResponseSchema,
   TimeZoneResponseSchema,
   UpdateAutomationRequestSchema,
@@ -34,10 +35,10 @@ const failure = (
   message: string,
 ) =>
   context.json(
-    {
+    Schema.encodeUnknownSync(AutomationErrorResponseSchema)({
       status: "error",
       data: { code, message, requestId: context.get("requestId") },
-    },
+    }),
     status,
   );
 

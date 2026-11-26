@@ -4,6 +4,7 @@ import {
   ExperimentalFeatureRegistration,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 
 export const ExperimentalFeatureDenialReasonSchema = Schema.Literals([
@@ -95,3 +96,30 @@ export const ExperimentalFeaturesErrorResponseSchema = Schema.Union([
   ExperimentalFeaturesForbiddenResponseSchema,
   ExperimentalFeaturesPersistenceUnavailableResponseSchema,
 ]);
+
+const experimentalFeaturesRefusals = [
+  { status: 400, schema: ExperimentalFeaturesInvalidRequestResponseSchema },
+  { status: 403, schema: ExperimentalFeaturesForbiddenResponseSchema },
+  { status: 409, schema: ExperimentalFeaturesConflictResponseSchema },
+  {
+    status: 503,
+    schema: ExperimentalFeaturesPersistenceUnavailableResponseSchema,
+  },
+];
+
+export const GetPersonalExperimentalFeaturesEndpoint = defineEndpoint({
+  id: "settings.experimentalFeatures.get",
+  method: "GET",
+  path: "/v1/settings/personal/experimental-features",
+  success: GetPersonalExperimentalFeaturesResponseSchema,
+  refusals: experimentalFeaturesRefusals,
+});
+
+export const UpdatePersonalExperimentalFeatureEndpoint = defineEndpoint({
+  id: "settings.experimentalFeatures.update",
+  method: "PUT",
+  path: "/v1/settings/personal/experimental-features",
+  body: UpdatePersonalExperimentalFeatureRequestSchema,
+  success: UpdatePersonalExperimentalFeatureResponseSchema,
+  refusals: experimentalFeaturesRefusals,
+});

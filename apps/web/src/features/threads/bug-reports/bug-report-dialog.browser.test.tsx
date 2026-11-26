@@ -36,9 +36,9 @@ vi.mock("../../../shared/auth/auth-context.js", async (importOriginal) => ({
   }),
 }));
 
+import { deriveTranscriptViewModel } from "@dx/client";
 import { changesKeys } from "../changes/changes-queries.js";
 import type { DictationRecord } from "../dictation/dictation-session.js";
-import { deriveTranscriptViewModel } from "../transcript-view-model.js";
 import { BugReportDialog } from "./bug-report-dialog.js";
 import { bugReportAccessQueryOptions } from "./bug-report-queries.js";
 

@@ -1,4 +1,4 @@
-import type { FlueConversationSettlement } from "@flue/react";
+import type { FlueConversationSettlement } from "@flue/sdk";
 
 /** Flue's words for a message its sender took out of the queue. */
 const WITHDRAWN_MESSAGE = "Submission was withdrawn before the agent read it.";

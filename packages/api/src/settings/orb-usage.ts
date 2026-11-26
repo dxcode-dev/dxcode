@@ -1,5 +1,6 @@
 import { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 
 /** One of the person's Orbs on Settings → Usage → Orb. */
@@ -61,3 +62,11 @@ export const OrbUsageUnavailableResponseSchema = errorResponse(
   "PERSISTENCE_UNAVAILABLE",
   "Orb usage is temporarily unavailable.",
 );
+
+export const GetOrbUsageEndpoint = defineEndpoint({
+  id: "settings.orbUsage.get",
+  method: "GET",
+  path: "/v1/settings/personal/orb-usage",
+  success: GetOrbUsageResponseSchema,
+  refusals: [{ status: 503, schema: OrbUsageUnavailableResponseSchema }],
+});

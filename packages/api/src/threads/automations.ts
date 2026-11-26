@@ -1,5 +1,6 @@
 import { Schema } from "effect";
-import { successResponse } from "../http/response.js";
+import { defineEndpoint } from "../http/endpoint.js";
+import { errorResponse, successResponse } from "../http/response.js";
 
 /**
  * A Thread's schedule as the Thread shows it: what it sends, when it fires
@@ -137,3 +138,25 @@ export const UpdateTimeZoneRequestSchema = Schema.Struct({
 export const TimeZoneResponseSchema = successResponse(
   Schema.Struct({ timeZone: Schema.String }),
 );
+
+export const UpdateTimeZoneInvalidRequestResponseSchema = errorResponse(
+  "INVALID_REQUEST",
+  "Unknown time zone.",
+);
+
+export const UpdateTimeZonePersistenceUnavailableResponseSchema = errorResponse(
+  "PERSISTENCE_UNAVAILABLE",
+  "Persistence is temporarily unavailable.",
+);
+
+export const UpdateTimeZoneEndpoint = defineEndpoint({
+  id: "settings.timeZone.update",
+  method: "PUT",
+  path: "/v1/settings/personal/time-zone",
+  body: UpdateTimeZoneRequestSchema,
+  success: TimeZoneResponseSchema,
+  refusals: [
+    { status: 400, schema: UpdateTimeZoneInvalidRequestResponseSchema },
+    { status: 503, schema: UpdateTimeZonePersistenceUnavailableResponseSchema },
+  ],
+});

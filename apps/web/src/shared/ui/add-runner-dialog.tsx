@@ -27,6 +27,7 @@ export function AddRunnerDialog({
   onRetry,
   onClose,
   onUse,
+  thisMachine,
 }: {
   readonly open: boolean;
   /** The command and when its code expires (epoch ms); undefined while it loads. */
@@ -42,6 +43,14 @@ export function AddRunnerDialog({
   readonly onRetry: () => void;
   readonly onClose: () => void;
   readonly onUse?: () => void;
+  /**
+   * Inside the Mac app, which is a runner itself: pairs the Mac it runs on
+   * in one click, and what that pairing says while it works or failed.
+   */
+  readonly thisMachine?: {
+    readonly pair: () => void;
+    readonly status?: string | undefined;
+  };
 }) {
   return (
     <DialogRoot
@@ -59,6 +68,25 @@ export function AddRunnerDialog({
               should run on. It installs the runner under ~/.dx and connects it
               to your account. No sudo.
             </DialogDescription>
+            {thisMachine !== undefined &&
+            error === undefined &&
+            connectedName === undefined ? (
+              <div className="add-runner-this-machine">
+                <Button
+                  size="sm"
+                  type="button"
+                  disabled={pairing === undefined}
+                  onClick={thisMachine.pair}
+                >
+                  Pair this Mac
+                </Button>
+                {thisMachine.status === undefined ? (
+                  <span>Or run the command on another machine.</span>
+                ) : (
+                  <span role="status">{thisMachine.status}</span>
+                )}
+              </div>
+            ) : null}
             {error === undefined ? (
               <CommandBlock
                 label="Install command"

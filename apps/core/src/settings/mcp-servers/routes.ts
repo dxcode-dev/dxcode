@@ -5,6 +5,7 @@ import {
   DeleteMcpServerResponseSchema,
   DiscoverMcpServerResponseSchema,
   ListMcpServersResponseSchema,
+  MCP_OAUTH_CALLBACK_PATH,
   type McpOAuthErrorCode,
   type McpServerData,
   McpServerDiscoveryFailedResponseSchema,
@@ -500,7 +501,7 @@ const withSignIns = (
 /** The callback every MCP sign-in returns to, on Core's own origin. */
 const oauthRedirectUrl = (context: Context<AppEnv>) => {
   const url = new URL(context.env.DX_AUTH_URL as string);
-  url.pathname = "/v1/settings/personal/mcp-servers/oauth/callback";
+  url.pathname = MCP_OAUTH_CALLBACK_PATH;
   url.search = "";
   url.hash = "";
   return url.toString();

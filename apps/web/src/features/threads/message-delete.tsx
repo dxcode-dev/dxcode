@@ -1,21 +1,21 @@
+import type { TranscriptViewModel } from "@dx/client";
+import {
+  forgetWaitingEcho,
+  type MessageEditing,
+  targetEntryId,
+  targetOriginal,
+  type UserPromptRow,
+} from "@dx/client";
 import type { UseFlueAgentResult } from "@flue/react";
 import * as React from "react";
 import { settle } from "../../shared/settle.js";
 import { lazyComponent } from "../../shared/stale-chunk.js";
 import type { DeleteTarget } from "./message-delete-dialog.js";
-import {
-  forgetWaitingEcho,
-  type MessageEditing,
-  type MessageEditOptions,
-  targetEntryId,
-  targetOriginal,
-  type UserPromptRow,
-} from "./message-edit-model.js";
+import type { MessageEditOptions } from "./message-edit-model.js";
 import {
   messageQueueFailure,
   messageReadBeforeChange,
 } from "./message-queue-queries.js";
-import type { TranscriptViewModel } from "./transcript-view-model.js";
 import type { AgentSource } from "./use-frame-coalesced-agent-session.js";
 
 // The dialog loads the first time a person deletes a message, so it stays

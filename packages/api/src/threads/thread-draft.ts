@@ -1,6 +1,8 @@
 import { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
+import { ThreadNotFoundResponseSchema } from "./thread-not-found-response.js";
 
 /** The longest draft a person can keep in one composer. */
 export const THREAD_DRAFT_MAX_LENGTH = 65_536;
@@ -81,3 +83,69 @@ export const WorkspaceDraftErrorResponseSchema = Schema.Union([
     "Persistence is temporarily unavailable.",
   ),
 ]);
+
+/** The Thread draft's path parameter; `?slot=` is its query. */
+export const ThreadDraftPathParamsSchema = Schema.Struct({
+  threadId: ThreadId,
+});
+export const ThreadDraftQuerySchema = Schema.Struct({
+  slot: Schema.optional(ThreadDraftSlot),
+});
+
+/** A Space's Thread while Spaces are off answers as `hideSpaceThreads` does. */
+const threadDraftRefusals = [
+  { status: 400, schema: ThreadDraftErrorResponseSchema },
+  { status: 404, schema: ThreadDraftErrorResponseSchema },
+  { status: 503, schema: ThreadDraftErrorResponseSchema },
+  { status: 404, schema: ThreadNotFoundResponseSchema },
+];
+
+const workspaceDraftRefusals = [
+  { status: 400, schema: WorkspaceDraftErrorResponseSchema },
+  { status: 404, schema: WorkspaceDraftErrorResponseSchema },
+  { status: 503, schema: WorkspaceDraftErrorResponseSchema },
+];
+
+export const GetThreadDraftEndpoint = defineEndpoint({
+  id: "drafts.getThread",
+  summary: "Read a Thread's composer draft",
+  method: "GET",
+  path: "/v1/threads/:threadId/draft",
+  params: ThreadDraftPathParamsSchema,
+  query: ThreadDraftQuerySchema,
+  success: ThreadDraftResponseSchema,
+  refusals: threadDraftRefusals,
+});
+
+export const UpdateThreadDraftEndpoint = defineEndpoint({
+  id: "drafts.updateThread",
+  summary: "Save a Thread's composer draft",
+  method: "PUT",
+  path: "/v1/threads/:threadId/draft",
+  params: ThreadDraftPathParamsSchema,
+  query: ThreadDraftQuerySchema,
+  body: UpdateThreadDraftRequestSchema,
+  success: ThreadDraftResponseSchema,
+  refusals: threadDraftRefusals,
+});
+
+export const GetWorkspaceDraftEndpoint = defineEndpoint({
+  id: "drafts.getWorkspace",
+  summary: "Read a New Thread or New Space draft",
+  method: "GET",
+  path: "/v1/drafts/workspaces/:workspace/:slot",
+  params: WorkspaceDraftParamsSchema,
+  success: ThreadDraftResponseSchema,
+  refusals: workspaceDraftRefusals,
+});
+
+export const UpdateWorkspaceDraftEndpoint = defineEndpoint({
+  id: "drafts.updateWorkspace",
+  summary: "Save a New Thread or New Space draft",
+  method: "PUT",
+  path: "/v1/drafts/workspaces/:workspace/:slot",
+  params: WorkspaceDraftParamsSchema,
+  body: UpdateThreadDraftRequestSchema,
+  success: ThreadDraftResponseSchema,
+  refusals: workspaceDraftRefusals,
+});

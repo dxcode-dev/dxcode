@@ -167,8 +167,13 @@ impl Joiner {
 
 // ---------- voxl ----------
 
-/// Whether this runner can have a Desktop.
+/// Whether this runner can have a Desktop. `DX_RUNNER_NO_DESKTOP` turns it
+/// off: a second runner on the same Mac (the dx Preview app's) must not
+/// start another voxl on [`VOXL_PORT`] or use dx.app's privacy grants.
 pub fn supported() -> bool {
+    if std::env::var_os("DX_RUNNER_NO_DESKTOP").is_some() {
+        return false;
+    }
     cfg!(target_os = "macos") || std::env::var_os("DX_RUNNER_DESKTOP_TEST").is_some()
 }
 

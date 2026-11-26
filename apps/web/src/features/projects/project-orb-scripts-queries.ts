@@ -1,7 +1,7 @@
 import {
-  GetProjectOrbScriptsResponseSchema,
+  GetProjectOrbScriptsEndpoint,
   type ProjectOrbScriptsData,
-  UpdateProjectOrbScriptResponseSchema,
+  UpdateProjectOrbScriptEndpoint,
 } from "@dx/api";
 import type { ProjectId, ProjectOrbScriptKind, UserId } from "@dx/domain";
 import {
@@ -9,7 +9,7 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { request } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import { projectKeys } from "./project-queries.js";
 
 export const projectOrbScriptsKey = (userId: UserId, projectId: ProjectId) =>
@@ -23,9 +23,9 @@ export const projectOrbScriptsQueryOptions = (
     queryKey: projectOrbScriptsKey(userId, projectId),
     queryFn: async ({ signal }): Promise<ProjectOrbScriptsData> =>
       (
-        await request(
-          `/v1/projects/${encodeURIComponent(projectId)}/orb-scripts`,
-          GetProjectOrbScriptsResponseSchema,
+        await dxClient.call(
+          GetProjectOrbScriptsEndpoint,
+          { params: { projectId } },
           { signal },
         )
       ).data,
@@ -43,11 +43,10 @@ export const updateProjectOrbScriptMutationOptions = (
     mutationKey: [...projectOrbScriptsKey(userId, projectId), kind],
     mutationFn: async (body: string) =>
       (
-        await request(
-          `/v1/projects/${encodeURIComponent(projectId)}/orb-scripts/${kind}`,
-          UpdateProjectOrbScriptResponseSchema,
-          { method: "PUT", body: JSON.stringify({ body }) },
-        )
+        await dxClient.call(UpdateProjectOrbScriptEndpoint, {
+          params: { projectId, kind },
+          body: { body },
+        })
       ).data,
     onSuccess: (data) =>
       queryClient.setQueryData(projectOrbScriptsKey(userId, projectId), data),

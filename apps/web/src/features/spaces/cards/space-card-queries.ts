@@ -1,8 +1,9 @@
 import {
+  DismissSpaceCatchUpEndpoint,
+  GetSpaceCatchUpEndpoint,
+  GetSpaceThreadEndpoint,
   type SpaceCatchUp,
-  SpaceCatchUpResponseSchema,
   type SpaceThreadItem,
-  SpaceThreadResponseSchema,
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import {
@@ -11,12 +12,9 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { request } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { spaceKeys } from "../space-cache-queries.js";
 import { spaceThreadsQueryOptions } from "../space-queries.js";
-
-const path = (spaceThreadId: ThreadId, rest: string) =>
-  `/v1/spaces/${encodeURIComponent(spaceThreadId)}${rest}`;
 
 export const spaceCardKeys = {
   /** One thread's card; under the Space's thread list, which it refreshes with. */
@@ -32,9 +30,9 @@ const getSpaceThread = async (
   signal?: AbortSignal,
 ): Promise<SpaceThreadItem> =>
   (
-    await request(
-      path(spaceThreadId, `/threads/${encodeURIComponent(threadId)}`),
-      SpaceThreadResponseSchema,
+    await dxClient.call(
+      GetSpaceThreadEndpoint,
+      { params: { threadId: spaceThreadId, childId: threadId } },
       { signal },
     )
   ).data.item;
@@ -82,9 +80,9 @@ const getCatchUp = async (
   signal?: AbortSignal,
 ): Promise<SpaceCatchUp | null> =>
   (
-    await request(
-      path(spaceThreadId, "/catch-up"),
-      SpaceCatchUpResponseSchema,
+    await dxClient.call(
+      GetSpaceCatchUpEndpoint,
+      { params: { threadId: spaceThreadId } },
       { signal },
     )
   ).data.catchUp;
@@ -117,11 +115,9 @@ export const useDismissCatchUp = (userId: UserId, spaceThreadId: ThreadId) => {
   return useMutation({
     mutationKey: [...spaceCardKeys.catchUp(userId, spaceThreadId), "dismiss"],
     mutationFn: async () => {
-      await request(
-        path(spaceThreadId, "/catch-up/dismiss"),
-        SpaceCatchUpResponseSchema,
-        { method: "POST" },
-      );
+      await dxClient.call(DismissSpaceCatchUpEndpoint, {
+        params: { threadId: spaceThreadId },
+      });
     },
     onMutate: () => {
       client.setQueryData(spaceCardKeys.catchUp(userId, spaceThreadId), null);

@@ -1,3 +1,5 @@
+import type { ToolPart } from "@dx/client";
+import { artifactAction as action, artifactOutput as output } from "@dx/client";
 import type { ThreadId } from "@dx/domain";
 import { lazyRouteComponent, useParams } from "@tanstack/react-router";
 import { FileText } from "lucide-react";
@@ -5,11 +7,6 @@ import * as React from "react";
 import { useOpenArtifact } from "../../shared/navigation/open-artifact.js";
 import { Button } from "../../shared/ui/button.js";
 import { ArtifactDeleteLine } from "./artifact-delete-line.js";
-import {
-  artifactAction as action,
-  artifactOutput as output,
-} from "./artifact-tool-part.js";
-import type { ToolPart } from "./transcript-activity-projection.js";
 import { record, stringField } from "./transcript-activity-summary.js";
 
 /**

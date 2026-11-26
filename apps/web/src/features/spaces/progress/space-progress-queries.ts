@@ -1,7 +1,7 @@
-import { type SpaceProgressData, SpaceProgressResponseSchema } from "@dx/api";
+import { GetSpaceProgressEndpoint, type SpaceProgressData } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import { request } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { THREAD_FRESHNESS_SLO_MS } from "../../threads/thread-queries.js";
 import { spaceKeys } from "../space-cache-queries.js";
 
@@ -19,9 +19,9 @@ const getSpaceProgress = async (
   signal?: AbortSignal,
 ): Promise<SpaceProgressData> =>
   (
-    await request(
-      `/v1/spaces/${encodeURIComponent(threadId)}/progress?days=${days}&tz=${encodeURIComponent(timeZone)}`,
-      SpaceProgressResponseSchema,
+    await dxClient.call(
+      GetSpaceProgressEndpoint,
+      { params: { threadId }, query: { days, tz: timeZone } },
       { signal },
     )
   ).data;

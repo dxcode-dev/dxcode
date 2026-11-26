@@ -5,8 +5,8 @@ import { errorResponse, successResponse } from "../http/response.js";
 import { ProjectDataSchema } from "./project-data.js";
 
 export const ListProjectsQuerySchema = Schema.Struct({
-  cursor: Schema.optional(PageCursor),
   limit: Schema.optional(PageLimitQuerySchema),
+  cursor: Schema.optional(PageCursor),
 });
 
 export const ListProjectsResponseSchema = successResponse(

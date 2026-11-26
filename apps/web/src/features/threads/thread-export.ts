@@ -1,10 +1,10 @@
 import type { ProjectData, ThreadDetailData } from "@dx/api";
-import { DateTime } from "effect";
 import type {
   TranscriptRow,
   TranscriptTurn,
   TranscriptViewModel,
-} from "./transcript-view-model.js";
+} from "@dx/client";
+import { DateTime } from "effect";
 
 export const THREAD_EXPORT_FORMAT = "dx-thread-export";
 export const THREAD_EXPORT_VERSION = 1;
