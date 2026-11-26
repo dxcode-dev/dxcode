@@ -7,6 +7,7 @@
  * Loaded only when it is used.
  */
 import type { Mark, Node } from "prosemirror-model";
+import { safeHref } from "../markdown/artifact-markdown.js";
 import { parseChip } from "../markdown/chips.js";
 import { chipLabel } from "./chip-views.js";
 
@@ -42,7 +43,9 @@ const inline = (node: Node): Content[] => {
         text.fontSize = 9.5;
       }
       if (link !== undefined) {
-        text.link = String(link.attrs.href);
+        // A link the app would not follow stays text in the PDF too.
+        if (safeHref(String(link.attrs.href)))
+          text.link = String(link.attrs.href);
         text.color = "#0969da";
         decorations.push("underline");
       }

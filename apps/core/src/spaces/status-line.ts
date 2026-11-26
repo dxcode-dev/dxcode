@@ -543,7 +543,10 @@ export const workersAiFinishedLine: FinishedLineWriter = async ({
   const answer = await runSpaceModel(bindings, {
     purpose: "status_line",
     system: FINISHED_LINE_PROMPT,
-    user: `<agent_message>\n${reply.slice(-REPLY_LIMIT)}\n</agent_message>`,
+    // The reply can't close the tags and speak outside them.
+    user: `<agent_message>\n${reply
+      .slice(-REPLY_LIMIT)
+      .replace(/<\/?agent_message>/gi, "")}\n</agent_message>`,
     maxTokens: 128,
   });
   return (

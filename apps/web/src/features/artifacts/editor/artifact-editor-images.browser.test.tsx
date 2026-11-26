@@ -131,7 +131,7 @@ afterEach(async () => {
   FakeUpload.all = [];
 });
 
-const mount = async (markdown: string) => {
+const mount = async (markdown: string, readOnly = false) => {
   saves.length = 0;
   vi.stubGlobal("XMLHttpRequest", FakeUpload);
   // Saves succeed, as the server answers them; other reads never settle.
@@ -173,7 +173,7 @@ const mount = async (markdown: string) => {
           <ArtifactEditor
             threadId={threadId}
             initial={{ artifact: artifact(), markdown }}
-            readOnly={false}
+            readOnly={readOnly}
             switcher={null}
           />
         </AuthContext>
@@ -400,6 +400,32 @@ describe("an image in the document", () => {
     ).toBe("Weekly chart");
     expect(await lastSave()).toBe(
       `Intro\n\n![Weekly chart](${URL_OF("wide.png")})\n`,
+    );
+  });
+
+  // Issue #2589: an image's source opens only when a link could follow it.
+  it("opens only a source a link could follow, without a referrer", async () => {
+    const opened = vi.spyOn(window, "open").mockImplementation(() => null);
+    const { prose } = await mount(
+      `![safe](${URL_OF("wide.png")})\n\n![unsafe](ms-msdt:id=PCWDiagnostic)\n`,
+      true,
+    );
+    const [safe, unsafe] = [
+      ...prose.querySelectorAll<HTMLElement>(".artifact-image"),
+    ];
+    if (safe === undefined || unsafe === undefined)
+      throw new Error("Expected two images.");
+    const open = (image: HTMLElement) =>
+      image.querySelector<HTMLAnchorElement>("a[aria-label='Open image']");
+    expect(open(safe)?.getAttribute("href")).toBe(URL_OF("wide.png"));
+    expect(open(unsafe)?.hasAttribute("href")).toBe(false);
+    await userEvent.click(unsafe.querySelector("img") as HTMLImageElement);
+    expect(opened).not.toHaveBeenCalled();
+    await userEvent.click(safe.querySelector("img") as HTMLImageElement);
+    expect(opened).toHaveBeenCalledWith(
+      URL_OF("wide.png"),
+      "_blank",
+      "noopener,noreferrer",
     );
   });
 });

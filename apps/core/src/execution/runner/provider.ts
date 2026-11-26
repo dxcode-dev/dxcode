@@ -226,7 +226,11 @@ const openRunnerWorkspace = async (
   context: ExecutionContext,
   threadId: string,
   existingOnly: boolean,
+  authorize?: () => Promise<void>,
 ): Promise<ExecutionWorkspaceHandle> => {
+  // A run is admitted before the machine creates, restores, or clones
+  // anything (#2585); a reconnect's activation checks the Thread itself.
+  await authorize?.();
   const bindings = env as Bindings;
   const machineId = machineOf(context);
   const driver = new RunnerSandboxDriver(bindings, machineId, threadId);
@@ -277,8 +281,8 @@ const openRunnerWorkspace = async (
  */
 export const runnerExecutionProvider: ExecutionProvider = {
   workspace: {
-    create: (context, { threadId }) =>
-      openRunnerWorkspace(context, threadId, false),
+    create: (context, { threadId }, { authorize }) =>
+      openRunnerWorkspace(context, threadId, false, authorize),
     connect: (context, { threadId }) =>
       openRunnerWorkspace(context, threadId, true),
     async release(context, { threadId }, mode) {

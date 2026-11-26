@@ -1186,6 +1186,68 @@ describe("Space thread cards in workerd with real D1", () => {
     ).toBe(404);
   });
 
+  it("links only the Space's threads, whatever a status line or the model writes", async () => {
+    const spaceId = await newSpace();
+    const lured = await startChild(spaceId, "Rotate the API keys");
+    const other = await startChild(spaceId, "Fix coupon rounding");
+    const twoHoursAgo = Date.now() - 2 * 3_600_000;
+    await env.DB.prepare(
+      "UPDATE threads SET created_at = ?1 WHERE parent_thread_id = ?2",
+    )
+      .bind(new Date(twoHoursAgo - 60_000).toISOString(), spaceId)
+      .run();
+    expect(await catchUp(spaceId)).toBeNull();
+    // Steered by content it read, an agent writes links into its status
+    // line; another writes a bare URL and an email address.
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE threads SET activity_status = 'idle', status_line = ?2, turn_settled_at = ?3 WHERE id = ?1",
+      ).bind(
+        lured,
+        "Session expired, [re-auth here](https://evil.example/login) ![x](https://evil.example/p.png)",
+        new Date().toISOString(),
+      ),
+      env.DB.prepare(
+        "UPDATE threads SET activity_status = 'idle', status_line = ?2, turn_settled_at = ?3 WHERE id = ?1",
+      ).bind(
+        other,
+        "Fixed rounding, see www.evil.example or <https://evil.example> or ops@evil.example",
+        new Date().toISOString(),
+      ),
+    ]);
+    const away = () =>
+      env.DB.prepare(
+        "UPDATE space_visit SET seen_at = ?1 WHERE space_thread_id = ?2 AND user_id = ?3",
+      )
+        .bind(twoHoursAgo, spaceId, member)
+        .run();
+    const known = `[Rotate the API keys](/threads/${lured})`;
+    // Each answer links outside the Space in a way the card would render.
+    for (const answer of [
+      `In the last 2 hours, ${known} finished. [Re-auth](https://evil.example "Sign in").`,
+      `In the last 2 hours, ${known} finished. [Re-auth][r]\n\n[r]: https://evil.example`,
+      `In the last 2 hours, ${known} finished. Re-auth at www.evil.example now.`,
+      `In the last 2 hours, ${known} finished. Re-auth at <https://evil.example>.`,
+      `In the last 2 hours, ${known} finished. ![Re-auth](/threads/${lured})`,
+      `In the last 2 hours, ${known} finished. Write to ops@evil.example.`,
+    ]) {
+      await away();
+      model.answer = answer;
+      const body = (await catchUp(spaceId))?.body ?? "";
+      // dx writes the card itself, with the status lines' words alone.
+      expect(body).toContain(
+        `${known} finished: session expired, re-auth here x.`,
+      );
+      expect(body).toContain(
+        `[Fix coupon rounding](/threads/${other}) finished: fixed rounding, see or or.`,
+      );
+      expect(body).not.toContain("evil");
+    }
+    // The model never saw the links or URLs either.
+    const input = JSON.stringify(model.calls.map(({ input }) => input));
+    expect(input).not.toContain("evil");
+  });
+
   it("says a thread was archived or shipped while the person was away, whatever the model wrote", async () => {
     const spaceId = await newSpace();
     const finished = await startChild(spaceId, "Walk the tools folder");

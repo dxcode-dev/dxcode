@@ -401,7 +401,7 @@ describe("Runners", () => {
       runnerExecutionProvider.workspace.create(
         contextFor(machineId),
         { threadId: threadId as never },
-        {} as never,
+        { authorize: async () => undefined },
       ),
     ).rejects.toThrow(`runner:prerequisites:${NO_GIT}`);
   });
@@ -476,10 +476,28 @@ describe("Runners", () => {
     ).toBe("RUNNER_THREAD_OWNER_ONLY");
 
     const context = contextFor(machineId);
+    // A refused run never reaches the machine: no folder, no restore, no
+    // clone before the policy says no (#2585).
+    const runRefused = new Error("run refused");
+    const opsBeforeRefusal = machine.ops.length;
+    await expect(
+      runnerExecutionProvider.workspace.create(
+        context,
+        { threadId: threadId as never },
+        {
+          authorize: async () => {
+            throw runRefused;
+          },
+        },
+      ),
+    ).rejects.toBe(runRefused);
+    expect(machine.ops.slice(opsBeforeRefusal)).toEqual([]);
+    expect(machine.folders.has(threadId)).toBe(false);
+
     const handle = await runnerExecutionProvider.workspace.create(
       context,
       { threadId: threadId as never },
-      {} as never,
+      { authorize: async () => undefined },
     );
     expect(handle.hostMachine).toBe(true);
     const sandbox = await handle.sandbox("/home/user/workspace/repo");
@@ -524,7 +542,7 @@ describe("Runners", () => {
     const restored = await runnerExecutionProvider.workspace.create(
       context,
       { threadId: threadId as never },
-      {} as never,
+      { authorize: async () => undefined },
     );
     expect(
       await (await restored.sandbox("/home/user/workspace/repo")).readFile(

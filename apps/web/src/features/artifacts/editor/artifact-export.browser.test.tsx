@@ -56,6 +56,8 @@ const artifact: ThreadArtifact = {
 const MARKDOWN = [
   "Ship it today.",
   "",
+  "See [Docs](https://example.com/docs) and [Report](ms-msdt:id=PCWDiagnostic).",
+  "",
   "- [x] Done item",
   "- [ ] Open item",
   "",
@@ -368,6 +370,10 @@ describe("artifact export", () => {
       expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe("%PDF-");
       // More than a blank page: the text, a table, and the image.
       expect(pdf.size).toBeGreaterThan(5_000);
+      // Issue #2589: a link the app would not follow stays text in the PDF.
+      const text = new TextDecoder("latin1").decode(bytes);
+      expect(text.includes("/URI (https://example.com/docs)")).toBe(true);
+      expect(text.includes("ms-msdt")).toBe(false);
     });
 
     it("finishes with one more tap when the phone wants a fresh one", async () => {

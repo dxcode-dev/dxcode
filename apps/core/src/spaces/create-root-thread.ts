@@ -49,6 +49,8 @@ export const createSpaceRootThread = async (
     readonly claudeConnectionId?: string;
     /** The Orb size its coordinator runs on (`resolveSpaceCoordinatorOrb`). */
     readonly coordinatorOrb?: string;
+    /** That size is the deployment's default, so it may be out of the picker. */
+    readonly unofferedOrb?: true;
   },
 ): Promise<
   | { readonly ok: true; readonly threadId: ThreadId }
@@ -69,7 +71,11 @@ export const createSpaceRootThread = async (
       "threadCreation",
       input.coordinatorOrb === undefined
         ? { kind: "space", executionMode: "executor" }
-        : { kind: "space", coordinatorOrb: true },
+        : {
+            kind: "space",
+            coordinatorOrb: true,
+            ...(input.unofferedOrb === true ? { unofferedOrb: true } : {}),
+          },
     );
     await next();
   });

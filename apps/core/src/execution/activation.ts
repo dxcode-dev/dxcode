@@ -951,6 +951,8 @@ const activationFor =
             throw cause;
           }),
         );
+        // Fail closed when a provider opened without calling `authorize`.
+        await admission?.admitted;
         void recordActiveSubmissionPhase(bindings, id, "workspace_resolved");
         if (needsFirstReadiness) reportPreparation("Preparing source…");
         let prepared: Awaited<ReturnType<typeof prepareSource>>;

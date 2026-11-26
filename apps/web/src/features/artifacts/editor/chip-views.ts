@@ -19,6 +19,7 @@ export type NodeViews = NonNullable<EditorProps["nodeViews"]>;
 
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
 import { PROJECTS_ICON_PATH } from "../../../shared/ui/projects-icon.js";
+import { safeHref } from "../markdown/artifact-markdown.js";
 import {
   type Chip,
   chipTag,
@@ -310,9 +311,10 @@ class ImageView implements NodeView {
     this.dom.append(this.#image, this.#tools);
     // A reader taps the image itself to see it full size.
     if (!view.editable)
-      this.#image.addEventListener("click", () =>
-        window.open(String(this.#node.attrs.src), "_blank", "noopener"),
-      );
+      this.#image.addEventListener("click", () => {
+        const src = String(this.#node.attrs.src);
+        if (safeHref(src)) window.open(src, "_blank", "noopener,noreferrer");
+      });
     this.#render();
   }
 
@@ -322,7 +324,9 @@ class ImageView implements NodeView {
     this.#image.alt = String(alt ?? "");
     if (title === null) this.#image.removeAttribute("title");
     else this.#image.title = String(title);
-    this.#open.href = String(src);
+    // Only a source a link could follow opens: not `ms-msdt:` and the like.
+    if (safeHref(String(src))) this.#open.href = String(src);
+    else this.#open.removeAttribute("href");
   }
 
   #editAlt() {

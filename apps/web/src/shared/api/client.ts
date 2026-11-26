@@ -4,7 +4,6 @@ import {
   ArchiveThreadNotFoundResponseSchema,
   ArchiveThreadPersistenceUnavailableResponseSchema,
   ArchiveThreadProjectDeletedResponseSchema,
-  BeginPersonalModelSubscriptionAuthorizationResponseSchema,
   CreateProjectForbiddenResponseSchema,
   CreateProjectInvalidRequestResponseSchema,
   CreateProjectNameConflictResponseSchema,
@@ -34,7 +33,6 @@ import {
   DeleteThreadInvalidRequestResponseSchema,
   DeleteThreadNotFoundResponseSchema,
   DeleteThreadPersistenceUnavailableResponseSchema,
-  DisconnectPersonalModelSubscriptionResponseSchema,
   FollowThreadEndpoint,
   GetSidebarLayoutEndpoint,
   GetThreadDraftEndpoint,
@@ -45,23 +43,16 @@ import {
   GetThreadReadinessEndpoint,
   GetWorkspaceDraftEndpoint,
   IntegrationsErrorResponseSchema,
-  ListPersonalModelSubscriptionsResponseSchema,
   ListSharedThreadsEndpoint,
   ListThreadsEndpoint,
   MarkThreadSeenEndpoint,
   PersonalAccountPersistenceUnavailableResponseSchema,
-  PersonalModelSubscriptionBrowserSessionRequiredResponseSchema,
-  PersonalModelSubscriptionInUseResponseSchema,
-  PersonalModelSubscriptionNotFoundResponseSchema,
-  PersonalModelSubscriptionUnavailableResponseSchema,
   PinThreadEndpoint,
   PluginBundlesErrorResponseSchema,
-  PollPersonalModelSubscriptionAuthorizationResponseSchema,
   type ProjectData,
   ProjectIconNotImageResponseSchema,
   ProjectIconTooLargeResponseSchema,
   ProjectOrbScriptsForbiddenResponseSchema,
-  RefreshPersonalModelSubscriptionResponseSchema,
   RetryInitialDispatchEndpoint,
   SearchThreadsEndpoint,
   type SearchThreadsItem,
@@ -234,10 +225,6 @@ export const request = async <
         PersonalAccountPersistenceUnavailableResponseSchema,
         // Skill routes send it too.
         WorkspacePolicyErrorResponseSchema,
-        PersonalModelSubscriptionNotFoundResponseSchema,
-        PersonalModelSubscriptionBrowserSessionRequiredResponseSchema,
-        PersonalModelSubscriptionInUseResponseSchema,
-        PersonalModelSubscriptionUnavailableResponseSchema,
         SkillsErrorResponseSchema,
         PluginBundlesErrorResponseSchema,
         IntegrationsErrorResponseSchema,
@@ -606,58 +593,6 @@ export const getThreadReadiness = async (
 export type ModelRoutingTarget =
   | { readonly scope: "personal" }
   | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
-
-const personalModelSubscriptionsBase =
-  "/v1/settings/personal/model-routing/subscriptions";
-
-export const listPersonalModelSubscriptions = async (signal?: AbortSignal) =>
-  (
-    await request(
-      personalModelSubscriptionsBase,
-      ListPersonalModelSubscriptionsResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const beginGitHubCopilotAuthorization = async () =>
-  (
-    await request(
-      `${personalModelSubscriptionsBase}/github-copilot/authorize`,
-      BeginPersonalModelSubscriptionAuthorizationResponseSchema,
-      { method: "POST" },
-    )
-  ).data;
-
-export const pollPersonalModelSubscriptionAuthorization = async (
-  authorizationId: string,
-) =>
-  (
-    await request(
-      `${personalModelSubscriptionsBase}/authorization/${encodeURIComponent(authorizationId)}/poll`,
-      PollPersonalModelSubscriptionAuthorizationResponseSchema,
-      { method: "POST" },
-    )
-  ).data;
-
-export const refreshPersonalModelSubscription = async (connectionId: string) =>
-  (
-    await request(
-      `${personalModelSubscriptionsBase}/connections/${encodeURIComponent(connectionId)}/refresh`,
-      RefreshPersonalModelSubscriptionResponseSchema,
-      { method: "POST" },
-    )
-  ).data;
-
-export const disconnectPersonalModelSubscription = async (
-  connectionId: string,
-) =>
-  (
-    await request(
-      `${personalModelSubscriptionsBase}/connections/${encodeURIComponent(connectionId)}`,
-      DisconnectPersonalModelSubscriptionResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
 
 export const getThread = async (
   threadId: string,

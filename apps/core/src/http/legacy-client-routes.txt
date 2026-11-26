@@ -1,7 +1,6 @@
 # Core /v1 routes no dx client calls through an endpoint in @dx/api yet.
 # Move a route out of this list by defining its endpoint (wiki/headless-client.md).
 # Never add a line: a new route gets an endpoint, or goes in non-client-routes.txt.
-DELETE /v1/settings/personal/model-routing/subscriptions/connections/:connectionId
 DELETE /v1/settings/personal/plugin-bundles/:pluginId
 DELETE /v1/settings/personal/plugin-bundles/:pluginId/share
 DELETE /v1/settings/personal/plugin-catalogs/:catalogId
@@ -22,7 +21,6 @@ GET /v1/huddle-links/:workspace/:code
 GET /v1/plugins/icons/lucide/:name
 GET /v1/plugins/views
 GET /v1/realtime
-GET /v1/settings/personal/model-routing/subscriptions
 GET /v1/settings/personal/plugin-bundles
 GET /v1/settings/personal/plugin-bundles/:pluginId/export
 GET /v1/settings/personal/plugin-bundles/:pluginId/host-usage
@@ -63,9 +61,6 @@ PATCH /v1/settings/workspaces/:workspaceSlug/skills/policy
 POST /v1/agents/dx/:id
 POST /v1/bug-reports
 POST /v1/bug-reports/:id/investigation
-POST /v1/settings/personal/model-routing/subscriptions/:provider/authorize
-POST /v1/settings/personal/model-routing/subscriptions/authorization/:authorizationId/poll
-POST /v1/settings/personal/model-routing/subscriptions/connections/:connectionId/refresh
 POST /v1/settings/personal/plugin-bundles
 POST /v1/settings/personal/plugin-bundles/:pluginId/share
 POST /v1/settings/personal/plugin-bundles/:pluginId/update

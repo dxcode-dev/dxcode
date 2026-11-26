@@ -152,6 +152,37 @@ const rejectDelivery = (context: Context<AppEnv>, message: string) =>
   );
 
 /**
+ * The conversation views Flue answers on the agent route. Flue's `queued`
+ * view lists every sender's waiting messages, so the route refuses it: dx
+ * reads the queue only through its own route, which shows each person
+ * their own (`threads/message-queue-routes.ts`).
+ */
+const AGENT_READ_VIEWS = new Set([
+  "history",
+  "prompts",
+  "updates",
+  "settlements",
+  "output-head",
+  "validate-output",
+  "admission",
+]);
+
+/** Refuses an agent route read of a view outside `AGENT_READ_VIEWS`. */
+export const guardAgentReads: MiddlewareHandler<AppEnv> = async (
+  context,
+  next,
+) => {
+  const view = new URL(context.req.url).searchParams.get("view");
+  if (
+    context.req.method !== "GET" ||
+    view === null ||
+    AGENT_READ_VIEWS.has(view)
+  )
+    return next();
+  return rejectDelivery(context, "This view cannot be read.");
+};
+
+/**
  * Names the sender of every user message the agent receives: the body gains a
  * `<dx_message_author …/>` tag before Flue admits it. The model sees who is
  * speaking; clients label the message from the same tag. Everything the agent
@@ -189,17 +220,22 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     .clone()
     .json()
     .catch(() => undefined);
-  // Flue renders a signal's tag and attributes verbatim, so a signal could
-  // pose as any sender, and a chat delivery would skip the author tag. dx
-  // never sends either over HTTP. A rewind comes only from the message edit
-  // route, which checks who sent the message first.
+  // Only a user message (and a resume, which carries no text) reaches Flue
+  // over HTTP. Flue renders a signal's tag and attributes verbatim, so a
+  // signal could pose as any sender, and a chat delivery would skip the
+  // author tag. A rewind, withdraw, or replace acts on someone's message
+  // without checking who sent it: dx sends those only from its message
+  // routes, which check the sender first and call Flue directly.
   if (
     typeof delivered === "object" &&
     delivered !== null &&
     "kind" in delivered &&
-    (delivered.kind === "signal" ||
-      delivered.kind === "chat" ||
-      delivered.kind === "rewind")
+    !(
+      (delivered.kind === "user" &&
+        "body" in delivered &&
+        typeof delivered.body === "string") ||
+      delivered.kind === "resume"
+    )
   )
     return rejectDelivery(
       context,

@@ -67,7 +67,9 @@ const localGuest = (sandbox: Sandbox) => ({
 const openLocalWorkspace = async (
   threadId: string,
   existingOnly: boolean,
+  authorize?: () => Promise<void>,
 ): Promise<ExecutionWorkspaceHandle> => {
+  await authorize?.();
   const bindings = env as Bindings;
   const sandbox = await localSandboxFactory(
     bindings,
@@ -92,7 +94,8 @@ const openLocalWorkspace = async (
  */
 export const localExecutionProvider: ExecutionProvider = {
   workspace: {
-    create: (_context, { threadId }) => openLocalWorkspace(threadId, false),
+    create: (_context, { threadId }, { authorize }) =>
+      openLocalWorkspace(threadId, false, authorize),
     connect: (_context, { threadId }) => openLocalWorkspace(threadId, true),
     async release(_context, { threadId }, mode) {
       await requestLocalRuntime(

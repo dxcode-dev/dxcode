@@ -333,6 +333,15 @@ importers:
       jpeg-js:
         specifier: 0.4.4
         version: 0.4.4
+      mdast-util-from-markdown:
+        specifier: 2.0.3
+        version: 2.0.3(supports-color@10.2.2)
+      mdast-util-gfm:
+        specifier: 3.1.0
+        version: 3.1.0(supports-color@10.2.2)
+      micromark-extension-gfm:
+        specifier: 3.0.0
+        version: 3.0.0
       omggif:
         specifier: 1.0.10
         version: 1.0.10

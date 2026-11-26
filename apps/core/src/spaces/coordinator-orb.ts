@@ -4,12 +4,17 @@ import {
 } from "@dx/api";
 import {
   type Principal,
+  type RunnerProfileId,
   WorkspaceSlug,
   workspaceRoleHasPermission,
 } from "@dx/domain";
 import { Effect, Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { registeredSpaceCoordinatorDefault } from "../execution/deployment-orbs-registration.js";
+import {
+  loadRunnerProfileCatalog,
+  selectRunnerProfile,
+} from "../execution/runner-profiles/catalog.js";
 import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { spaceLogger } from "../logging.js";
@@ -54,6 +59,22 @@ type Scope = "personal" | "workspace";
 /** The message a refused Space shows: where to choose an Orb. */
 export const SPACE_ORB_UNAVAILABLE_MESSAGE =
   "Spaces on Claude Code run their coordinator on an Orb. Choose one in Settings → Orb Providers → Space coordinator, or ask your workspace admin to choose one for the workspace.";
+
+/**
+ * Whether the Orb picker offers `runnerProfileId` now. A person or workspace
+ * chooses only among offered sizes; a size the deployment keeps out of the
+ * picker runs a coordinator only as the deployment's own default.
+ */
+const offered = (bindings: Bindings, runnerProfileId: RunnerProfileId) =>
+  Effect.runPromise(
+    loadRunnerProfileCatalog(bindings).pipe(
+      Effect.flatMap((catalog) =>
+        selectRunnerProfile(catalog, runnerProfileId),
+      ),
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    ),
+  );
 
 /** The person's and their workspace's choices, in one read. */
 const loadChoices = async (db: D1Database, userId: string) => {
@@ -234,6 +255,16 @@ const routes = (
           "Choose an Orb size, or none.",
         );
       const runnerProfileId = body.value.runnerProfileId;
+      if (
+        runnerProfileId !== null &&
+        !(await offered(context.env, runnerProfileId))
+      )
+        return failure(
+          context,
+          400,
+          "INVALID_REQUEST",
+          "Choose an Orb size the Orb picker offers, or none.",
+        );
       if (runnerProfileId === null)
         await db
           .prepare(

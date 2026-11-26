@@ -5,6 +5,9 @@ import {
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import { DateTime } from "effect";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 import type { Bindings } from "../http/types.js";
 import { listSpaceThreadRows } from "./repository-d1.js";
 import { spaceThreadState } from "./service.js";
@@ -62,6 +65,22 @@ export interface CatchUpThread {
   readonly change?: { readonly kind: CatchUpChange; readonly at: number };
 }
 
+/**
+ * A status line as plain words: without Markdown links or images, URLs, or
+ * email addresses, which the card would render as links. An agent writes
+ * its status line, and repository or web content can steer what it says.
+ */
+const plainStatusLine = (line: string | null) => {
+  if (line === null) return null;
+  const plain = line
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/(?:[a-z][\w+.-]*:\/\/|www\.)\S*|\S+@\S+\.\S+/gi, "")
+    .replace(/[[\]<>\\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return plain === "" ? null : plain;
+};
+
 const at = (value: string | number | null | undefined) =>
   value === null || value === undefined
     ? Number.NaN
@@ -99,7 +118,7 @@ export const catchUpThreads = async (
       id: row.id,
       title: String(row.title),
       state,
-      statusLine: lineIsNew ? row.status_line : null,
+      statusLine: lineIsNew ? plainStatusLine(row.status_line) : null,
       started: changes.some(({ kind }) => kind === "started"),
       changed: changes.length > 0,
       ...(changes[0] === undefined ? {} : { change: changes[0] }),
@@ -132,7 +151,7 @@ export const awayPhrase = (milliseconds: number) => {
 };
 
 const link = (thread: CatchUpThread) =>
-  `[${thread.title.replace(/[[\]]/g, "")}](/threads/${thread.id})`;
+  `[${thread.title.replace(/[[\]<>\\]/g, "")}](/threads/${thread.id})`;
 
 const lower = (line: string) =>
   /^[A-Z][a-z]/.test(line)
@@ -210,21 +229,55 @@ export type CatchUpWriter = (input: {
   readonly now: number;
 }) => Promise<string>;
 
+interface MarkdownNode {
+  readonly type: string;
+  readonly url?: string;
+  readonly children?: ReadonlyArray<MarkdownNode>;
+}
+
 /**
- * Keeps a model's note only when it links nothing but the Space's own
- * threads, names at least one of them, and fits the card.
+ * Every link the card would render from `note`, parsed as the web parses it
+ * (GFM): inline links and autolinks by their target, and images,
+ * references, definitions, and footnotes as `undefined`, which no thread
+ * link matches.
+ */
+const linkTargets = (note: string): ReadonlyArray<string | undefined> => {
+  const targets: Array<string | undefined> = [];
+  const walk = (node: MarkdownNode) => {
+    if (node.type === "link") targets.push(node.url);
+    else if (
+      node.type === "image" ||
+      node.type === "imageReference" ||
+      node.type === "linkReference" ||
+      node.type === "definition" ||
+      node.type === "footnoteReference" ||
+      node.type === "footnoteDefinition"
+    )
+      targets.push(undefined);
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(
+    fromMarkdown(note, {
+      extensions: [gfm()],
+      mdastExtensions: [gfmFromMarkdown()],
+    }),
+  );
+  return targets;
+};
+
+/**
+ * Keeps a note only when it links nothing but the Space's own threads,
+ * names at least one of them, and fits the card.
  */
 export const acceptedCatchUp = (
   text: string,
   threads: ReadonlyArray<CatchUpThread>,
 ): string | undefined => {
   const note = text.trim();
-  if (note === "" || note.length > 1_500) return undefined;
+  if (note === "" || note.length > 1_500 || /^#/m.test(note)) return undefined;
   const known = new Set(threads.map(({ id }) => `/threads/${id}`));
-  const links = [...note.matchAll(/\]\(([^)\s]+)\)/g)].map((m) => m[1]);
+  const links = linkTargets(note);
   if (links.length === 0 || links.some((href) => !known.has(href ?? "")))
-    return undefined;
-  if (/https?:\/\//.test(note.replace(/\]\([^)]*\)/g, "]")) || /^#/m.test(note))
     return undefined;
   return note;
 };
@@ -268,7 +321,14 @@ export const workersAiCatchUp: CatchUpWriter = async ({
   awayMs,
   now,
 }) => {
-  const fallback = writtenCatchUp(threads, awayMs);
+  // dx's own card passes the same check; if a status line still makes a
+  // link, the card leaves the status lines out.
+  const fallback =
+    acceptedCatchUp(writtenCatchUp(threads, awayMs), threads) ??
+    writtenCatchUp(
+      threads.map((thread) => ({ ...thread, statusLine: null })),
+      awayMs,
+    );
   const answer = await runSpaceModel(bindings, {
     purpose: "catch_up",
     system: CATCH_UP_PROMPT,

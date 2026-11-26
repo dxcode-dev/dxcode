@@ -837,13 +837,10 @@ const registerRoutes = (
         return yield* invalid(fieldError("request", "Change enabled."));
       }
       const { db, keyring } = yield* dependencies(context);
-      const access = yield* withEnvironment(
-        db,
-        queryTarget(context, routeFor(context)),
+      const access = yield* authorizeWithBrowserSession(
+        context,
+        withEnvironment(db, queryTarget(context, routeFor(context))),
       );
-      if (!access.canMutate) {
-        return yield* new SettingsScopeForbidden({ scope: "workspace" });
-      }
       const stored = yield* withEnvironment(
         db,
         Effect.gen(function* () {
@@ -874,13 +871,10 @@ const registerRoutes = (
       // The stored kind decides whether empty is allowed; the service checks it.
       const value = yield* validateValue(body.value, "variable");
       const { db, keyring } = yield* dependencies(context);
-      const access = yield* withEnvironment(
-        db,
-        queryTarget(context, routeFor(context)),
+      const access = yield* authorizeWithBrowserSession(
+        context,
+        withEnvironment(db, queryTarget(context, routeFor(context))),
       );
-      if (!access.canMutate) {
-        return yield* new SettingsScopeForbidden({ scope: "workspace" });
-      }
       const stored = yield* withEnvironment(
         db,
         Effect.gen(function* () {
@@ -906,13 +900,10 @@ const registerRoutes = (
     const operation = Effect.gen(function* () {
       const id = yield* parseIdentifier(context);
       const { db } = yield* dependencies(context);
-      const access = yield* withEnvironment(
-        db,
-        queryTarget(context, routeFor(context)),
+      const access = yield* authorizeWithBrowserSession(
+        context,
+        withEnvironment(db, queryTarget(context, routeFor(context))),
       );
-      if (!access.canMutate) {
-        return yield* new SettingsScopeForbidden({ scope: "workspace" });
-      }
       yield* withEnvironment(
         db,
         Effect.gen(function* () {

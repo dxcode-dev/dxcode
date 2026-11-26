@@ -103,6 +103,7 @@ export * from "./settings/mcp-servers-endpoints.js";
 export * from "./settings/model-routing.js";
 export * from "./settings/model-routing-endpoints.js";
 export * from "./settings/model-subscriptions.js";
+export * from "./settings/model-subscriptions-endpoints.js";
 export * from "./settings/orb-providers.js";
 export * from "./settings/orb-providers-endpoints.js";
 export * from "./settings/orb-usage.js";

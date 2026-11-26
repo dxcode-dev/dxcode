@@ -5,7 +5,10 @@ import type { AppEnv } from "../http/types.js";
 import { tracedMiddleware } from "../observability/boundaries.js";
 import { submissionStartupObservation } from "../observability/submission-startup.js";
 import { hideSpaceThreads } from "../spaces/availability.js";
-import { attributeSubmission } from "../thread-sharing/middleware.js";
+import {
+  attributeSubmission,
+  guardAgentReads,
+} from "../thread-sharing/middleware.js";
 import { deliverFirstMessageBeforeCreatingSend } from "../threads/initial-dispatch-delivery.js";
 
 const authorize = tracedMiddleware("agent.authorizeThread", authorizeThread);
@@ -44,6 +47,8 @@ export const useAgentAdmission = (routes: Hono<AppEnv>) => {
   routes.use("/:threadId/:subpath{.+}", authorize);
   routes.use("/:threadId", active);
   routes.use("/:threadId/:subpath{.+}", active);
+  // Untraced: a view check, with no I/O to time.
+  routes.use("/:threadId", guardAgentReads);
   routes.use("/:threadId", attribute);
   routes.use("/:threadId", firstMessage);
   routes.use("/:threadId", startup);

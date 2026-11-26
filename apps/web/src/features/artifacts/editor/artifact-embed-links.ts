@@ -125,33 +125,46 @@ export const embedDecorations = (state: EditorState, host: EmbedHost) => {
 
 /** Lines a document's preview shows. */
 const PREVIEW_LINES = 6;
+/** Characters of a line the preview reads; it shows one line, clipped. */
+const PREVIEW_LINE_LENGTH = 500;
+
+/**
+ * A line of Markdown as plain text. Each pattern stops at the next
+ * delimiter it would also start on, so it runs in time linear in the
+ * line: an artifact anyone can write must not freeze its readers.
+ */
+const plainLine = (line: string) =>
+  line
+    .slice(0, PREVIEW_LINE_LENGTH)
+    .replace(
+      /^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+[.)]\s+)/,
+      "",
+    )
+    .replace(/!\[[^[\]]*\]\([^()]*\)/g, "")
+    .replace(/\[([^[\]]*)\]\([^()]*\)/g, "$1")
+    // A project chip reads as its Project's name, any other chip as its value.
+    .replace(/\{\{project:[^{}|]*\|([^{}]*)\}\}/g, "$1")
+    .replace(/\{\{[a-z]+(?:#[\w-]+)?:([^{}|]*)(?:\|[^{}]*)?\}\}/g, "$1")
+    .replace(/[*_`~]+/g, "")
+    .trim();
 
 /**
  * A document's opening lines as plain text: Markdown marks, chips, and
  * blank lines dropped, so the preview reads like the document's start.
  */
-export const documentExcerpt = (markdown: string) =>
-  markdown
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(
-          /^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+[.)]\s+)/,
-          "",
-        )
-        .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
-        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-        .replace(/@\[([^\]]+)\]\([^)]*\)/g, "@$1")
-        // A project chip reads as its Project's name, any other chip as its value.
-        .replace(/\{\{project:[^|}]*\|([^}]*)\}\}/g, "$1")
-        .replace(/\{\{[a-z]+(?:#[\w-]+)?:([^}|]*)[^}]*\}\}/g, "$1")
-        .replace(/[*_`~]+/g, "")
-        .trim(),
-    )
-    .filter((line) => line !== "" && !/^(```|~~~|---+|\|)/.test(line))
-    .slice(0, PREVIEW_LINES)
-    // A line repeats only with its own count, so each keeps one key.
-    .map((text, index, all) => ({
-      text,
-      key: `${text}#${all.slice(0, index).filter((other) => other === text).length}`,
-    }));
+export const documentExcerpt = (markdown: string) => {
+  const lines: string[] = [];
+  for (const line of markdown.split("\n")) {
+    if (lines.length === PREVIEW_LINES) break;
+    const text = plainLine(line);
+    if (text !== "" && !/^(```|~~~|---+|\|)/.test(text)) lines.push(text);
+  }
+  return (
+    lines
+      // A line repeats only with its own count, so each keeps one key.
+      .map((text, index, all) => ({
+        text,
+        key: `${text}#${all.slice(0, index).filter((other) => other === text).length}`,
+      }))
+  );
+};

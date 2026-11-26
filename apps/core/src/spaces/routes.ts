@@ -366,7 +366,12 @@ export const createSpaceRoutes = (
             name: body.name,
             ...agent.creation,
             ...(coordinator?.kind === "orb"
-              ? { coordinatorOrb: coordinator.runnerProfileId }
+              ? {
+                  coordinatorOrb: coordinator.runnerProfileId,
+                  ...(coordinator.source === "deployment"
+                    ? { unofferedOrb: true as const }
+                    : {}),
+                }
               : {}),
           });
           if (!created.ok) {

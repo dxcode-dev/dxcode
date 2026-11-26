@@ -3,10 +3,13 @@ import type {
   UpdateConnectionRequestSchema,
 } from "@dx/api";
 import {
+  BeginPersonalModelSubscriptionAuthorizationEndpoint,
   CreatePersonalModelConnectionEndpoint,
   CreateWorkspaceModelConnectionEndpoint,
   DeletePersonalModelConnectionEndpoint,
   DeleteWorkspaceModelConnectionEndpoint,
+  DisconnectPersonalModelSubscriptionEndpoint,
+  PollPersonalModelSubscriptionAuthorizationEndpoint,
   ReorderPersonalModelConnectionsEndpoint,
   ReorderWorkspaceModelConnectionsEndpoint,
   SetPersonalClaudePlanExtraUsageEndpoint,
@@ -16,21 +19,56 @@ import {
   UpdatePersonalModelConnectionEndpoint,
   UpdateWorkspaceModelConnectionEndpoint,
 } from "@dx/api";
-import type { ModelConnectionId } from "@dx/domain";
+import {
+  GITHUB_COPILOT_SUBSCRIPTION_PROVIDER_ID,
+  type ModelConnectionId,
+  type ModelSubscriptionProviderId,
+  type PersonalModelSubscriptionAuthorizationId,
+  type PersonalModelSubscriptionConnectionId,
+} from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import {
   ApiError,
-  beginGitHubCopilotAuthorization,
-  disconnectPersonalModelSubscription,
   dxClient,
   type ModelRoutingTarget,
-  pollPersonalModelSubscriptionAuthorization,
 } from "../../../shared/api/client.js";
 import {
   checkModelConnectionAccess,
   connectionParams,
 } from "./model-connection-queries.js";
 import { modelRoutingKey } from "./model-routing-queries.js";
+
+const beginGitHubCopilotAuthorization = async () =>
+  (
+    await dxClient.call(BeginPersonalModelSubscriptionAuthorizationEndpoint, {
+      params: {
+        provider:
+          GITHUB_COPILOT_SUBSCRIPTION_PROVIDER_ID as ModelSubscriptionProviderId,
+      },
+    })
+  ).data;
+
+/** Callers pass the ids they read; Core refuses one it cannot find. */
+const pollPersonalModelSubscriptionAuthorization = async (
+  authorizationId: string,
+) =>
+  (
+    await dxClient.call(PollPersonalModelSubscriptionAuthorizationEndpoint, {
+      params: {
+        authorizationId:
+          authorizationId as PersonalModelSubscriptionAuthorizationId,
+      },
+    })
+  ).data;
+
+const disconnectPersonalModelSubscription = async (connectionId: string) =>
+  (
+    await dxClient.call(DisconnectPersonalModelSubscriptionEndpoint, {
+      params: {
+        connectionId: connectionId as PersonalModelSubscriptionConnectionId,
+      },
+    })
+  ).data;
 
 const createModelConnection = async (
   target: ModelRoutingTarget,

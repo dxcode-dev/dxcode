@@ -1063,11 +1063,14 @@ export const createThreadRoutes = (
         );
       // Admission of a runner profile: the requested one, or for a first
       // message the Project's, which the Thread's Orb pin also uses.
-      // A Space coordinator may pin a named size kept out of the Orb picker.
+      // A Space coordinator on the deployment's default may pin a named
+      // size kept out of the Orb picker; one a person chose may not.
       const coordinatorOrb =
         context.get("threadCreation")?.coordinatorOrb === true;
+      const unofferedOrb =
+        coordinatorOrb && context.get("threadCreation")?.unofferedOrb === true;
       const creationDeploymentOrbs = (runnerProfileId: RunnerProfileId) =>
-        coordinatorOrb
+        unofferedOrb
           ? loadDeploymentOrbs(context.env, true)
           : deploymentOrbsFor(context.env, runnerProfileId);
       const admitRunnerProfile = (runnerProfileId: RunnerProfileId) =>
@@ -1258,7 +1261,7 @@ export const createThreadRoutes = (
                             ? {}
                             : { runnerMachineId: input.runnerMachineId }),
                           connectors: orbProviderConnectors,
-                          ...(coordinatorOrb &&
+                          ...(unofferedOrb &&
                           requestedRunnerProfileId !== undefined
                             ? {
                                 deploymentOrbs: await creationDeploymentOrbs(
