@@ -37,6 +37,9 @@ POST /v1/integrations/github/webhooks
 # in the Project's data, not a JSON answer a client decodes.
 GET /v1/projects/:projectId/icon
 
+# Private Portal sign-in: the browser navigates here after dx sign-in.
+GET /v1/portal-auth/authorize
+
 # No caller outside Core's own tests: no UI, daemon, or script calls these.
 DELETE /v1/integrations/github/personal/authorization
 DELETE /v1/settings/personal/integrations/connections/:connectionId

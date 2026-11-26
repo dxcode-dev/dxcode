@@ -1,10 +1,12 @@
-import { defineEndpoint } from "../http/endpoint.js";
+import { defineEndpoint, NoContentSchema } from "../http/endpoint.js";
 import {
   DictationAdmissionRefusals,
   DictationParamsSchema,
   DictationSessionRefusals,
 } from "./dictation-stream-endpoints.js";
 import {
+  DictationFailedResponseSchema,
+  DictationForbiddenResponseSchema,
   DictationInvalidAudioResponseSchema,
   DictationInvalidRequestResponseSchema,
   DictationNotFoundResponseSchema,
@@ -48,5 +50,21 @@ export const GetDictationEndpoint = defineEndpoint({
   refusals: [
     { status: 404, schema: DictationNotFoundResponseSchema },
     ...DictationSessionRefusals,
+  ],
+});
+
+/** Cancels a dictation job; an unknown or finished one answers the same. */
+export const CancelDictationEndpoint = defineEndpoint({
+  id: "dictation.cancel",
+  summary: "Cancel a dictation job",
+  method: "DELETE",
+  path: "/v1/dictation/:id",
+  params: DictationParamsSchema,
+  success: NoContentSchema,
+  answer: "none",
+  successStatus: 204,
+  refusals: [
+    { status: 403, schema: DictationForbiddenResponseSchema },
+    { status: 500, schema: DictationFailedResponseSchema },
   ],
 });

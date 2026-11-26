@@ -6,8 +6,6 @@ import {
   ArchiveThreadProjectDeletedResponseSchema,
   BeginPersonalModelSubscriptionAuthorizationResponseSchema,
   ChoicesResponseSchema,
-  type CreateExternalApiApplicationRequest,
-  CreateExternalApiApplicationResponseSchema,
   CreateProjectForbiddenResponseSchema,
   CreateProjectInvalidRequestResponseSchema,
   CreateProjectNameConflictResponseSchema,
@@ -38,9 +36,6 @@ import {
   DeleteThreadNotFoundResponseSchema,
   DeleteThreadPersistenceUnavailableResponseSchema,
   DisconnectPersonalModelSubscriptionResponseSchema,
-  type ExternalApiApplicationAuditEventData,
-  type ExternalApiApplicationData,
-  ExternalApiApplicationsErrorResponseSchema,
   FollowThreadEndpoint,
   GetSidebarLayoutEndpoint,
   GetSpaceAgentModelResponseSchema,
@@ -53,8 +48,6 @@ import {
   GetWorkspaceDraftEndpoint,
   GraphResponseSchema,
   IntegrationsErrorResponseSchema,
-  ListExternalApiApplicationAuditResponseSchema,
-  ListExternalApiApplicationsResponseSchema,
   ListPersonalModelSubscriptionsResponseSchema,
   ListSharedThreadsEndpoint,
   ListThreadsEndpoint,
@@ -76,11 +69,8 @@ import {
   type PutModeRequestSchema,
   RefreshPersonalModelSubscriptionResponseSchema,
   RetryInitialDispatchEndpoint,
-  RevokeExternalApiApplicationResponseSchema,
-  RotateExternalApiApplicationResponseSchema,
   SearchThreadsEndpoint,
   type SearchThreadsItem,
-  SetExternalApiApplicationStatusResponseSchema,
   type SidebarLayoutChoice,
   SkillsErrorResponseSchema,
   SnoozeThreadEndpoint,
@@ -96,8 +86,6 @@ import {
   type ThreadPaneLayout,
   ThreadSharingErrorResponseSchema,
   UnfollowThreadEndpoint,
-  type UpdateExternalApiApplicationRequest,
-  UpdateExternalApiApplicationResponseSchema,
   UpdateProjectNameConflictResponseSchema,
   UpdateSidebarLayoutEndpoint,
   type UpdateSpaceAgentModelRequestSchema,
@@ -114,12 +102,9 @@ import {
 import { ApiError, createDxClient, endpointPath } from "@dx/client";
 import type {
   EnvironmentVariableConfigReference,
-  ExternalApiApplicationId,
-  ExternalApiApplicationRotationOverlapSeconds,
   PageCursor,
   ProjectId,
   ThreadId,
-  WorkspacePermission,
   WorkspaceSlug,
 } from "@dx/domain";
 import { DateTime, Schema } from "effect";
@@ -256,7 +241,6 @@ export const request = async <
         PersonalAccountPersistenceUnavailableResponseSchema,
         // Skill routes send it too.
         WorkspacePolicyErrorResponseSchema,
-        ExternalApiApplicationsErrorResponseSchema,
         ModelRoutingErrorResponseSchema,
         PersonalModelSubscriptionNotFoundResponseSchema,
         PersonalModelSubscriptionBrowserSessionRequiredResponseSchema,
@@ -824,116 +808,6 @@ export const getThread = async (
 export type ProjectDefaultsTarget =
   | { readonly scope: "personal" }
   | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
-
-export interface ExternalApiApplicationPage {
-  readonly items: ReadonlyArray<ExternalApiApplicationData>;
-  readonly nextCursor?: PageCursor;
-  readonly permissions: ReadonlyArray<WorkspacePermission>;
-}
-
-export interface ExternalApiApplicationAuditPage {
-  readonly items: ReadonlyArray<ExternalApiApplicationAuditEventData>;
-  readonly nextCursor?: PageCursor;
-}
-
-const applicationsBase = (workspaceSlug: WorkspaceSlug) =>
-  `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}/applications`;
-
-export const listExternalApiApplications = async (
-  workspaceSlug: WorkspaceSlug,
-  cursor?: PageCursor,
-  signal?: AbortSignal,
-): Promise<ExternalApiApplicationPage> => {
-  const query = new URLSearchParams({ limit: "20" });
-  if (cursor !== undefined) query.set("cursor", cursor);
-  return (
-    await request(
-      `${applicationsBase(workspaceSlug)}?${query}`,
-      ListExternalApiApplicationsResponseSchema,
-      { signal },
-    )
-  ).data;
-};
-
-export const createExternalApiApplication = async (
-  workspaceSlug: WorkspaceSlug,
-  input: CreateExternalApiApplicationRequest,
-) =>
-  (
-    await request(
-      applicationsBase(workspaceSlug),
-      CreateExternalApiApplicationResponseSchema,
-      { method: "POST", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const updateExternalApiApplication = async (
-  workspaceSlug: WorkspaceSlug,
-  applicationId: ExternalApiApplicationId,
-  input: UpdateExternalApiApplicationRequest,
-): Promise<ExternalApiApplicationData> =>
-  (
-    await request(
-      `${applicationsBase(workspaceSlug)}/${encodeURIComponent(applicationId)}`,
-      UpdateExternalApiApplicationResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const rotateExternalApiApplication = async (
-  workspaceSlug: WorkspaceSlug,
-  applicationId: ExternalApiApplicationId,
-  overlapSeconds: ExternalApiApplicationRotationOverlapSeconds,
-) =>
-  (
-    await request(
-      `${applicationsBase(workspaceSlug)}/${encodeURIComponent(applicationId)}/rotate`,
-      RotateExternalApiApplicationResponseSchema,
-      { method: "POST", body: JSON.stringify({ overlapSeconds }) },
-    )
-  ).data;
-
-export const setExternalApiApplicationEnabled = async (
-  workspaceSlug: WorkspaceSlug,
-  applicationId: ExternalApiApplicationId,
-  enabled: boolean,
-): Promise<ExternalApiApplicationData> =>
-  (
-    await request(
-      `${applicationsBase(workspaceSlug)}/${encodeURIComponent(applicationId)}/${enabled ? "enable" : "disable"}`,
-      SetExternalApiApplicationStatusResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-  ).data;
-
-export const revokeExternalApiApplication = async (
-  workspaceSlug: WorkspaceSlug,
-  applicationId: ExternalApiApplicationId,
-): Promise<ExternalApiApplicationId> =>
-  (
-    await request(
-      `${applicationsBase(workspaceSlug)}/${encodeURIComponent(applicationId)}`,
-      RevokeExternalApiApplicationResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data.revokedApplicationId;
-
-export const listExternalApiApplicationAudit = async (
-  workspaceSlug: WorkspaceSlug,
-  applicationId: ExternalApiApplicationId,
-  cursor?: PageCursor,
-  signal?: AbortSignal,
-): Promise<ExternalApiApplicationAuditPage> => {
-  const query = new URLSearchParams({ limit: "25" });
-  if (cursor !== undefined) query.set("cursor", cursor);
-  return (
-    await request(
-      `${applicationsBase(workspaceSlug)}/${encodeURIComponent(applicationId)}/audit?${query}`,
-      ListExternalApiApplicationAuditResponseSchema,
-      { signal },
-    )
-  ).data;
-};
 
 /** The signed-in person's sidebar layout, shared by their devices. */
 export const getSidebarLayout = async (signal?: AbortSignal) =>

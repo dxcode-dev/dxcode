@@ -1,13 +1,5 @@
-import type {
-  ModeId,
-  ProjectId,
-  RunnerProfileId,
-  ThinkingLevel,
-  ThreadId,
-  ThreadVisibility,
-  UserId,
-  WorkspaceId,
-} from "@dx/domain";
+import type { NewThreadCreation } from "@dx/client";
+import type { UserId, WorkspaceId } from "@dx/domain";
 import { DictationRecoverySession } from "./dictation/dictation-session.js";
 import {
   createPendingAttachmentCollection,
@@ -46,35 +38,10 @@ export interface NewThreadDraftText {
   readonly flush: () => void;
 }
 /** A New Thread request as sent, and the Thread it creates. */
-export interface InitialThreadCreationAttempt {
-  readonly threadId: ThreadId;
-  readonly projectId?: ProjectId;
-  readonly profile: ModeId;
-  readonly model?: string;
-  readonly effort?: ThinkingLevel;
-  readonly claudeConnectionId?: string;
-  readonly pluginAgentMode?: string;
-  readonly pluginThreadType?: string;
-  readonly runnerProfileId?: RunnerProfileId;
-  readonly runnerMachineId?: string;
-  readonly visibility?: ThreadVisibility;
-  readonly body: string;
-  readonly attachmentIds: ReadonlyArray<string>;
-}
-
-/**
- * The draft's creation request. It outlives the composer, so a composer
- * reopened mid-send shows the send, and resending an unchanged request
- * reuses its Thread instead of creating a second one.
- */
-export interface NewThreadCreation {
-  readonly attempt?: InitialThreadCreationAttempt;
-  readonly sending: boolean;
-  /** The request has outlasted the soft timeout. */
-  readonly stalled: boolean;
-  /** Abandons the in-flight request and sends it again for the same Thread. */
-  readonly retry?: () => void;
-}
+export type {
+  InitialThreadCreationAttempt,
+  NewThreadCreation,
+} from "@dx/client";
 
 export interface NewThreadDraftStore {
   readonly dictation: DictationRecoverySession;

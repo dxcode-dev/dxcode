@@ -1,4 +1,5 @@
 import {
+  CancelDictationEndpoint,
   CreateDictationEndpoint,
   type DictationJob,
   GetDictationEndpoint,
@@ -46,3 +47,7 @@ export const readDictation = (id: string, signal: AbortSignal) =>
   dictationStep(() =>
     dxClient.call(GetDictationEndpoint, { params: { id } }, { signal }),
   );
+
+/** Cancels a dictation job; Core answers 204 whether or not it was running. */
+export const cancelDictation = (id: string) =>
+  dxClient.call(CancelDictationEndpoint, { params: { id } });

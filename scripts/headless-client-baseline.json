@@ -1,5 +1,4 @@
 {
-  "apps/web/src/features/authentication/sign-in-paths.ts": 1,
   "apps/web/src/features/desktop/desktop-queries.ts": 1,
   "apps/web/src/features/huddle/huddle-join-mutations.ts": 1,
   "apps/web/src/features/huddle/huddle-link-queries.ts": 2,
@@ -16,15 +15,13 @@
   "apps/web/src/features/terminal/terminal-session-mutations.ts": 1,
   "apps/web/src/features/terminal/terminal-warm-mutations.ts": 1,
   "apps/web/src/features/terminal/thread-terminal.tsx": 1,
-  "apps/web/src/features/threads/attachment-upload.ts": 1,
   "apps/web/src/features/threads/bug-reports/bug-report-queries.ts": 9,
   "apps/web/src/features/threads/changes/changes-api.ts": 1,
-  "apps/web/src/features/threads/dictation/dictation-api.ts": 1,
   "apps/web/src/prototypes/sidebar-states/fixtures.ts": 1,
   "apps/web/src/prototypes/workspace-demo/data.ts": 1,
   "apps/web/src/prototypes/workspace-demo/scene-backend.ts": 3,
   "apps/web/src/prototypes/workspace-demo/scene-data.ts": 1,
-  "apps/web/src/shared/api/client.ts": 10,
+  "apps/web/src/shared/api/client.ts": 9,
   "apps/web/src/shared/same-origin-fetch.ts": 5,
   "apps/web/src/shared/ui/plugin-icon.tsx": 2,
   "apps/web/src/shared/ui/rich-markdown.tsx": 1

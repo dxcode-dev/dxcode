@@ -1,3 +1,5 @@
+import { PORTAL_AUTH_PATH_PREFIX } from "@dx/api";
+
 /** Same-origin return path after sign-in; rejects other origins and auth pages. */
 export const safeNextPath = (value: unknown) => {
   if (typeof value !== "string" || !value.startsWith("/")) return undefined;
@@ -13,7 +15,7 @@ export const safeNextPath = (value: unknown) => {
 
 /** A path Core serves itself, which the client router cannot render. */
 export const isServerPath = (path: string) =>
-  path.startsWith("/v1/portal-auth/") ||
+  path.startsWith(PORTAL_AUTH_PATH_PREFIX) ||
   path.startsWith("/api/feedback-widget/");
 
 export const signInHref = (

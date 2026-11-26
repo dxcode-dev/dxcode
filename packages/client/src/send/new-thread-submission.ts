@@ -1,0 +1,368 @@
+import type { InitialThreadMessage, ProjectData } from "@dx/api";
+import {
+  generateThreadTitle,
+  isClaudeCodeModel,
+  type ModeId,
+  type ModelId,
+  newThreadId,
+  type ProjectId,
+  type RunnerProfileId,
+  type ThinkingLevel,
+  type ThreadId,
+  type ThreadModelSelection,
+  type ThreadTitle,
+  type ThreadVisibility,
+} from "@dx/domain";
+import type { OptimisticThreadCreation } from "../threads/thread-session-registry.js";
+import { messageWithAttachments } from "./message-attachments.js";
+import type {
+  PendingAttachment,
+  PendingAttachmentCollection,
+} from "./pending-attachments.js";
+import { reasoningModeId } from "./reasoning-modes.js";
+
+/**
+ * Starting a Thread from the composer: create it with its first message,
+ * idempotently, and open it once Core and Flue have admitted the message.
+ */
+
+/** A creation request as the draft keeps it; resending it reuses its Thread. */
+export interface InitialThreadCreationAttempt {
+  readonly threadId: ThreadId;
+  readonly projectId?: ProjectId;
+  readonly profile: ModeId;
+  readonly model?: string;
+  readonly effort?: ThinkingLevel;
+  readonly claudeConnectionId?: string;
+  readonly pluginAgentMode?: string;
+  readonly pluginThreadType?: string;
+  readonly runnerProfileId?: RunnerProfileId;
+  readonly runnerMachineId?: string;
+  readonly visibility?: ThreadVisibility;
+  readonly body: string;
+  readonly attachmentIds: ReadonlyArray<string>;
+}
+
+/**
+ * The draft's creation request. It outlives the composer, so a composer
+ * reopened mid-send shows the send, and resending an unchanged request
+ * reuses its Thread instead of creating a second one.
+ */
+export interface NewThreadCreation {
+  readonly attempt?: InitialThreadCreationAttempt;
+  readonly sending: boolean;
+  /** The request has outlasted the soft timeout. */
+  readonly stalled: boolean;
+  /** Abandons the in-flight request and sends it again for the same Thread. */
+  readonly retry?: () => void;
+}
+
+export interface NewThreadCreationStore {
+  readonly clear: () => void;
+  readonly getCreation: () => NewThreadCreation;
+  readonly setCreation: (creation: NewThreadCreation) => void;
+}
+
+/** The registry's side of a creation (`ThreadSessionRegistryCore`). */
+export interface NewThreadCreationRegistry {
+  readonly beginCreation: (
+    creation: OptimisticThreadCreation<PendingAttachment>,
+  ) => void;
+  readonly acceptCreation: (id: ThreadId, submissionId: string) => void;
+  readonly failCreation: (id: ThreadId) => unknown;
+}
+
+/** What `create` sends: the Thread, its settings, and its first message. */
+export interface NewThreadCreationRequest {
+  readonly project?: ProjectData;
+  readonly title: ThreadTitle;
+  readonly selection?: ThreadModelSelection;
+  readonly runnerProfileId?: RunnerProfileId;
+  readonly runnerMachineId?: string;
+  readonly claudeConnectionId?: string;
+  readonly visibility?: ThreadVisibility;
+  readonly initialMessage: InitialThreadMessage;
+  readonly threadId: ThreadId;
+  readonly pluginAgentMode?: string;
+  readonly pluginThreadType?: string;
+  readonly fromMailId?: string;
+  /** Abandons this send; the server still finishes what it admitted. */
+  readonly signal?: AbortSignal;
+}
+
+/** After this long the composer says the Thread is still being created. */
+export const NEW_THREAD_STALL_AFTER_MS = 15_000;
+
+const sameRequest = (
+  previous: InitialThreadCreationAttempt | undefined,
+  next: Omit<InitialThreadCreationAttempt, "threadId">,
+): previous is InitialThreadCreationAttempt =>
+  previous !== undefined &&
+  previous.projectId === next.projectId &&
+  previous.profile === next.profile &&
+  previous.model === next.model &&
+  previous.effort === next.effort &&
+  previous.claudeConnectionId === next.claudeConnectionId &&
+  previous.pluginAgentMode === next.pluginAgentMode &&
+  previous.pluginThreadType === next.pluginThreadType &&
+  previous.runnerProfileId === next.runnerProfileId &&
+  previous.runnerMachineId === next.runnerMachineId &&
+  previous.visibility === next.visibility &&
+  previous.body === next.body &&
+  previous.attachmentIds.length === next.attachmentIds.length &&
+  previous.attachmentIds.every((id, index) => id === next.attachmentIds[index]);
+
+/** `fetch` rejects with a TypeError when no response arrived. */
+const lostResponse = (cause: unknown) => cause instanceof TypeError;
+
+/**
+ * Creates the Thread and admits its first message on the server, then opens
+ * it. The composer stays up, showing that the Thread is being created, until
+ * Core has persisted the Thread and Flue has admitted the message; from then
+ * on the run belongs to the server, whether or not this browser stays open.
+ */
+export async function submitNewThread({
+  submittedPrompt,
+  effectiveProjectId,
+  profile,
+  model,
+  effort,
+  claudePlan,
+  pluginAgentMode,
+  pluginThreadType,
+  runnerProfileId,
+  runnerMachineId,
+  visibility,
+  projects,
+  imageCollection,
+  setImages,
+  registry,
+  create,
+  open,
+  draftStore,
+  onAccepted,
+  onAcceptedNavigationFailure,
+  composerOpen,
+  email,
+}: {
+  readonly submittedPrompt: string;
+  readonly effectiveProjectId: ProjectId | "";
+  /** The mode sent only when no model is known yet (choices still loading). */
+  readonly profile: ModeId;
+  readonly model: string | undefined;
+  /** The effort sent with a model; undefined for a model without one. */
+  readonly effort?: ThinkingLevel | undefined;
+  /** The Claude plan, sent only with a Claude Code model. */
+  readonly claudePlan?: string;
+  /** An installed plugin's agent mode the Thread starts in. */
+  readonly pluginAgentMode?: string;
+  /** An installed plugin's Thread type the Thread starts as. */
+  readonly pluginThreadType?: string;
+  readonly runnerProfileId?: RunnerProfileId;
+  /** The person's machine a runner Thread starts on. */
+  readonly runnerMachineId?: string;
+  /** `workspace` shares the Thread with the workspace from its start. */
+  readonly visibility?: ThreadVisibility;
+  readonly projects: ReadonlyArray<ProjectData>;
+  readonly imageCollection: PendingAttachmentCollection;
+  readonly setImages: (images: ReadonlyArray<PendingAttachment>) => void;
+  /** Shows the Thread before Flue has it, with its files. */
+  readonly registry: NewThreadCreationRegistry;
+  /** Creates the Thread and admits its first message (`CreateThreadEndpoint`). */
+  readonly create: (input: NewThreadCreationRequest) => Promise<{
+    readonly initialSubmission?: { readonly submissionId: string };
+  }>;
+  /** Opens the created Thread, such as by navigating to its page. */
+  readonly open: (threadId: ThreadId) => Promise<void>;
+  /** Where the creation request outlives the composer. */
+  readonly draftStore: NewThreadCreationStore;
+  readonly onAccepted: () => void;
+  readonly onAcceptedNavigationFailure: (threadId: ThreadId) => void;
+  /** False once the composer is gone, e.g. the user closed it mid-create. */
+  readonly composerOpen: () => boolean;
+  /**
+   * The email the Thread starts from: Mail puts it in the first message, and
+   * its subject names the Thread.
+   */
+  readonly email?: { readonly mailId: string; readonly subject: string };
+}) {
+  let stagedImages: ReadonlyArray<PendingAttachment> | undefined;
+  let pendingThreadId: ThreadId | undefined;
+  const { attempt: previousAttempt } = draftStore.getCreation();
+  draftStore.setCreation({
+    ...(previousAttempt === undefined ? {} : { attempt: previousAttempt }),
+    sending: true,
+    stalled: false,
+  });
+  try {
+    const project = projects.find(({ id }) => id === effectiveProjectId);
+    if (effectiveProjectId !== "" && project === undefined)
+      throw new Error("Select a valid project.");
+    await imageCollection.settle();
+    stagedImages = imageCollection.take();
+    const body = submittedPrompt.trim();
+    let sentBody: string;
+    try {
+      sentBody = await messageWithAttachments(body, stagedImages);
+    } catch (cause) {
+      // An upload failed: keep the files so the person can remove it.
+      setImages(imageCollection.restore(stagedImages));
+      stagedImages = undefined;
+      throw cause;
+    }
+    // The composer stays unchanged, files included, until admission.
+    const attachmentIds = stagedImages.map(({ id }) => id);
+    const selectedProfile = reasoningModeId(profile);
+    // A picked model runs at its effort. A plugin agent's Thread runs on the
+    // agent's model, so a Claude Code pick the composer still holds sends no
+    // plan with it.
+    const claudeCode =
+      pluginAgentMode === undefined &&
+      model !== undefined &&
+      isClaudeCodeModel(model);
+    const claudeEffort =
+      model === undefined || pluginAgentMode !== undefined ? undefined : effort;
+    const claudeConnectionId = claudeCode ? claudePlan : undefined;
+    const request = {
+      projectId: project?.id,
+      profile: selectedProfile,
+      model,
+      ...(claudeEffort === undefined ? {} : { effort: claudeEffort }),
+      ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
+      ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
+      ...(pluginThreadType === undefined ? {} : { pluginThreadType }),
+      runnerProfileId,
+      ...(runnerMachineId === undefined ? {} : { runnerMachineId }),
+      ...(visibility === "workspace" ? { visibility } : {}),
+      body,
+      attachmentIds,
+    };
+    // Resending the same request reuses its Thread, even from a composer
+    // opened since, so a creation whose response was lost is not made twice.
+    const attempt: InitialThreadCreationAttempt = {
+      ...request,
+      threadId: sameRequest(previousAttempt, request)
+        ? previousAttempt.threadId
+        : newThreadId(),
+    };
+    const threadId = attempt.threadId;
+    const title = generateThreadTitle(
+      email === undefined ? submittedPrompt : email.subject.trim() || "Email",
+    );
+    registry.beginCreation({
+      id: threadId,
+      project,
+      title,
+      profile: selectedProfile,
+      model,
+      ...(claudeEffort === undefined ? {} : { effort: claudeEffort }),
+      runnerProfileId,
+      body,
+      images: stagedImages,
+      startedAt: Date.now(),
+    });
+    pendingThreadId = threadId;
+    const input = {
+      project,
+      title,
+      selection:
+        model === undefined
+          ? { kind: "mode", profileId: "default", mode: selectedProfile }
+          : {
+              kind: "model",
+              model: model as ModelId,
+              ...(claudeEffort === undefined ? {} : { thinking: claudeEffort }),
+            },
+      ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
+      ...(runnerMachineId === undefined ? {} : { runnerMachineId }),
+      ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
+      ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
+      ...(pluginThreadType === undefined ? {} : { pluginThreadType }),
+      ...(visibility === "workspace" ? { visibility } : {}),
+      ...(email === undefined ? {} : { fromMailId: email.mailId }),
+      threadId,
+      initialMessage: {
+        body: sentBody,
+        attachments: [],
+      },
+    } satisfies NewThreadCreationRequest;
+    // The same Thread ID makes every send idempotent: Core answers a resend
+    // with the receipt of a message it already admitted.
+    let resentAfterLostResponse = false;
+    let response: Awaited<ReturnType<typeof create>> | undefined;
+    while (response === undefined) {
+      const controller = new AbortController();
+      draftStore.setCreation({
+        attempt,
+        sending: true,
+        stalled: false,
+        retry: () => controller.abort(),
+      });
+      const stall = setTimeout(
+        () =>
+          draftStore.setCreation({
+            ...draftStore.getCreation(),
+            stalled: true,
+          }),
+        NEW_THREAD_STALL_AFTER_MS,
+      );
+      try {
+        response = await create({ ...input, signal: controller.signal });
+      } catch (cause) {
+        // The person asked to send it again.
+        if (controller.signal.aborted) continue;
+        if (lostResponse(cause) && !resentAfterLostResponse) {
+          resentAfterLostResponse = true;
+          continue;
+        }
+        if (lostResponse(cause))
+          throw new Error(
+            "dx could not be reached. Send again to retry; it will not start a second Thread.",
+            { cause },
+          );
+        throw cause;
+      } finally {
+        clearTimeout(stall);
+      }
+    }
+    const submissionId = response.initialSubmission?.submissionId;
+    if (submissionId === undefined)
+      throw new Error("The initial message receipt was missing.");
+    // The registry now owns the staged images until Flue shows the message.
+    registry.acceptCreation(threadId, submissionId);
+    pendingThreadId = undefined;
+    stagedImages = undefined;
+    setImages([]);
+    draftStore.clear();
+    // The user already left; the Thread waits for them in the sidebar.
+    if (!composerOpen()) return;
+    try {
+      await open(threadId);
+    } catch (cause) {
+      onAcceptedNavigationFailure(threadId);
+      throw new Error("Thread was created, but could not be opened.", {
+        cause,
+      });
+    }
+    onAccepted();
+  } catch (cause) {
+    // The request is kept: sending it again reuses its Thread.
+    const { attempt } = draftStore.getCreation();
+    draftStore.setCreation({
+      ...(attempt === undefined ? {} : { attempt }),
+      sending: false,
+      stalled: false,
+    });
+    if (pendingThreadId !== undefined) registry.failCreation(pendingThreadId);
+    // Nothing was admitted: the draft keeps the prompt and its files, so
+    // they are there when the composer opens again.
+    if (stagedImages !== undefined)
+      setImages(imageCollection.restore(stagedImages));
+    throw new Error(
+      cause instanceof Error
+        ? cause.message
+        : "The thread could not be started.",
+      { cause },
+    );
+  }
+}

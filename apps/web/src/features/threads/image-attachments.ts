@@ -1,26 +1,28 @@
-import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from "@dx/api";
+import {
+  createPendingAttachmentCollection as createClientCollection,
+  type PendingAttachment,
+  type PendingAttachmentCollection,
+  type PendingAttachmentPlatform,
+  readAttachment as readClientAttachment,
+} from "@dx/client";
 import {
   type AttachmentUpload,
   startAttachmentUpload,
 } from "./attachment-upload.js";
 
-export const MAX_ATTACHMENT_COUNT = MAX_ATTACHMENTS_PER_MESSAGE;
+export {
+  discardAttachments,
+  disposeAttachments,
+  MAX_ATTACHMENT_COUNT,
+  type PendingAttachment,
+  type PendingAttachmentCollection,
+} from "@dx/client";
 
 /**
- * A file in the composer. It starts uploading to Core as soon as it is
- * added; the message sent later carries only its attachment reference.
+ * The browser's side of the composer's files: `blob:` previews, uploads over
+ * XMLHttpRequest, screenshots, and pasted files. The collection itself is
+ * `pending-attachments.ts` in `@dx/client`.
  */
-export interface PendingAttachment {
-  readonly id: string;
-  readonly filename: string;
-  /** The browser's type for the file, used only to pick its preview. */
-  readonly mimeType: string;
-  readonly size: number;
-  /** A local `blob:` URL for the composer's thumbnail and preview. */
-  readonly previewUrl: string;
-  readonly disposePreview: () => void;
-  readonly upload: AttachmentUpload;
-}
 
 const allocatePreview = (file: File) => {
   const { createObjectURL, revokeObjectURL } = URL;
@@ -31,145 +33,28 @@ const allocatePreview = (file: File) => {
   };
 };
 
-const megabytes = MAX_ATTACHMENT_BYTES / (1024 * 1024);
+const browserFiles = (
+  upload: (file: File) => AttachmentUpload,
+): PendingAttachmentPlatform => ({
+  // A browser's pending files are Files: the collection hands back what it was given.
+  upload: (file) => upload(file as File),
+  preview: (file) => allocatePreview(file as File),
+  newId: () => crypto.randomUUID(),
+});
 
-export function readAttachment(
+export const readAttachment = (
   file: File,
   upload: (file: File) => AttachmentUpload = startAttachmentUpload,
-): PendingAttachment {
-  if (file.size === 0) throw new Error(`${file.name || "File"} is empty.`);
-  if (file.size > MAX_ATTACHMENT_BYTES)
-    throw new Error(
-      `${file.name || "File"} is larger than the ${megabytes} MB limit.`,
-    );
-  return {
-    id: crypto.randomUUID(),
-    filename: file.name || "file",
-    mimeType: file.type,
-    size: file.size,
-    ...allocatePreview(file),
-    upload: upload(file),
-  };
-}
+): PendingAttachment => readClientAttachment(file, browserFiles(upload));
 
-/** Revoke the local previews; uploads that were sent stay in the Thread. */
-export const disposeAttachments = (
-  attachments: ReadonlyArray<PendingAttachment>,
-) => {
-  for (const attachment of attachments) attachment.disposePreview();
-};
-
-/** Drop unsent files: revoke previews and delete their uploads. */
-export const discardAttachments = (
-  attachments: ReadonlyArray<PendingAttachment>,
-) => {
-  for (const attachment of attachments) {
-    attachment.disposePreview();
-    attachment.upload.cancel();
-  }
-};
+export const createPendingAttachmentCollection = (
+  upload: (file: File) => AttachmentUpload = startAttachmentUpload,
+) => createClientCollection(browserFiles(upload));
 
 /** Files pasted into a text field, such as a copied screenshot. */
 export const pastedFiles = (event: {
   readonly clipboardData: DataTransfer | null;
 }) => [...(event.clipboardData?.files ?? [])];
-
-export interface PendingAttachmentCollection {
-  readonly addFiles: (
-    files: ReadonlyArray<File>,
-  ) => Promise<ReadonlyArray<PendingAttachment>>;
-  readonly addImage: (
-    attachment: PendingAttachment,
-  ) => ReadonlyArray<PendingAttachment>;
-  /**
-   * Starts `create` at once, so a capture that needs the person's tap (such
-   * as `getDisplayMedia`) runs inside it. The capture stays outside the
-   * queue: one that never settles cannot hold up later files. `undefined`
-   * means the person cancelled, and leaves the files unchanged.
-   */
-  readonly addGenerated: (
-    create: () => Promise<File | undefined>,
-  ) => Promise<ReadonlyArray<PendingAttachment>>;
-  readonly remove: (id: string) => ReadonlyArray<PendingAttachment>;
-  readonly list: () => ReadonlyArray<PendingAttachment>;
-  readonly take: () => ReadonlyArray<PendingAttachment>;
-  readonly restore: (
-    attachments: ReadonlyArray<PendingAttachment>,
-  ) => ReadonlyArray<PendingAttachment>;
-  readonly settle: () => Promise<void>;
-  readonly dispose: () => void;
-}
-
-export const createPendingAttachmentCollection = (
-  upload: (file: File) => AttachmentUpload = startAttachmentUpload,
-): PendingAttachmentCollection => {
-  let attachments: ReadonlyArray<PendingAttachment> = [];
-  let queue: Promise<void> = Promise.resolve();
-
-  const append = (files: ReadonlyArray<File>) => {
-    if (attachments.length + files.length > MAX_ATTACHMENT_COUNT)
-      throw new Error(`Attach no more than ${MAX_ATTACHMENT_COUNT} files.`);
-    const read: PendingAttachment[] = [];
-    try {
-      for (const file of files) read.push(readAttachment(file, upload));
-    } catch (cause) {
-      discardAttachments(read);
-      throw cause;
-    }
-    attachments = [...attachments, ...read];
-    return attachments;
-  };
-  const enqueue = <A>(operation: () => Promise<A>) => {
-    const result = queue.then(operation);
-    queue = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  };
-
-  return {
-    addFiles: (files) => enqueue(async () => append(files)),
-    addImage: (attachment) => {
-      if (attachments.length >= MAX_ATTACHMENT_COUNT) {
-        discardAttachments([attachment]);
-        throw new Error(`Attach no more than ${MAX_ATTACHMENT_COUNT} files.`);
-      }
-      attachments = [...attachments, attachment];
-      return attachments;
-    },
-    addGenerated: (create) => {
-      if (attachments.length >= MAX_ATTACHMENT_COUNT)
-        return Promise.reject(
-          new Error(`Attach no more than ${MAX_ATTACHMENT_COUNT} files.`),
-        );
-      return create().then((file) =>
-        file === undefined ? attachments : enqueue(async () => append([file])),
-      );
-    },
-    remove: (id) => {
-      const removed = attachments.find((attachment) => attachment.id === id);
-      if (removed !== undefined) discardAttachments([removed]);
-      attachments = attachments.filter((attachment) => attachment.id !== id);
-      return attachments;
-    },
-    list: () => attachments,
-    take: () => {
-      const taken = attachments;
-      attachments = [];
-      return taken;
-    },
-    restore: (restored) => {
-      attachments = restored;
-      return attachments;
-    },
-    settle: () => queue,
-    dispose: () => {
-      discardAttachments(attachments);
-      attachments = [];
-    },
-  };
-};
 
 /** Waits for the first frame, so a stream that never plays still ends. */
 const firstFrame = async (video: HTMLVideoElement) => {

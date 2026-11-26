@@ -5,14 +5,15 @@ import {
   withMessageAuthor,
 } from "@dx/api";
 import {
-  attachmentsUploading,
   deriveTranscriptViewModel,
   INBOUND_MESSAGE_PREFIX,
   keptSends,
-  messageWithAttachments,
   NO_LOCAL_SUBMISSIONS,
+  retryFailedSend,
+  type SendAdmissionContext,
   sameLocalSubmissions,
-  sendRefusal,
+  stopSend,
+  submitSend,
   type TranscriptViewModel,
   waitingSubmissionOf,
   withoutDroppedSends,
@@ -60,7 +61,6 @@ import { useDictation } from "./dictation/use-dictation.js";
 import {
   addScreenshot,
   createPendingAttachmentCollection,
-  disposeAttachments,
   type PendingAttachment,
   type PendingAttachmentCollection,
   pastedFiles,
@@ -1178,20 +1178,6 @@ function AgentComposer({
   );
 }
 
-/** A shared Thread's owner ended multiplayer or revoked Contribute. */
-const isReadOnlyRejection = (cause: unknown) =>
-  cause instanceof Error &&
-  "status" in cause &&
-  cause.status === 403 &&
-  "body" in cause &&
-  typeof cause.body === "object" &&
-  cause.body !== null &&
-  "data" in cause.body &&
-  typeof cause.body.data === "object" &&
-  cause.body.data !== null &&
-  "code" in cause.body.data &&
-  cause.body.data.code === "THREAD_READ_ONLY";
-
 function useAgentSubmission({
   currentAgent,
   mentions,
@@ -1229,30 +1215,6 @@ function useAgentSubmission({
   const submitGeneration = React.useRef(0);
   const [actionError, setActionError] =
     React.useState<ThreadErrorPresentation>();
-  const finishAdmission = () => {
-    submitInFlight.current = false;
-    submissionControl.setStopRequested(false);
-    onSubmissionPendingChange?.(false);
-    setAdmissionPending(false);
-  };
-  const stopAgent = async () => {
-    try {
-      await currentAgent().abort();
-    } catch {
-      setActionError({
-        id: "action:stop",
-        title: "Could not stop",
-        message: "Check your connection.",
-        action: "none",
-      });
-    }
-  };
-  const stop = async () => {
-    submitGeneration.current += 1;
-    if (submitInFlight.current || submissionPending)
-      submissionControl.setStopRequested(true);
-    await stopAgent();
-  };
   const modeOf = (message: string) =>
     mentions?.mode === "members"
       ? draftMode(
@@ -1262,114 +1224,37 @@ function useAgentSubmission({
           mentions.conversationMode,
         )
       : "agent";
-  /**
-   * Holds the composer's message, read-only, while `deliver` sends a message,
-   * and lets go of it only once the server has that message. `deliver` gets
-   * the composer's message with its attachments and returns the one it sent.
-   * A refusal or a lost connection leaves the composer as it was.
-   */
-  const admit = (
-    mode: ReturnType<typeof modeOf>,
-    text: string,
-    deliver: (held: string) => Promise<string>,
-  ) => {
-    if (submitInFlight.current || submissionPending) return Promise.resolve();
-    submitInFlight.current = true;
-    submissionControl.setStopRequested(false);
-    onSubmissionPendingChange?.(true);
-    const generation = ++submitGeneration.current;
-    setAdmittingChat(mode === "chat");
-    setAdmissionPending(true);
-    setSendFailed(false);
-    setActionError(undefined);
-    const runAdmission = async () => {
-      try {
-        await imageCollection.settle();
-        if (generation !== submitGeneration.current) return;
-        const held = await messageWithAttachments(text, imageCollection.list());
-        const sent = await deliver(held);
-        if (mentions?.mode === "members") mentions.onSent(mode);
-        if (submissionControl.stopRequested()) await stopAgent();
-        if (sent === held) {
-          draftValue.set("");
-          disposeAttachments(imageCollection.take());
-          setImages([]);
-        }
-      } catch (cause) {
-        // A refused message stays in the composer with its reason. One the
-        // server may hold stays there too, and in Flue's failed send, whose
-        // key an unedited Send or Retry reuses, so it cannot duplicate.
-        const refusal = sendRefusal(cause);
-        if (isReadOnlyRejection(cause)) onAccessChanged?.();
-        setSendFailed(true);
-        setActionError({
-          // A Retry card for a failed send replaces only the generic error.
-          id: refusal === undefined ? "action:send" : "action:send-refused",
-          title: "Message not sent",
-          message: refusal ?? "Check your connection.",
-          action: "none",
-        });
-      }
-    };
-    return runAdmission().finally(finishAdmission);
-  };
-  const deliverFailedSend = (failed: FailedSend) =>
-    failed.retry === "resend"
-      ? currentAgent().resendPrompt(failed.id)
-      : currentAgent().retrySend(failed.id);
-  const submit = async (submittedDraft: string) => {
-    const message = submittedDraft.trim();
-    if (
-      submitInFlight.current ||
-      submissionPending ||
-      (!message && images.length === 0) ||
-      attachmentsUploading(images)
-    )
-      return;
-    const failedUpload = images.find(
-      ({ upload }) => upload.getSnapshot().status === "failed",
-    );
-    if (failedUpload !== undefined) {
-      setActionError({
-        id: "action:send",
-        title: "Message not sent",
-        message: `${failedUpload.filename} did not upload. Remove it and attach it again.`,
-        action: "none",
-      });
-      return;
-    }
-    const mode = modeOf(message);
-    if (mode === "chat" && images.length > 0) {
-      setActionError({
-        id: "action:send",
-        title: "Message not sent",
-        message:
-          "Chat messages can't include attachments. Tag @dx to send them.",
-        action: "none",
-      });
-      return;
-    }
-    await admit(mode, message, async (held) => {
-      // Unedited since it failed: send it under its key again. Edited: the
-      // new message replaces the failed one.
-      const agent = currentAgent();
-      const failed = agent.failedSends.findLast(
-        ({ message: sent }) => sent === held,
-      );
-      if (failed !== undefined) await deliverFailedSend(failed);
-      else {
-        discardSends(agent.failedSends.map(({ id }) => id));
-        await agent.sendMessage(held);
-      }
-      return held;
+  // Built for each call, so a send reads the props and state it starts with.
+  const context = (): SendAdmissionContext => ({
+    agent: currentAgent,
+    inFlight: submitInFlight,
+    generation: submitGeneration,
+    submissionPending,
+    submissionControl,
+    collection: imageCollection,
+    setAttachments: setImages,
+    draft: draftValue,
+    state: {
+      setAdmissionPending,
+      setSendFailed,
+      setAdmittingChat,
+      setIssue: setActionError,
+    },
+    onSubmissionPendingChange,
+    onAccessChanged,
+    ...(mentions?.mode === "members" ? { onSent: mentions.onSent } : {}),
+  });
+  const stop = () => stopSend(context());
+  const submit = (submittedDraft: string) =>
+    submitSend(context(), {
+      draft: submittedDraft,
+      mode: modeOf(submittedDraft.trim()),
+      attachments: images,
+      discardSends,
     });
-  };
   /** The failed-send card's Retry; clears the composer if it held that one. */
   const retrySend = (failed: FailedSend) =>
-    admit(modeOf(failed.message), draftValue.get().trim(), async () => {
-      await deliverFailedSend(failed);
-      return failed.message;
-    });
+    retryFailedSend(context(), failed, modeOf(failed.message));
   return {
     actionError,
     admissionPending,

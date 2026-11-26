@@ -1,6 +1,11 @@
 import { Schema } from "effect";
-import { defineEndpoint, FileAnswerSchema } from "../http/endpoint.js";
 import {
+  defineEndpoint,
+  FileAnswerSchema,
+  NoContentSchema,
+} from "../http/endpoint.js";
+import {
+  AttachmentAlreadySentResponseSchema,
   AttachmentInvalidRequestResponseSchema,
   AttachmentNotFoundResponseSchema,
   AttachmentPartsIncompleteResponseSchema,
@@ -58,6 +63,27 @@ export const CompleteAttachmentEndpoint = defineEndpoint({
     { status: 404, schema: AttachmentNotFoundResponseSchema },
     { status: 400, schema: AttachmentPartsIncompleteResponseSchema },
     { status: 400, schema: AttachmentSizeMismatchResponseSchema },
+    ...storageRefusals,
+  ],
+});
+
+/**
+ * Deletes an unsent attachment the viewer uploaded, as the composer does when
+ * a file is removed before sending. A sent message keeps its files (409).
+ * Core answers 204 without a body.
+ */
+export const DeleteAttachmentEndpoint = defineEndpoint({
+  id: "attachments.delete",
+  summary: "Delete an unsent attachment",
+  method: "DELETE",
+  path: "/v1/attachments/:id",
+  params: AttachmentParamsSchema,
+  success: NoContentSchema,
+  successStatus: 204,
+  answer: "none",
+  refusals: [
+    { status: 404, schema: AttachmentNotFoundResponseSchema },
+    { status: 409, schema: AttachmentAlreadySentResponseSchema },
     ...storageRefusals,
   ],
 });

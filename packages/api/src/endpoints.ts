@@ -26,10 +26,12 @@ import {
 import {
   CompleteAttachmentEndpoint,
   CreateAttachmentEndpoint,
+  DeleteAttachmentEndpoint,
   GetAttachmentFileEndpoint,
   GetNamedAttachmentFileEndpoint,
 } from "./attachments/attachments-endpoints.js";
 import {
+  CancelDictationEndpoint,
   CreateDictationEndpoint,
   GetDictationEndpoint,
 } from "./dictation/dictation-endpoints.js";
@@ -107,6 +109,16 @@ import {
   GetPersonalExperimentalFeaturesEndpoint,
   UpdatePersonalExperimentalFeatureEndpoint,
 } from "./settings/experimental-features.js";
+import {
+  CreateExternalApiApplicationEndpoint,
+  DisableExternalApiApplicationEndpoint,
+  EnableExternalApiApplicationEndpoint,
+  ListExternalApiApplicationAuditEndpoint,
+  ListExternalApiApplicationsEndpoint,
+  RevokeExternalApiApplicationEndpoint,
+  RotateExternalApiApplicationEndpoint,
+  UpdateExternalApiApplicationEndpoint,
+} from "./settings/external-api-applications.js";
 import {
   DeletePersonalFirstPartyPluginConfigurationEndpoint,
   DeleteWorkspaceFirstPartyPluginConfigurationEndpoint,
@@ -440,8 +452,10 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   UnpinArtifactEndpoint,
   CompleteAttachmentEndpoint,
   CreateAttachmentEndpoint,
+  DeleteAttachmentEndpoint,
   GetAttachmentFileEndpoint,
   GetNamedAttachmentFileEndpoint,
+  CancelDictationEndpoint,
   CreateDictationEndpoint,
   GetDictationEndpoint,
   DictationStreamEndpoint,
@@ -572,6 +586,14 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   GetSettingsContextEndpoint,
   GetPersonalExperimentalFeaturesEndpoint,
   UpdatePersonalExperimentalFeatureEndpoint,
+  ListExternalApiApplicationAuditEndpoint,
+  CreateExternalApiApplicationEndpoint,
+  DisableExternalApiApplicationEndpoint,
+  EnableExternalApiApplicationEndpoint,
+  ListExternalApiApplicationsEndpoint,
+  RevokeExternalApiApplicationEndpoint,
+  RotateExternalApiApplicationEndpoint,
+  UpdateExternalApiApplicationEndpoint,
   GetOrbUsageEndpoint,
   GetPersonalFeedbackWidgetEmbedEndpoint,
   UpdatePersonalFeedbackWidgetEmbedEndpoint,

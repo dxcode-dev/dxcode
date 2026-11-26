@@ -3,6 +3,15 @@ import type {
   ExternalApiApplicationSecretData,
   UpdateExternalApiApplicationRequest,
 } from "@dx/api";
+import {
+  CreateExternalApiApplicationEndpoint,
+  DisableExternalApiApplicationEndpoint,
+  EnableExternalApiApplicationEndpoint,
+  type ExternalApiApplicationData,
+  RevokeExternalApiApplicationEndpoint,
+  RotateExternalApiApplicationEndpoint,
+  UpdateExternalApiApplicationEndpoint,
+} from "@dx/api";
 import type {
   ExternalApiApplicationId,
   ExternalApiApplicationRotationOverlapSeconds,
@@ -10,14 +19,67 @@ import type {
   WorkspaceSlug,
 } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
-import {
-  createExternalApiApplication,
-  revokeExternalApiApplication,
-  rotateExternalApiApplication,
-  setExternalApiApplicationEnabled,
-  updateExternalApiApplication,
-} from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { applicationKeys } from "./application-queries.js";
+
+const createExternalApiApplication = async (
+  workspaceSlug: WorkspaceSlug,
+  input: CreateExternalApiApplicationRequest,
+) =>
+  (
+    await dxClient.call(CreateExternalApiApplicationEndpoint, {
+      params: { workspaceSlug },
+      body: input,
+    })
+  ).data;
+
+const updateExternalApiApplication = async (
+  workspaceSlug: WorkspaceSlug,
+  applicationId: ExternalApiApplicationId,
+  input: UpdateExternalApiApplicationRequest,
+): Promise<ExternalApiApplicationData> =>
+  (
+    await dxClient.call(UpdateExternalApiApplicationEndpoint, {
+      params: { workspaceSlug, applicationId },
+      body: input,
+    })
+  ).data;
+
+const rotateExternalApiApplication = async (
+  workspaceSlug: WorkspaceSlug,
+  applicationId: ExternalApiApplicationId,
+  overlapSeconds: ExternalApiApplicationRotationOverlapSeconds,
+) =>
+  (
+    await dxClient.call(RotateExternalApiApplicationEndpoint, {
+      params: { workspaceSlug, applicationId },
+      body: { overlapSeconds },
+    })
+  ).data;
+
+const setExternalApiApplicationEnabled = async (
+  workspaceSlug: WorkspaceSlug,
+  applicationId: ExternalApiApplicationId,
+  enabled: boolean,
+): Promise<ExternalApiApplicationData> =>
+  (
+    await dxClient.call(
+      enabled
+        ? EnableExternalApiApplicationEndpoint
+        : DisableExternalApiApplicationEndpoint,
+      { params: { workspaceSlug, applicationId }, body: {} },
+    )
+  ).data;
+
+const revokeExternalApiApplication = async (
+  workspaceSlug: WorkspaceSlug,
+  applicationId: ExternalApiApplicationId,
+): Promise<ExternalApiApplicationId> =>
+  (
+    await dxClient.call(RevokeExternalApiApplicationEndpoint, {
+      params: { workspaceSlug, applicationId },
+    })
+  ).data.revokedApplicationId;
 
 type ApplicationMutation =
   | {

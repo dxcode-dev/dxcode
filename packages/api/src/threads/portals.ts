@@ -2,6 +2,13 @@ import { Timestamp } from "@dx/domain";
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
+/**
+ * Where a private Portal sends a signed-out visitor to sign in. The browser
+ * goes there itself after dx sign-in, so it is a page Core serves, not an
+ * endpoint a client calls.
+ */
+export const PORTAL_AUTH_PATH_PREFIX = "/v1/portal-auth/";
+
 /** A TCP port a guest service listens on: canonical 1–65535. */
 export const ThreadPortalPortSchema = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: 65_535 }),

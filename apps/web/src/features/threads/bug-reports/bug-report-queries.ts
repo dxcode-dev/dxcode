@@ -15,6 +15,7 @@ import {
   type PersonalComposerDefaultsData,
   type StartBugReportInvestigationRequest,
 } from "@dx/api";
+import { reasoningModeId } from "@dx/client";
 import {
   CLAUDE_CODE_DEFAULT_EFFORT,
   isClaudeCodeModel,
@@ -35,7 +36,6 @@ import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
 import { composerDefaultsQueryOptions } from "../../settings/composer/composer-defaults-queries.js";
 import { modelRoutingChoicesQueryOptions } from "../../settings/model-routing/model-routing-queries.js";
 import { claudePlanPick } from "../claude-code-mode-options.js";
-import { reasoningModeId } from "../new-thread-modal-utils.js";
 
 const readJson = async <A>(
   response: Response,

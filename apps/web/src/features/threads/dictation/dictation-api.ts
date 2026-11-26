@@ -1,4 +1,3 @@
-import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
 import type { LiveDictation } from "./dictation-stream.js";
 
 /**
@@ -46,12 +45,10 @@ export const runDictation = async ({
   return job.text;
 };
 
-// Answers 204 without a body, which `dxClient.call` cannot read yet; the
-// route stays legacy until it can.
 export const cancelDictationJob = (id: string) =>
-  sameOriginFetch(`/v1/dictation/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  }).catch(() => undefined);
+  import("./dictation-mutations.js")
+    .then(({ cancelDictation }) => cancelDictation(id))
+    .catch(() => undefined);
 
 export const dictationMutationOptions = () => ({
   mutationFn: runDictation,
