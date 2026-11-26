@@ -19,11 +19,12 @@ import {
 import type { FlueEventContext, FlueObservation } from "@flue/runtime";
 import { Effect, Schema } from "effect";
 import { Hono } from "hono";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authorizeThread } from "../../src/auth/authorize-thread.js";
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
+import { loadDeploymentModels } from "../../src/settings/model-routing/deployment-models.js";
 import { recordFlueUsage } from "../../src/settings/usage/recorder.js";
 import { UsageRepositoryD1 } from "../../src/settings/usage/repository-d1.js";
 import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
@@ -462,25 +463,33 @@ describe("Thread Cost & Usage in workerd with real D1", () => {
     ).toBe(true);
   });
 
-  it("reads a bounded number of D1 rows to open, however much the Thread used", async () => {
-    const reads = async () => {
-      counter.reset();
-      const { status } = await get<ThreadUsageData>(
-        owner,
-        `/v1/threads/${threadId}/usage`,
-      );
-      expect(status).toBe(200);
-      const calls = [...counter.calls];
-      return {
-        ...summarizeD1Calls(calls),
-        rows: sum(calls, (call) => call.rowsRead ?? 0),
-        unmeasured: calls.filter((call) => call.rowsRead === undefined).length,
-      };
+  /**
+   * The D1 reads of opening the dialog. The dx models' configuration it
+   * names models by is an isolate cache rechecked at most every few seconds
+   * (dx-models/source.ts), not a read per request, so it is warmed first:
+   * otherwise a slow run that spends longer than that between two reads
+   * counts the recheck as the route's.
+   */
+  const usageReads = async () => {
+    await loadDeploymentModels(env.DB);
+    counter.reset();
+    const { status } = await get<ThreadUsageData>(
+      owner,
+      `/v1/threads/${threadId}/usage`,
+    );
+    expect(status).toBe(200);
+    const calls = [...counter.calls];
+    return {
+      ...summarizeD1Calls(calls),
+      rows: sum(calls, (call) => call.rowsRead ?? 0),
+      unmeasured: calls.filter((call) => call.rowsRead === undefined).length,
     };
-    await recordMix(30);
-    const small = await reads();
-    await recordMix(300);
-    const large = await reads();
+  };
+
+  const expectBoundedReads = (
+    small: Awaited<ReturnType<typeof usageReads>>,
+    large: Awaited<ReturnType<typeof usageReads>>,
+  ) => {
     // Authorization's reads, then one batch: the backfill state, the
     // Thread's rollup rows, its Orb usage, its context window, its row.
     expect(large.roundTrips).toBe(small.roundTrips);
@@ -494,6 +503,28 @@ describe("Thread Cost & Usage in workerd with real D1", () => {
       unmeasured: 0,
     });
     expect(large.rows).toBeLessThanOrEqual(30);
+  };
+
+  it("reads a bounded number of D1 rows to open, however much the Thread used", async () => {
+    await recordMix(30);
+    const small = await usageReads();
+    await recordMix(300);
+    const large = await usageReads();
+    expectBoundedReads(small, large);
+  }, 60_000);
+
+  it("reads as few D1 rows to open after the isolate's caches went stale", async () => {
+    await recordMix(30);
+    const small = await usageReads();
+    await recordMix(300);
+    // A loaded machine can take this long between the two reads.
+    vi.setSystemTime(Date.now() + 61_000);
+    try {
+      const large = await usageReads();
+      expectBoundedReads(small, large);
+    } finally {
+      vi.useRealTimers();
+    }
   }, 60_000);
 
   it("pages a model's requests newest first, 50 at a time, reading one page of rows", async () => {

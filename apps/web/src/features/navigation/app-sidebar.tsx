@@ -17,6 +17,7 @@ import {
   type PendingThreadCreation,
   useNewThreadSurface,
 } from "../../shared/new-thread-surface.js";
+import { preloadableComponent } from "../../shared/preloadable-component.js";
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
 import { ProjectsIcon } from "../../shared/ui/projects-icon.js";
@@ -41,10 +42,19 @@ import {
   nextSnoozeWake,
   withPendingThreads,
 } from "./sidebar-thread-utils.js";
-import {
-  ThreadHoverPreview,
-  type ThreadPreviewAnchor,
+import type {
+  ThreadHoverPreview as ThreadHoverPreviewComponent,
+  ThreadPreviewAnchor,
 } from "./thread-hover-preview.js";
+
+/** Loads while the pointer dwells on a row, so the preview shows at once. */
+const ThreadHoverPreview = preloadableComponent<
+  React.ComponentProps<typeof ThreadHoverPreviewComponent>
+>(() =>
+  import("./thread-hover-preview.js").then((module) => ({
+    default: module.ThreadHoverPreview,
+  })),
+);
 
 interface PreviewState {
   readonly anchor: ThreadPreviewAnchor;
@@ -104,6 +114,7 @@ const useThreadPreviewIntent = () => {
     element: HTMLElement,
   ) => {
     hoveredThreadId.current = thread.id;
+    void ThreadHoverPreview.preload().catch(noop);
     closePreviewAfterGrace.cancel();
     openPreviewAfterIntent.cancel();
     if (suppressedThreadId.current === thread.id) return;
@@ -526,16 +537,18 @@ function AppSidebarContent({
         />
       )}
       {preview === undefined || userId === undefined ? null : (
-        <ThreadHoverPreview
-          key={preview.thread.id}
-          {...preview}
-          thread={
-            threads.find((thread) => thread.id === preview.thread.id) ??
-            preview.thread
-          }
-          onPointerEnter={keepPreviewOpen}
-          onPointerLeave={schedulePreviewClose}
-        />
+        <React.Suspense fallback={null}>
+          <ThreadHoverPreview
+            key={preview.thread.id}
+            {...preview}
+            thread={
+              threads.find((thread) => thread.id === preview.thread.id) ??
+              preview.thread
+            }
+            onPointerEnter={keepPreviewOpen}
+            onPointerLeave={schedulePreviewClose}
+          />
+        </React.Suspense>
       )}
     </aside>
   );

@@ -3,7 +3,15 @@ import type { UserId } from "@dx/domain";
 import { DateTime } from "effect";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -154,6 +162,10 @@ describe("sidebar thread preview intent", () => {
   let container: HTMLDivElement;
   let root: Root;
   let mounted: boolean;
+
+  // The preview's chunk loads during the 500 ms dwell; fake timers skip that
+  // wait, so the module is fetched up front, as it is by then in the app.
+  beforeAll(() => import("./thread-hover-preview.js"));
 
   beforeEach(async () => {
     vi.useFakeTimers();
