@@ -109,7 +109,7 @@ const childItem = (
 });
 
 const threads = [
-  childItem(1, "Fix coupon total rounding", "ready_to_ship", "Fixed it", 2),
+  childItem(1, "Fix coupon total rounding", "idle", "Fixed it", 2),
   childItem(3, "Add Apple Pay to checkout", "working", "Merchant check", 1),
   childItem(4, "Rebuild the payment step", "archived", "Done", 30),
 ];
@@ -235,11 +235,10 @@ const progressDays = () =>
     const date = new Date(Date.now() - (29 - index) * 86_400_000);
     return {
       date: date.toISOString().slice(0, 10),
-      created: index === 20 ? 2 : 0,
-      shipped: 0,
-      archived: index === 20 ? 1 : 0,
+      merged: index === 20 ? 1 : 0,
+      pushed: 0,
       openAtEnd: index >= 20 ? 2 : 0,
-      threadIds: [],
+      changeIds: [],
     };
   });
 
@@ -297,8 +296,8 @@ const serve = ({
       return ok({
         timeZone: "UTC",
         days: progressDays(),
-        totals: { shipped: 0, archived: 1, open: 2 },
-        threads: [],
+        totals: { merged: 1, pushed: 0, open: 2 },
+        changes: [],
       });
     if (path === `/v1/spaces/${SPACE}/catch-up`) return ok({ catchUp: null });
     if (path === `/v1/spaces/${SPACE}/artifacts`) {

@@ -169,6 +169,13 @@ export const DxdTerminalCapability = Schema.Struct({
    * carrying write bytes.
    */
   sandbox: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
+   * Version 1: Core may send `services.remember` and `services.recover`,
+   * which keep an undeclared server a Portal served and run it again.
+   */
+  portalRecovery: Schema.optional(
+    Schema.Struct({ version: Schema.Literal(1) }),
+  ),
 });
 
 export const DxdTerminalHeartbeat = Schema.Union([
@@ -1004,8 +1011,37 @@ export const DxdServicesEnsureOperation = Schema.Struct({
       cwd: Schema.optional(Schema.String),
       port: Schema.Int,
       env: Schema.Record(Schema.String, Schema.String),
+      /** Under `~/workspace/repos`; needs the `portalRecovery` capability. */
+      checkout: Schema.optional(Schema.String),
     }),
   ),
+});
+
+const DxdGuestPort = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: 65_535 }),
+);
+
+/**
+ * Record the process listening on `port`, an undeclared server a Portal
+ * served, so `services.recover` can run it again.
+ */
+export const DxdServicesRememberOperation = Schema.Struct({
+  operation: Schema.Literal("services.remember"),
+  port: DxdGuestPort,
+});
+
+/**
+ * The `.dx/services.yaml` of the primary checkout and of each repository
+ * checkout under `~/workspace/repos`.
+ */
+export const DxdServicesManifestsOperation = Schema.Struct({
+  operation: Schema.Literal("services.manifests"),
+});
+
+/** Run the process remembered for `port` again unless something listens. */
+export const DxdServicesRecoverOperation = Schema.Struct({
+  operation: Schema.Literal("services.recover"),
+  port: DxdGuestPort,
 });
 
 /** The guest's memory and its largest processes; see `orb-memory`. */
@@ -1752,6 +1788,9 @@ export const DxdOperation = Schema.Union([
   DxdDesktopOpenOperation,
   DxdDesktopFocusOperation,
   DxdServicesEnsureOperation,
+  DxdServicesRememberOperation,
+  DxdServicesRecoverOperation,
+  DxdServicesManifestsOperation,
   DxdMemorySnapshotOperation,
   DxdMemoryStopOperation,
   DxdDiskSnapshotOperation,
@@ -2107,9 +2146,27 @@ export const DxdServicesEnsureResult = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("unavailable"),
-    reason: Schema.Literal("invalid"),
+    // `unknown`: `services.recover` remembers nothing for the port.
+    reason: Schema.Literals(["invalid", "unknown"]),
   }),
 ]);
+
+export const DxdServicesManifestsResult = Schema.Struct({
+  kind: Schema.Literal("manifests"),
+  manifests: Schema.Array(
+    Schema.Struct({
+      checkout: Schema.optional(
+        Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255)),
+      ),
+      content: Schema.String.check(Schema.isMaxLength(64 * 1024)),
+    }),
+  ).check(Schema.isMaxLength(16)),
+});
+
+export const DxdServicesRememberResult = Schema.Struct({
+  kind: Schema.Literal("remembered"),
+  remembered: Schema.Boolean,
+});
 
 /**
  * `DXP1` proxy frames: `DXP1 | u32 BE stream | u8 kind | 3 zero bytes |

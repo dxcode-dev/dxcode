@@ -15,6 +15,8 @@ import {
   RotateCw,
 } from "lucide-react";
 import * as React from "react";
+import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import { usePageVisible } from "../../../shared/hooks/use-page-visible.js";
 import { Button } from "../../../shared/ui/button.js";
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
 import {
@@ -32,6 +34,7 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "../../../shared/ui/menu.js";
+import { useThreadWorkspaceStatus } from "../realtime/realtime-provider.js";
 
 // The guest is another site: it may run scripts, keep its own cookies, and
 // open popups, but never navigate the dx tab.
@@ -194,6 +197,25 @@ function PortalActions({
   );
 }
 
+/** Wakes the workspace once, when it mounts; keyed by the attention it serves. */
+function AutoWake({ onWake }: { readonly onWake: () => void }) {
+  useMountEffect(onWake);
+  return null;
+}
+
+/** What a row says about its port besides its number. */
+const portalStatus = (portal: ThreadPortal) =>
+  [
+    portal.listening
+      ? undefined
+      : portal.declared
+        ? "Starts when opened"
+        : "Not running",
+    portal.declared ? undefined : "Not in .dx/services.yaml",
+  ]
+    .filter((part) => part !== undefined)
+    .join(" · ");
+
 export function ThreadPortalsPane({
   threadId,
   active,
@@ -201,15 +223,31 @@ export function ThreadPortalsPane({
   readonly threadId: ThreadId;
   readonly active: boolean;
 }) {
-  const [selected, setSelected] = React.useState<ThreadPortal>();
+  const [chosen, setChosen] = React.useState<ThreadPortal>();
   const [frameGeneration, setFrameGeneration] = React.useState(0);
   const [copiedPort, setCopiedPort] = React.useState<number>();
   const [announcement, setAnnouncement] = React.useState("");
-  const portals = useQuery(
-    threadPortalsQueryOptions(threadId, active && selected === undefined),
-  );
+  const visible = usePageVisible();
+  const workspaceStatus = useThreadWorkspaceStatus(threadId);
+  const portals = useQuery(threadPortalsQueryOptions(threadId, active));
   const publicLink = usePortalPublicLink(threadId);
   const wake = useWakePortals(threadId);
+
+  // Each time someone turns to the Portal (the pane shows, or the browser
+  // tab comes back), a paused workspace wakes once. A workspace that falls
+  // asleep while nobody looks stays asleep, so a forgotten tab cannot keep
+  // it awake.
+  const attentive = active && visible;
+  const [attention, setAttention] = React.useState({
+    attentive,
+    generation: 0,
+  });
+  if (attention.attentive !== attentive)
+    setAttention({
+      attentive,
+      generation: attention.generation + (attentive ? 1 : 0),
+    });
+  const [wokenGeneration, setWokenGeneration] = React.useState<number>();
 
   const copy = async (portal: ThreadPortal) => {
     try {
@@ -246,23 +284,43 @@ export function ThreadPortalsPane({
   const links = new Map(
     (data?.publicLinks ?? []).map((link) => [link.port, link]),
   );
-  // A public port stays listed while nothing listens on it, so it can be
-  // made private.
-  const rows: ReadonlyArray<ThreadPortal> = [
-    ...(data?.portals ?? []),
-    ...(data?.publicLinks ?? []).filter(
-      (link) => !data?.portals.some(({ port }) => port === link.port),
-    ),
-  ]
-    .map(({ port, url }) => ({ port, url }))
-    .sort((left, right) => left.port - right.port);
+  const rows: ReadonlyArray<ThreadPortal> = data?.portals ?? [];
+  // The open port as the list last reported it, so its state stays live.
+  const selected =
+    chosen === undefined
+      ? undefined
+      : (rows.find(({ port }) => port === chosen.port) ?? chosen);
+  // The open port started listening: load it again instead of leaving the
+  // "Nothing is listening" page up.
+  if (
+    selected !== undefined &&
+    chosen !== undefined &&
+    selected.listening !== chosen.listening
+  ) {
+    setChosen(selected);
+    if (selected.listening) setFrameGeneration((generation) => generation + 1);
+  }
   const failedPort =
     publicLink.isError && publicLink.variables !== undefined
       ? publicLink.variables.port
       : undefined;
 
-  const hint = (port: number) => {
-    if (port === failedPort)
+  const autoWake =
+    attentive &&
+    data?.workspace === "paused" &&
+    wokenGeneration !== attention.generation &&
+    !wake.isPending ? (
+      <AutoWake
+        key={attention.generation}
+        onWake={() => {
+          setWokenGeneration(attention.generation);
+          wake.mutate();
+        }}
+      />
+    ) : null;
+
+  const hint = (portal: ThreadPortal) => {
+    if (portal.port === failedPort)
       return (
         <span className="thread-portals-hint" role="alert">
           {publicLink.error instanceof Error
@@ -270,9 +328,13 @@ export function ThreadPortalsPane({
             : "Could not change the link."}
         </span>
       );
-    const link = links.get(port);
-    return link === undefined ? null : (
-      <span className="thread-portals-hint">Public until {until(link)}</span>
+    const link = links.get(portal.port);
+    const parts = [
+      portalStatus(portal),
+      link === undefined ? "" : `Public until ${until(link)}`,
+    ].filter((part) => part !== "");
+    return parts.length === 0 ? null : (
+      <span className="thread-portals-hint">{parts.join(" · ")}</span>
     );
   };
 
@@ -291,14 +353,14 @@ export function ThreadPortalsPane({
             variant="ghost"
             aria-label="Back to ports"
             title="Back to ports"
-            onClick={() => setSelected(undefined)}
+            onClick={() => setChosen(undefined)}
           >
             <ArrowLeft aria-hidden="true" />
           </Button>
           <span className="thread-portals-address" title={selected.url}>
             {selected.url}
           </span>
-          {hint(selected.port)}
+          {hint(selected)}
           <Button
             size="icon-xs"
             variant="ghost"
@@ -318,7 +380,8 @@ export function ThreadPortalsPane({
           />
         </header>
         {/* Unloaded while the tab is hidden so the guest page stops running
-            (and stops keeping the workspace awake); the port stays chosen. */}
+            (and stops keeping the workspace awake); the port stays chosen.
+            Loading it wakes a paused workspace. */}
         {active ? (
           <iframe
             key={frameGeneration}
@@ -333,6 +396,12 @@ export function ThreadPortalsPane({
       </div>
     );
 
+  const waking =
+    wake.isPending ||
+    workspaceStatus !== undefined ||
+    (data?.workspace === "paused" &&
+      !wake.isError &&
+      wokenGeneration !== attention.generation);
   const empty =
     data === undefined
       ? portals.isError
@@ -340,18 +409,28 @@ export function ThreadPortalsPane({
         : "Loading ports…"
       : rows.length > 0
         ? undefined
-        : wake.isPending
-          ? "Waking the workspace…"
-          : data.workspace === "paused"
-            ? wake.isError
-              ? "The workspace could not be woken."
-              : "The workspace is paused."
-            : data.workspace === "unavailable"
-              ? "Ports are unavailable right now."
-              : "Nothing is listening. Start a server on 0.0.0.0 or 127.0.0.1.";
+        : data.workspace === "running"
+          ? "No Portals yet. Declare a server in .dx/services.yaml, or open a Portal link."
+          : waking
+            ? "Waking the workspace…"
+            : data.workspace === "paused"
+              ? wake.isError
+                ? "The workspace could not be woken."
+                : "The workspace is asleep. It wakes when you come back to this tab."
+              : "Ports are unavailable right now.";
+  const notice =
+    data?.servicesFile === "invalid"
+      ? "dx can't read .dx/services.yaml, so its services are not listed. Check the file for errors."
+      : undefined;
 
   return (
     <div className="thread-portals-pane">
+      {autoWake}
+      {notice === undefined ? null : (
+        <p className="thread-portals-notice" role="status">
+          {notice}
+        </p>
+      )}
       {empty !== undefined ? (
         <div className="thread-files-state" role="status">
           <span>{empty}</span>
@@ -363,9 +442,9 @@ export function ThreadPortalsPane({
             >
               Retry
             </Button>
-          ) : data?.workspace === "paused" && !wake.isPending ? (
+          ) : data?.workspace === "paused" && !waking ? (
             <Button size="xs" variant="outline" onClick={() => wake.mutate()}>
-              Wake workspace
+              Wake now
             </Button>
           ) : null}
         </div>
@@ -377,11 +456,14 @@ export function ThreadPortalsPane({
                 type="button"
                 className="thread-portals-open"
                 title={`Preview port ${portal.port}`}
-                onClick={() => setSelected(portal)}
+                onClick={() => setChosen(portal)}
               >
                 <AppWindow aria-hidden="true" />
                 <span>{portal.port}</span>
-                {hint(portal.port)}
+                {portal.name === undefined ? null : (
+                  <span className="thread-portals-name">{portal.name}</span>
+                )}
+                {hint(portal)}
               </button>
               <PortalActions
                 portal={portal}

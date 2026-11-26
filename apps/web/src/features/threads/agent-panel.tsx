@@ -77,13 +77,13 @@ import {
   MessageEditContext,
   type MessageEditOptions,
 } from "./message-edit-model.js";
-import { ProcessingIndicator } from "./processing-indicator.js";
 import {
   type ComposerMentions,
   useComposerMentions,
 } from "./sharing/chat-composer.js";
 import { UserMessageText } from "./sharing/message-authors.js";
 import { draftMode } from "./sharing/thread-chat.js";
+import { ThreadSetupStatus } from "./simple-view/simple-setup-line.js";
 import { ThreadPresentationContext } from "./thread-session-context.js";
 import {
   createPendingSubmissionControl,
@@ -307,10 +307,9 @@ function AgentTranscriptFooter({
   return (
     <>
       {statusMessage === undefined ? null : (
-        <ProcessingIndicator
-          accessibleLabel={statusMessage}
+        <ThreadSetupStatus
+          status={statusMessage}
           className="initial-thread-status"
-          label={statusMessage}
         />
       )}
       {idleEnd}

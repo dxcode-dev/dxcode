@@ -19,6 +19,7 @@ mod observer;
 mod plugin_drafts;
 #[path = "plugin-host/mod.rs"]
 mod plugin_host;
+mod portal_processes;
 mod protocol;
 mod proxy;
 mod runner;
@@ -446,7 +447,7 @@ mod tests {
             })
             .unwrap(),
             format!(
-                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}},"disk":{{"version":1}},"storage":{{"version":1}},"terminalSessions":{{"version":1}},"mcp":{{"version":1}},"desktop":{{"version":1}},"pluginHost":{{"version":1}},"pluginDrafts":{{"version":1}},"serviceHost":{{"version":1}},"sandbox":{{"version":1}}}}}}"#
+                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}},"disk":{{"version":1}},"storage":{{"version":1}},"terminalSessions":{{"version":1}},"mcp":{{"version":1}},"desktop":{{"version":1}},"pluginHost":{{"version":1}},"pluginDrafts":{{"version":1}},"serviceHost":{{"version":1}},"sandbox":{{"version":1}},"portalRecovery":{{"version":1}}}}}}"#
             )
         );
         assert_eq!(

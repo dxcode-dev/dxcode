@@ -275,7 +275,10 @@ export class RealtimeHub extends DurableObject<Bindings> {
     socket.close(1011, "websocket-error");
   }
 
-  /** Closes the sockets whose browser session ended, then checks again. */
+  /**
+   * Closes the sockets whose browser session ended, and those of people no
+   * longer members of the hub's workspace, then checks again.
+   */
   async alarm(): Promise<void> {
     const db = this.env.DB;
     if (db === undefined) return;
@@ -303,10 +306,67 @@ export class RealtimeHub extends DurableObject<Bindings> {
         event: "realtime_session_check_failed",
       });
     }
-    if (watching)
+    let members = true;
+    try {
+      members = await this.#closeDepartedMembers();
+    } catch {
+      realtimeLogger.warn("Realtime membership check failed.", {
+        event: "realtime_membership_check_failed",
+      });
+    }
+    if (watching || members)
       await this.ctx.storage.setAlarm(
         Date.now() + sessionSocketCheckMs(this.env),
       );
+  }
+
+  /**
+   * A workspace hub delivers `audience` hints to every socket in it, so a
+   * person removed from the workspace must not keep one open (#2584). Closes
+   * their sockets; the client reconnects to its new home audience. Returns
+   * whether any workspace socket is left to check.
+   */
+  async #closeDepartedMembers(): Promise<boolean> {
+    const db = this.env.DB;
+    const sockets = this.ctx.getWebSockets().flatMap((socket) => {
+      const attachment = socket.deserializeAttachment() as
+        | SocketAttachment
+        | undefined;
+      return attachment?.audience.startsWith("workspace:")
+        ? [{ socket, attachment }]
+        : [];
+    });
+    const first = sockets[0];
+    if (db === undefined || first === undefined) return false;
+    const participants = [
+      ...new Set(sockets.map(({ attachment }) => attachment.participant)),
+    ];
+    const { results } = await db
+      .prepare(
+        `SELECT participant.value AS userId
+           FROM json_each(?2) AS participant
+          WHERE ${activeMemberSql("?1", "participant.value")}`,
+      )
+      .bind(
+        first.attachment.audience.slice("workspace:".length),
+        JSON.stringify(participants),
+      )
+      .all<{ userId: string }>();
+    const members = new Set(results.map((row) => row.userId));
+    let watching = false;
+    for (const { socket, attachment } of sockets) {
+      if (members.has(attachment.participant)) {
+        watching = true;
+        continue;
+      }
+      try {
+        socket.close(4403, "membership-ended");
+      } catch {
+        // Already closed.
+      }
+      this.#leave(socket);
+    }
+    return watching;
   }
 
   async #watchSessions() {
@@ -455,6 +515,10 @@ export class RealtimeHub extends DurableObject<Bindings> {
         clientId,
         ...sessionOf(request),
       });
+    if (request.method === "POST" && url.pathname === "/members-changed") {
+      await this.#closeDepartedMembers();
+      return new Response(null, { status: 204 });
+    }
     if (request.method === "POST" && url.pathname === "/invalidate")
       return this.#publishInvalidation(request, audience);
     if (request.method === "POST" && url.pathname === "/notify")
@@ -510,7 +574,11 @@ export class RealtimeHub extends DurableObject<Bindings> {
     const server = pair[1];
     server.serializeAttachment(attachment);
     this.ctx.acceptWebSocket(server);
-    if (attachment.session !== undefined) await this.#watchSessions();
+    if (
+      attachment.session !== undefined ||
+      attachment.audience.startsWith("workspace:")
+    )
+      await this.#watchSessions();
     if (cursor !== undefined && cursor !== revision) {
       server.send(
         JSON.stringify({
@@ -534,6 +602,9 @@ export class RealtimeHub extends DurableObject<Bindings> {
     const threadEvent = decodeThreadEvent(await request.json());
     if (threadEvent === undefined) return new Response(null, { status: 400 });
     this.#restorePresence();
+    // Presence that stopped heartbeating no longer receives the Thread's
+    // events; a heartbeat re-checks access, so this ends a revoked share.
+    this.#prunePresence(Date.now());
     const topic: PresenceTopic =
       threadEvent.artifactId === undefined
         ? `thread:${threadEvent.threadId as ThreadId}`

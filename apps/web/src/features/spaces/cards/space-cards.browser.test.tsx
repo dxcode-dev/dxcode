@@ -90,7 +90,7 @@ const everyState = () => [
   item(
     1,
     "Fix coupon total rounding",
-    "ready_to_ship",
+    "idle",
     "Fixed the coupon rounding",
     300,
   ),
@@ -104,7 +104,7 @@ const everyState = () => [
   item(
     3,
     "Add Apple Pay to checkout",
-    "needs_you",
+    "idle",
     "Asked which merchant ID to use",
     12,
   ),
@@ -115,8 +115,8 @@ const everyState = () => [
     "Counted 453 .tsx files in apps/web",
     0,
   ),
-  item(5, "Checkout Playwright tests", "failed", null, 90, null),
-  item(6, "Receipt email total", "shipped", "Merged the receipt fix", 60 * 26),
+  item(5, "Checkout Playwright tests", "idle", null, 90, null),
+  item(6, "Receipt email total", "idle", "Merged the receipt fix", 60 * 26),
   item(7, "Old coupon banner", "archived", null, 60 * 24 * 3),
 ];
 
@@ -303,7 +303,7 @@ it("shows each state's label, status line, time, and requester, and updates live
   expect(lines).toEqual([
     {
       title: "Fix coupon total rounding",
-      line: "Ready to Ship · Fixed the coupon rounding",
+      line: "Idle · Fixed the coupon rounding",
       time: "5h",
       requester: "Requested by Thorsten Ball",
     },
@@ -315,7 +315,7 @@ it("shows each state's label, status line, time, and requester, and updates live
     },
     {
       title: "Add Apple Pay to checkout",
-      line: "Needs You · Asked which merchant ID to use",
+      line: "Idle · Asked which merchant ID to use",
       time: "12m",
       requester: "Requested by Thorsten Ball",
     },
@@ -327,13 +327,13 @@ it("shows each state's label, status line, time, and requester, and updates live
     },
     {
       title: "Checkout Playwright tests",
-      line: "Failed",
+      line: "Idle",
       time: "1h",
       requester: null,
     },
     {
       title: "Receipt email total",
-      line: "Shipped · Merged the receipt fix",
+      line: "Idle · Merged the receipt fix",
       time: "1d",
       requester: "Requested by Thorsten Ball",
     },
@@ -345,7 +345,7 @@ it("shows each state's label, status line, time, and requester, and updates live
     },
   ]);
   expect(cardFor(child(3))?.getAttribute("aria-label")).toBe(
-    "Add Apple Pay to checkout, Needs You, Asked which merchant ID to use, requested by Thorsten Ball",
+    "Add Apple Pay to checkout, Idle, Asked which merchant ID to use, requested by Thorsten Ball",
   );
   // The thread open beside the chat is selected.
   expect(cardFor(child(4))?.hasAttribute("data-selected")).toBe(true);

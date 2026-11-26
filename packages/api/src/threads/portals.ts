@@ -14,10 +14,19 @@ export const ThreadPortalPortSchema = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: 65_535 }),
 );
 
-/** One guest listener and the Portal URL that serves it. */
+/**
+ * One exposed port and the Portal URL that serves it. A port is exposed
+ * when `.dx/services.yaml` declares it (`declared`; `name` is its service),
+ * someone opened it through a Portal, or it is public. Other listeners in
+ * the workspace are not listed.
+ */
 export const ThreadPortalSchema = Schema.Struct({
   port: ThreadPortalPortSchema,
   url: Schema.String,
+  name: Schema.optional(Schema.String),
+  declared: Schema.Boolean,
+  /** Something listens on the port now; a declared one starts on open. */
+  listening: Schema.Boolean,
 });
 export type ThreadPortal = typeof ThreadPortalSchema.Type;
 
@@ -34,12 +43,15 @@ export type ThreadPortalPublicLink = typeof ThreadPortalPublicLinkSchema.Type;
 
 /**
  * The Thread's Portals. Listing never wakes the workspace: a paused
- * workspace reports `paused` with no ports, and opening a Portal wakes it.
- * `publicLinks` lists public ports whether or not they are listening;
- * `canPublish` is true only for the Thread's owner.
+ * workspace reports `paused` and lists only its public ports, and opening a
+ * Portal wakes it. `publicLinks` lists public ports whether or not they are
+ * listening; `canPublish` is true only for the Thread's owner.
+ * `servicesFile` says whether `.dx/services.yaml` was read (`unknown` while
+ * the workspace is not running).
  */
 export const ThreadPortalsDataSchema = Schema.Struct({
   workspace: Schema.Literals(["running", "paused", "unavailable"]),
+  servicesFile: Schema.Literals(["valid", "missing", "invalid", "unknown"]),
   portals: Schema.Array(ThreadPortalSchema),
   publicLinks: Schema.Array(ThreadPortalPublicLinkSchema),
   canPublish: Schema.Boolean,

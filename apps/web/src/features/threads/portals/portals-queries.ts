@@ -18,8 +18,10 @@ export const portalKeys = {
 };
 
 /**
- * The Thread's guest listeners as Portal URLs. Listing never wakes a paused
- * workspace; it polls only while the Preview pane is showing the list.
+ * The Thread's exposed ports as Portal URLs. Listing never wakes a paused
+ * workspace; it polls while the Portal pane shows, a port open or not, so
+ * services added to `.dx/services.yaml` and servers coming up appear on
+ * their own.
  */
 export const threadPortalsQueryOptions = (
   threadId: ThreadId,
@@ -35,14 +37,15 @@ export const threadPortalsQueryOptions = (
           { signal },
         )
       ).data,
-    staleTime: 3_000,
-    refetchInterval: polling ? 5_000 : false,
+    staleTime: 2_000,
+    refetchInterval: polling ? 3_000 : false,
     refetchIntervalInBackground: false,
   });
 
 /**
  * Resumes a paused workspace and lists its ports; the answer replaces the
- * cached list, which keeps polling as before.
+ * cached list, which keeps polling as before. The pane calls it on its own
+ * when someone turns to a paused workspace's Portals.
  */
 export const useWakePortals = (threadId: ThreadId) => {
   const client = useQueryClient();

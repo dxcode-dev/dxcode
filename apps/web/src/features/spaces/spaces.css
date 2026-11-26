@@ -682,6 +682,12 @@
 .space-thread-pane .thread-pane-tree {
   padding: 0;
 }
+/* While the open thread loads: its tab strip over a card, as once open. */
+.space-thread-pending {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 .space-thread-pane
   .thread-pane-tree
   > .thread-pane:only-child:not(:has(.pane-tab + .pane-tab))

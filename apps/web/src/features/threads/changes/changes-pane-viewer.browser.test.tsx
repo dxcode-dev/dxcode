@@ -38,6 +38,7 @@ afterEach(() => document.body.replaceChildren());
 describe("Changes pane for a View-only member", () => {
   it("lists changed files without reading their contents", async () => {
     const getDiff = vi.fn<ChangesTransport["getDiff"]>();
+    const getShipPlan = vi.fn<NonNullable<ChangesTransport["getShipPlan"]>>();
     const transport: ChangesTransport = {
       getChanges: async (_thread, range) => ({
         kind: "changes",
@@ -49,7 +50,8 @@ describe("Changes pane for a View-only member", () => {
         truncated: false,
         baseline: sha,
         head: sha,
-        ahead: 0,
+        branch: "feature",
+        ahead: 1,
         summary: { additions: 1, deletions: 0, files: 1 },
         files: [
           {
@@ -64,6 +66,7 @@ describe("Changes pane for a View-only member", () => {
         commits: [],
       }),
       getDiff,
+      getShipPlan,
       push: vi.fn(),
     };
     const client = new QueryClient({
@@ -90,6 +93,15 @@ describe("Changes pane for a View-only member", () => {
     );
     expect(row?.textContent).toContain(".env");
     expect(row?.textContent).toContain("+1");
+
+    // Ship and Push act for the owner's Project; a viewer may do neither,
+    // and the Ship plan is never read for them (#2580).
+    const actions = [...container.querySelectorAll("button")].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(actions).not.toContain("Ship");
+    expect(actions).not.toContain("Push");
+    expect(getShipPlan).not.toHaveBeenCalled();
 
     await React.act(() => row?.click());
     expect(container.querySelector(".changes-diff-region")?.textContent).toBe(

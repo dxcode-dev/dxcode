@@ -20,6 +20,9 @@ pub const MAX_SERVICES: usize = 16;
 pub const MAX_SERVICE_NAME_BYTES: usize = 32;
 pub const MAX_COMMAND_BYTES: usize = 4096;
 pub const MAX_CWD_BYTES: usize = 256;
+pub const MAX_CHECKOUT_BYTES: usize = 255;
+/// A `.dx/services.yaml` larger than this is not read.
+pub const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 pub const MAX_ENV: usize = 64;
 pub const MAX_ENV_NAME_BYTES: usize = 128;
 pub const MAX_ENV_VALUE_BYTES: usize = 4096;
@@ -38,9 +41,23 @@ pub struct ServiceSpec {
     pub port: u16,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// The checkout under `~/workspace/repos` whose `.dx/services.yaml`
+    /// declares it; `cwd` is relative to that checkout. None: the primary.
+    #[serde(default)]
+    pub checkout: Option<String>,
 }
 
 impl ServiceSpec {
+    /// Names a service across checkouts: `name`, or `checkout:name`. The
+    /// handoff's `name=pid` pairs carry it, and neither part holds `=` or `,`
+    /// (a checkout name could; such a service is not handed over).
+    fn key(&self) -> String {
+        match &self.checkout {
+            Some(checkout) => format!("{checkout}:{}", self.name),
+            None => self.name.clone(),
+        }
+    }
+
     pub fn valid(&self) -> bool {
         (1..=MAX_SERVICE_NAME_BYTES).contains(&self.name.len())
             && self
@@ -53,6 +70,17 @@ impl ServiceSpec {
             && !self.command.contains('\0')
             && self.port != 0
             && !crate::proxy::INTERNAL_PORTS.contains(&self.port)
+            && self.checkout.as_ref().is_none_or(|checkout| {
+                (1..=MAX_CHECKOUT_BYTES).contains(&checkout.len())
+                    && !checkout.starts_with('.')
+                    && matches!(
+                        Path::new(checkout)
+                            .components()
+                            .collect::<Vec<_>>()
+                            .as_slice(),
+                        [Component::Normal(_)]
+                    )
+            })
             && self.cwd.as_ref().is_none_or(|cwd| {
                 cwd.len() <= MAX_CWD_BYTES
                     && !cwd.contains('\0')
@@ -155,6 +183,7 @@ impl Services {
         self.reap();
         self.children
             .iter()
+            .filter(|(name, _)| !name.contains(['=', ',']))
             .map(|(name, tracked)| format!("{name}={}", tracked.pid()))
             .collect::<Vec<_>>()
             .join(",")
@@ -176,13 +205,12 @@ impl Services {
                     ServiceState::Failed
                 } else if listening(spec.port) {
                     ServiceState::Running
-                } else if self.children.contains_key(&spec.name) {
+                } else if self.children.contains_key(&spec.key()) {
                     ServiceState::Starting
                 } else {
                     match start(spec, paths) {
                         Ok(child) => {
-                            self.children
-                                .insert(spec.name.clone(), Tracked::Child(child));
+                            self.children.insert(spec.key(), Tracked::Child(child));
                             ServiceState::Started
                         }
                         Err(_) => ServiceState::Failed,
@@ -203,20 +231,77 @@ impl Services {
     }
 }
 
-fn start(spec: &ServiceSpec, paths: &ServicePaths) -> std::io::Result<Child> {
-    let cwd = match &spec.cwd {
-        Some(cwd) => paths.workspace_root.join(cwd),
+/// One checkout's `.dx/services.yaml`: the primary's (`checkout` None) or
+/// one under `~/workspace/repos`.
+#[derive(Debug, Serialize)]
+pub struct Manifest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<String>,
+    pub content: String,
+}
+
+/// The primary checkout's manifest, then each repository checkout's, for
+/// those that have one; Core validates them.
+pub fn manifests(workspace_root: &Path) -> Vec<Manifest> {
+    let read = |root: &Path| {
+        let path = root.join(".dx/services.yaml");
+        let metadata = fs::metadata(&path).ok()?;
+        (metadata.is_file() && metadata.len() <= MAX_MANIFEST_BYTES)
+            .then(|| fs::read_to_string(&path).ok())
+            .flatten()
+    };
+    let mut found = Vec::new();
+    if let Some(content) = read(workspace_root) {
+        found.push(Manifest {
+            checkout: None,
+            content,
+        });
+    }
+    let primary = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_root.to_owned());
+    for checkout in crate::worktrees::repository_checkouts(&primary)
+        .into_iter()
+        .take(crate::worktrees::MAX_WORKTREES)
+    {
+        let Some(name) = checkout.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some(content) = read(&checkout) {
+            found.push(Manifest {
+                checkout: Some(name.to_owned()),
+                content,
+            });
+        }
+    }
+    found
+}
+
+fn checkout_root(spec: &ServiceSpec, paths: &ServicePaths) -> PathBuf {
+    match &spec.checkout {
+        Some(checkout) => crate::worktrees::repositories_root(&paths.workspace_root)
+            .unwrap_or_else(|| paths.workspace_root.clone())
+            .join(checkout),
         None => paths.workspace_root.clone(),
+    }
+}
+
+fn start(spec: &ServiceSpec, paths: &ServicePaths) -> std::io::Result<Child> {
+    let root = checkout_root(spec, paths);
+    let cwd = match &spec.cwd {
+        Some(cwd) => root.join(cwd),
+        None => root,
     };
     if !cwd.is_dir() {
         return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
     }
     fs::create_dir_all(&paths.log_directory)?;
-    let log_path = paths.log_directory.join(format!("{}.log", spec.name));
+    let log_name = spec.key().replace(':', "--");
+    let log_path = paths.log_directory.join(format!("{log_name}.log"));
     if fs::metadata(&log_path).is_ok_and(|metadata| metadata.len() > MAX_LOG_BYTES) {
         let _ = fs::rename(
             &log_path,
-            paths.log_directory.join(format!("{}.log.1", spec.name)),
+            paths.log_directory.join(format!("{log_name}.log.1")),
         );
     }
     let log = OpenOptions::new()
@@ -264,6 +349,7 @@ mod tests {
             cwd: cwd.map(Into::into),
             port: 3000,
             env: BTreeMap::new(),
+            checkout: None,
         }
     }
 

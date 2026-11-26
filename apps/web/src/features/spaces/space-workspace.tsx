@@ -39,7 +39,11 @@ import {
   spaceQueryOptions,
   spaceThreadsQueryOptions,
 } from "./space-queries.js";
-import { threadTabOfItem, threadTabOfThread } from "./space-tab-threads.js";
+import {
+  type ThreadTabThread,
+  threadTabOfItem,
+  threadTabOfThread,
+} from "./space-tab-threads.js";
 import {
   SpaceChatTab,
   SpaceStripTools,
@@ -98,6 +102,11 @@ export interface SpaceThreadSlots {
   readonly threadId: ThreadId;
   /** The tab strip in place of the Thread's title bar. */
   readonly renderTitleBar: (parts: SpaceTitleBarParts) => React.ReactNode;
+  /**
+   * The page while the thread loads or cannot open: the tab strip, from
+   * the Space's list of its threads, over that state.
+   */
+  readonly renderPending: (state: React.ReactNode) => React.ReactNode;
 }
 
 /**
@@ -273,6 +282,39 @@ function SpacePage({
         onShow={showDetails}
       />
     );
+  // The open thread's strip: the Space chat's tab where they share one, the
+  // thread's tab, and its tools.
+  const threadStrip = (
+    threadId: ThreadId,
+    parts: {
+      readonly tab: ThreadTabThread;
+      readonly menu?: React.ReactNode;
+      readonly automations?: React.ReactNode;
+      readonly views: React.ReactNode;
+      readonly mode: React.ComponentProps<typeof ThreadTabTools>["mode"];
+    },
+  ) => (
+    <SpaceTabStrip label={split ? "Thread tab" : "Tabs"}>
+      {split ? null : (
+        <SpaceChatTab
+          space={space}
+          active={false}
+          onSelect={onSelectSpaceTab}
+        />
+      )}
+      <ThreadTab thread={parts.tab} active menu={parts.menu} onClose={close} />
+      <span className="space-tab-spacer" />
+      <ThreadTabTools
+        threadId={threadId}
+        automations={parts.automations}
+        views={parts.views}
+        mode={parts.mode}
+        split={split}
+        onToggleSplit={toggleSplit}
+      />
+      {split ? null : stripTools(false)}
+    </SpaceTabStrip>
+  );
   const threadTabInSpaceStrip =
     child !== undefined && !split ? (
       <ThreadTab
@@ -326,40 +368,32 @@ function SpacePage({
           >
             {renderThread({
               threadId: child,
-              renderTitleBar: (parts) => (
-                <SpaceTabStrip label={split ? "Thread tab" : "Tabs"}>
-                  {split ? null : (
-                    <SpaceChatTab
-                      space={space}
-                      active={false}
-                      onSelect={onSelectSpaceTab}
-                    />
-                  )}
-                  <ThreadTab
-                    thread={threadTabOfThread(parts.thread)}
-                    active
-                    menu={parts.menu()}
-                    onClose={close}
-                  />
-                  <span className="space-tab-spacer" />
-                  <ThreadTabTools
-                    threadId={child}
-                    automations={
-                      phone ||
-                      (parts.thread.access !== undefined &&
-                        parts.thread.access !== "owner") ? null : (
-                        <Chips threadId={child} />
-                      )
-                    }
-                    views={parts.views}
-                    mode={threadSelectionChip(
-                      parts.thread.agentInitialization.selection,
-                    )}
-                    split={split}
-                    onToggleSplit={toggleSplit}
-                  />
-                  {split ? null : stripTools(false)}
-                </SpaceTabStrip>
+              renderTitleBar: (parts) =>
+                threadStrip(child, {
+                  tab: threadTabOfThread(parts.thread),
+                  menu: parts.menu(),
+                  automations:
+                    phone ||
+                    (parts.thread.access !== undefined &&
+                      parts.thread.access !== "owner") ? null : (
+                      <Chips threadId={child} />
+                    ),
+                  views: parts.views,
+                  mode: threadSelectionChip(
+                    parts.thread.agentInitialization.selection,
+                  ),
+                }),
+              // The tabs stay while the thread loads, so opening another
+              // thread changes its tab, not the whole Space.
+              renderPending: (state) => (
+                <div className="space-thread-pending">
+                  {threadStrip(child, {
+                    tab: threadTabOfItem(child, item),
+                    views: null,
+                    mode: undefined,
+                  })}
+                  <div className="space-pane-body">{state}</div>
+                </div>
               ),
             })}
           </section>

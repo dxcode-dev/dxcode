@@ -131,6 +131,7 @@ export * from "./settings/runners.js";
 export * from "./settings/runners-endpoints.js";
 export * from "./settings/signing-keys.js";
 export * from "./settings/skills.js";
+export * from "./settings/skills-endpoints.js";
 export * from "./settings/workspace-agent-instructions.js";
 export * from "./settings/workspace-members.js";
 export * from "./settings/workspace-params.js";

@@ -16,6 +16,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const highlighter = vi.hoisted(() => ({ shouldFail: false }));
 const renders = vi.hoisted(() => ({ fileRows: 0, diffMounts: 0 }));
+// Each cache key the diff library was handed, in order.
+const diffCacheKeys = vi.hoisted((): string[] => []);
 
 // A row's chevron renders with the row's expansion. The compiled row reuses
 // every element whose props did not change, so the chevron is what renders
@@ -37,7 +39,10 @@ vi.mock("@pierre/diffs", async (importOriginal) => ({
   preloadHighlighter: async () => {
     if (highlighter.shouldFail) throw new Error("highlighter unavailable");
   },
-  parsePatchFiles: () => [{ files: [{ marker: "parsed-diff", hunks: [] }] }],
+  parsePatchFiles: (_patch: string, cacheKey: string) => {
+    diffCacheKeys.push(cacheKey);
+    return [{ files: [{ marker: "parsed-diff", hunks: [] }] }];
+  },
 }));
 vi.mock(
   "@pierre/diffs/worker/worker-portable.js?url&no-inline",
@@ -851,6 +856,61 @@ describe("Changes pane", () => {
     );
     expect(container.querySelector('[data-testid="code-view"]')).not.toBeNull();
     expect(renders.diffMounts).toBe(mounted);
+    await React.act(() => root.unmount());
+  });
+
+  // The library reuses a cached diff when keys match, so a patch padded to
+  // collide with one already shown must not show the old diff (#2580).
+  it("gives two different patches different diff cache keys", async () => {
+    const nextCaptureId =
+      "chg_00000000-0000-4000-8000-000000002580" as ThreadChangesCaptureId;
+    let currentCapture = captureId;
+    const transport: ChangesTransport = {
+      getChanges: vi.fn(async (_id, range) => dataFor(range, currentCapture)),
+      getDiff: vi.fn(async (_id, requestedPath, range, requestedCaptureId) => {
+        const file = dataFor(range).files[0];
+        if (file === undefined) throw new Error("Fixture file is missing.");
+        // "Aa" and "BB" have the same 31-multiplier string hash.
+        const line = requestedCaptureId === nextCaptureId ? "BB" : "Aa";
+        return {
+          kind: "diff" as const,
+          captureId: requestedCaptureId,
+          freshness: "complete" as const,
+          capturedAt: "2026-08-29T12:00:00.000Z",
+          range,
+          file,
+          patch: `--- a/${requestedPath}\n+++ b/${requestedPath}\n@@ -1 +1 @@\n-old\n+${line}\n`,
+        };
+      }) as ChangesTransport["getDiff"],
+      push: vi.fn(),
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    await React.act(() =>
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ChangesPane
+            threadId={threadId}
+            transport={transport}
+            onReviewPrompt={() => undefined}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await settle();
+    diffCacheKeys.length = 0;
+    await click(container.querySelector(".changes-file-trigger"));
+    await settle();
+    expect(diffCacheKeys).toHaveLength(1);
+
+    currentCapture = nextCaptureId;
+    await React.act(() => queryClient.invalidateQueries());
+    await settle();
+    expect(diffCacheKeys).toHaveLength(2);
+    expect(diffCacheKeys[1]).not.toBe(diffCacheKeys[0]);
     await React.act(() => root.unmount());
   });
 

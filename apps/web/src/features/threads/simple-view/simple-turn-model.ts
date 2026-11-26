@@ -50,7 +50,6 @@ export interface SimpleLink {
 
 /** A running turn's state, worded for someone who never reads tool calls. */
 export type SimpleActivity =
-  | "starting"
   | "thinking"
   | "exploring"
   | "searching-web"
@@ -63,7 +62,6 @@ export type SimpleActivity =
   | "working";
 
 export const SIMPLE_ACTIVITY_TEXT: Readonly<Record<SimpleActivity, string>> = {
-  starting: "Getting started",
   thinking: "Thinking",
   exploring: "Looking through the project",
   "searching-web": "Searching the web",
@@ -125,7 +123,8 @@ const activityOf = (rows: ReadonlyArray<TranscriptRow>): SimpleActivity => {
       row.kind === "assistant-prose" ||
       row.kind === "final-answer",
   );
-  if (last === undefined) return "starting";
+  // Before its first step, every turn (a follow-up too) is thinking.
+  if (last === undefined) return "thinking";
   if (last.kind === "assistant-prose" || last.kind === "final-answer")
     return last.streaming ? "writing" : "thinking";
   if (!isWork(last)) return "working";

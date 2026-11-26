@@ -7,7 +7,6 @@
   "apps/web/src/features/settings/model-routing/provider-key-presentation.ts": 1,
   "apps/web/src/features/settings/plugins/plugin-bundle-queries.ts": 2,
   "apps/web/src/features/settings/plugins/plugin-catalog-queries.ts": 2,
-  "apps/web/src/features/settings/skills/skills-queries.ts": 2,
   "apps/web/src/features/terminal/terminal-session-mutations.ts": 1,
   "apps/web/src/features/terminal/terminal-warm-mutations.ts": 1,
   "apps/web/src/features/terminal/thread-terminal.tsx": 1,

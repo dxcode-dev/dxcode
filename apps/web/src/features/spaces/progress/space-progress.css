@@ -1,13 +1,9 @@
-/* A Space's 30-day chart: stacked shipped/archived bars, the open line. */
+/* A Space's 30-day chart: bars of merged PRs and pushes, the open-PR line. */
 .space-progress {
   --space-progress-shipped: color-mix(
     in srgb,
     var(--success) 62%,
     var(--background)
-  );
-  --space-progress-archived: light-dark(
-    color-mix(in srgb, var(--muted-foreground) 42%, var(--background)),
-    color-mix(in srgb, var(--muted-foreground) 62%, var(--background))
   );
   --space-progress-line: color-mix(in srgb, var(--foreground) 72%, transparent);
   display: grid;
@@ -41,15 +37,8 @@
   overflow: visible;
 }
 
-.space-progress-area {
-  fill: color-mix(in srgb, var(--foreground) 6%, transparent);
-}
-
 .space-progress-bar[data-kind="shipped"] {
   fill: var(--space-progress-shipped);
-}
-.space-progress-bar[data-kind="archived"] {
-  fill: var(--space-progress-archived);
 }
 
 .space-progress-line {
@@ -153,9 +142,6 @@
 .space-progress-swatch[data-kind="shipped"] {
   background: var(--space-progress-shipped);
 }
-.space-progress-swatch[data-kind="archived"] {
-  background: var(--space-progress-archived);
-}
 .space-progress-swatch[data-kind="open"] {
   height: 1.5px;
   border-radius: 1px;
@@ -223,19 +209,28 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.space-progress-outcome {
+/* A change in a day's list: its git icon, number, title, and thread. */
+.space-progress-day .space-shipped-change svg {
   flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
 }
-.space-progress-outcome[data-outcome="shipped"] {
-  background: var(--space-progress-shipped);
+.space-progress-day .space-shipped-change[data-state="merged"] svg {
+  color: var(--success);
 }
-.space-progress-outcome[data-outcome="archived"] {
-  background: var(--space-progress-archived);
+.space-shipped-number {
+  margin-inline-end: var(--space-1);
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
 }
-.space-progress-outcome[data-outcome="open"] {
-  border: 1.5px solid var(--space-progress-line);
-  border-radius: 50%;
+.space-progress-day li .space-shipped-change small {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-progress-day > ul {
+  grid-template-columns: minmax(0, 1fr);
 }

@@ -258,11 +258,15 @@ const useRetainedThread = (
   return { entry, historySettled };
 };
 
+/** A pending state with nothing around it: the Thread's own page. */
+const unframed = (state: React.ReactNode) => state;
+
 export function ThreadWorkspace({
   Terminal,
   Desktop,
   threadId: shownThreadId,
   renderTitleBar,
+  renderPending = unframed,
 }: {
   readonly Terminal?: React.ComponentType<{
     readonly active?: boolean;
@@ -278,6 +282,11 @@ export function ThreadWorkspace({
   readonly threadId?: ThreadId;
   /** Replaces the title bar, such as a Space's tab strip. */
   readonly renderTitleBar?: ThreadTitleBarRenderer;
+  /**
+   * Frames the page while the Thread loads or cannot open, such as a
+   * Space's tab strip above it, so the page around it stays.
+   */
+  readonly renderPending?: (state: React.ReactNode) => React.ReactNode;
 }) {
   const route = useParams({ from: "/_product/threads/$threadId" });
   const threadId = shownThreadId ?? route.threadId;
@@ -405,17 +414,17 @@ export function ThreadWorkspace({
     !layoutSettled
   ) {
     if (isDeletedThreadError(error))
-      return (
+      return renderPending(
         <div className="fatal-state">
           <strong>Thread deleted</strong>
           <span>
             This Thread, its conversation, and its sandbox were permanently
             deleted.
           </span>
-        </div>
+        </div>,
       );
     if (error && !metadataReady)
-      return (
+      return renderPending(
         <div className="fatal-state">
           <strong>Thread unavailable</strong>
           <span>
@@ -426,9 +435,9 @@ export function ThreadWorkspace({
           <Button size="sm" variant="outline" onClick={retry}>
             Retry
           </Button>
-        </div>
+        </div>,
       );
-    return <DxLoading label="Loading thread…" variant="pane" />;
+    return renderPending(<DxLoading label="Loading thread…" variant="pane" />);
   }
   const thread = threadQuery.data;
   return (

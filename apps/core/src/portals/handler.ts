@@ -362,9 +362,9 @@ const relayFailure = (
         ...common,
         status: 502,
         title: `Nothing is listening on port ${port}`,
-        message: `Start a server in the Thread on port ${port}, bound to 0.0.0.0 or 127.0.0.1. Declare it in .dx/services.yaml and dx starts it when the Portal opens.`,
+        message: `Start a server in the Thread on port ${port}, bound to 0.0.0.0 or 127.0.0.1. Declare it in .dx/services.yaml and dx starts it when the Portal opens. This page reloads when it is listening.`,
         plain: error,
-        retry: true,
+        waking: true,
       });
     case "upstream-reset":
     case "upstream-rejected":

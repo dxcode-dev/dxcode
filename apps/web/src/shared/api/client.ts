@@ -57,7 +57,6 @@ import {
   SearchThreadsEndpoint,
   type SearchThreadsItem,
   type SidebarLayoutChoice,
-  SkillsErrorResponseSchema,
   SnoozeThreadEndpoint,
   SourceControlDeniedResponseSchema,
   SourceControlProviderFailureResponseSchema,
@@ -225,7 +224,6 @@ export const request = async <
         PersonalAccountPersistenceUnavailableResponseSchema,
         // Skill routes send it too.
         WorkspacePolicyErrorResponseSchema,
-        SkillsErrorResponseSchema,
         PluginBundlesErrorResponseSchema,
         IntegrationsErrorResponseSchema,
         CreateProjectInvalidRequestResponseSchema,

@@ -90,19 +90,13 @@ export const SpaceDataSchema = Schema.Struct({
 export type SpaceData = typeof SpaceDataSchema.Type;
 
 /**
- * Where a thread a Space started stands, for its card and the Space panel:
- * `needs_you` asks a person for something, `working` runs, `ready_to_ship`
- * finished with changes to ship, `idle` finished, `failed` ended in an error,
- * `shipped` reached its default branch or merged, `archived` was archived
- * without shipping.
+ * Where a thread a Space started stands, from facts only: `working` runs a
+ * turn, `archived` was archived, `idle` is everything else. Whether its
+ * work is done is the Space's agent's call, which archives a finished one.
  */
 export const SpaceThreadStateSchema = Schema.Literals([
-  "needs_you",
   "working",
-  "ready_to_ship",
   "idle",
-  "failed",
-  "shipped",
   "archived",
 ]);
 

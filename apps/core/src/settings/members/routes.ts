@@ -21,6 +21,7 @@ import { ExecutionWorkspaces } from "../../execution/execution-workspaces.js";
 import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv } from "../../http/types.js";
 import { httpErrorLogger } from "../../logging.js";
+import { closeDepartedRealtimeMembers } from "../../realtime/publication.js";
 import { purgeDeletedThread } from "../../thread-deletion/cleanup.js";
 import { deployedThreadCleanup } from "../../thread-deletion/routes.js";
 import { workspaceCredentialRevoker } from "../workspace/credential-revocation.js";
@@ -139,6 +140,18 @@ const releaseThreads = (
   );
 };
 
+/** The departed person's open tabs stop hearing the workspace (#2584). */
+const closeRealtime = (
+  c: Context<AppEnv>,
+  workspaceId: string,
+  userId: string,
+) => {
+  if (c.env.REALTIME_HUB === undefined) return;
+  c.executionCtx.waitUntil(
+    closeDepartedRealtimeMembers(c.env, workspaceId, userId),
+  );
+};
+
 const access = (c: Context<AppEnv>) =>
   workspaceAccess(
     database(c),
@@ -186,6 +199,7 @@ workspaceMemberRoutes.delete("/members/:userId", (c) =>
     const viewer = await access(c);
     const userId = c.req.param("userId");
     releaseThreads(c, await removeMember(database(c), viewer, userId));
+    closeRealtime(c, viewer.workspaceId, userId);
     return c.json(
       respond(RemoveWorkspaceMemberResponseSchema, { removedUserId: userId }),
       200,
@@ -270,7 +284,9 @@ workspaceMemberRoutes.post("/delete", (c) =>
 
 workspaceMemberRoutes.post("/leave", (c) =>
   handle(c, async () => {
-    releaseThreads(c, await leaveWorkspace(database(c), await access(c)));
+    const viewer = await access(c);
+    releaseThreads(c, await leaveWorkspace(database(c), viewer));
+    closeRealtime(c, viewer.workspaceId, viewer.userId);
     return c.json(respond(LeaveWorkspaceResponseSchema, { left: true }), 200);
   }),
 );

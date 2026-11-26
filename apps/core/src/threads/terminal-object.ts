@@ -95,6 +95,8 @@ import {
   DxdSandboxOperation,
   DxdServiceRequestMessage,
   DxdServicesEnsureResult,
+  DxdServicesManifestsResult,
+  DxdServicesRememberResult,
   DxdStorageOperation,
   type DxdTerminalHeartbeat,
   DxdTreeResult,
@@ -197,8 +199,9 @@ import {
 import { publishThreadChangesResidentCandidate } from "../thread-changes/resident-publisher.js";
 import { serveDesktopWindows } from "../thread-desktop/execution-object.js";
 import {
-  parseServicesManifest,
+  mergeServicesManifests,
   SERVICES_MANIFEST_PATH,
+  type ThreadServices,
 } from "../thread-services/manifest.js";
 import { serveDaemonStorage } from "../thread-storage/daemon.js";
 import {
@@ -257,6 +260,16 @@ const STORAGE_DAEMON_UPDATE_WAIT_MS = 120_000;
 const DESKTOP_ENSURE_TIMEOUT_MS = 50_000;
 /** How long a request waits for a service it started to listen. */
 const SERVICE_START_WAIT_MS = 30_000;
+/**
+ * Ports someone opened through a Portal, with when they last did: the
+ * Portal list shows them besides declared services. Port → epoch ms.
+ */
+const PORTAL_OPENED_STORAGE_KEY = "portal-opened-ports";
+/** An opened port leaves the list this long after it was last opened. */
+const PORTAL_OPENED_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+const MAX_PORTAL_OPENED = 16;
+/** A port served again within this long is not recorded again. */
+const PORTAL_OPENED_RECORD_INTERVAL_MS = 60_000;
 const READINESS_PROBE_TIMEOUT_MS = 1_000;
 /** How late a heartbeat may be before a browser's liveness miss is probed. */
 const TERMINAL_LIVENESS_GRACE_MS = 500;
@@ -471,6 +484,8 @@ interface DaemonAuthority {
   readonly serviceHost?: boolean;
   /** The connected daemon serves the agent's workspace route (`sandbox.*`). */
   readonly sandbox?: boolean;
+  /** The daemon remembers and recovers undeclared Portal servers. */
+  readonly portalRecovery?: boolean;
 }
 
 interface DaemonAttachment {
@@ -634,6 +649,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   #orbDiskUsage: DxdDiskUsage | undefined;
   /** In-flight `services.ensure` attempts by guest port. */
   readonly #serviceEnsures = new Map<number, Promise<boolean>>();
+  /** When each port served through a Portal was last recorded as opened. */
+  readonly #portalOpenedRecorded = new Map<number, number>();
   /** The in-flight `desktop.ensure`, shared by the Desktop's channels. */
   #desktopEnsure?: Promise<DxdDesktopEnsureResult | undefined>;
   #authority?: DaemonAuthority;
@@ -2028,8 +2045,33 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         { onExcessProperty: "error" },
       );
       if (Option.isNone(result)) return proxyFailure("workspace-unavailable");
+      const [declared, opened] = await Promise.all([
+        this.#readThreadServices(authority),
+        this.#portalOpenedPorts(),
+      ]);
+      const exposed = new Map<
+        number,
+        { port: number; name?: string; declared: boolean }
+      >();
+      for (const port of opened.keys())
+        exposed.set(port, { port, declared: false });
+      for (const port of declared?.ports ?? [])
+        exposed.set(port, { port, declared: true });
+      for (const service of declared?.services ?? [])
+        exposed.set(service.port, {
+          port: service.port,
+          name:
+            service.checkout === undefined
+              ? service.name
+              : `${service.checkout}/${service.name}`,
+          declared: true,
+        });
       return Response.json(
-        { ports: result.value.ports },
+        {
+          ports: result.value.ports,
+          exposed: [...exposed.values()],
+          manifest: declared?.file ?? "invalid",
+        },
         { headers: { "cache-control": "no-store" } },
       );
     }
@@ -2087,6 +2129,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         anonymous,
       });
     const response = await exchange();
+    // The Desktop's gateway is dx's own, never a Portal.
+    const portal = !desktop;
+    if (portal && proxyFailureReason(response) === undefined)
+      this.#recordPortalOpened(authority, port);
     // Nothing listens: a declared service for this port starts, and the
     // request is served once it listens. Only a request without a body can
     // be sent again. The relay's own failure is known without a header, so
@@ -2101,67 +2147,176 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 400));
       const retried = await exchange();
-      if (proxyFailureReason(retried) !== "upstream-unreachable")
+      if (proxyFailureReason(retried) !== "upstream-unreachable") {
+        if (portal && proxyFailureReason(retried) === undefined)
+          this.#recordPortalOpened(authority, port);
         return retried;
+      }
     }
     return proxyFailure("service-starting");
   }
 
   /**
-   * Start the service the Thread's `.dx/services.yaml` declares for `port`;
-   * false when none is declared or it cannot start. Concurrent requests for
+   * The services the Thread's checkouts declare in `.dx/services.yaml`: the
+   * primary's and, from a daemon with `portalRecovery`, each repository's
+   * under `~/workspace/repos`. `undefined` when they cannot be read.
+   */
+  async #readThreadServices(
+    authority: DaemonAuthority,
+  ): Promise<ThreadServices | undefined> {
+    if (authority.portalRecovery === true) {
+      const read = await this.#dispatchDaemonOperation(
+        authority,
+        { operation: "services.manifests" },
+        DXD_MAX_REQUEST_FRAME_BYTES,
+        DAEMON_REQUEST_TIMEOUT_MS,
+      ).catch(() => undefined);
+      if (read === undefined) return undefined;
+      if (!read.ok) {
+        await read.body?.cancel();
+        return undefined;
+      }
+      const result = Schema.decodeUnknownOption(DxdServicesManifestsResult)(
+        await read.json(),
+      );
+      return Option.isSome(result)
+        ? mergeServicesManifests(result.value.manifests)
+        : undefined;
+    }
+    const read = await this.#dispatchDaemonOperation(
+      authority,
+      {
+        operation: "files.read",
+        path: Schema.decodeUnknownSync(ThreadFilesPath)(SERVICES_MANIFEST_PATH),
+      },
+      DXD_MAX_REQUEST_FRAME_BYTES,
+      DAEMON_REQUEST_TIMEOUT_MS,
+    ).catch(() => undefined);
+    if (read === undefined) return undefined;
+    if (!read.ok) {
+      await read.body?.cancel();
+      return undefined;
+    }
+    const manifest = Schema.decodeUnknownOption(DxdFilesReadResult)(
+      await read.json(),
+    );
+    if (Option.isSome(manifest) && manifest.value.kind === "missing")
+      return mergeServicesManifests([]);
+    if (Option.isNone(manifest) || manifest.value.kind !== "editable")
+      return undefined;
+    return mergeServicesManifests([{ content: manifest.value.content }]);
+  }
+
+  /** Ports opened through a Portal within `PORTAL_OPENED_TTL_MS`. */
+  async #portalOpenedPorts() {
+    const stored =
+      (await this.ctx.storage.get<Record<string, number>>(
+        PORTAL_OPENED_STORAGE_KEY,
+      )) ?? {};
+    const since = Date.now() - PORTAL_OPENED_TTL_MS;
+    return new Map(
+      Object.entries(stored)
+        .map(([port, at]) => [Number(port), at] as const)
+        .filter(([, at]) => at >= since),
+    );
+  }
+
+  /**
+   * A Portal served `port`: list it from now on, and have the daemon
+   * remember its process so an undeclared server can be run again. At most
+   * once a minute per port.
+   */
+  #recordPortalOpened(authority: DaemonAuthority, port: number) {
+    const now = Date.now();
+    const last = this.#portalOpenedRecorded.get(port);
+    if (last !== undefined && now - last < PORTAL_OPENED_RECORD_INTERVAL_MS)
+      return;
+    this.#portalOpenedRecorded.set(port, now);
+    this.ctx.waitUntil(
+      (async () => {
+        const opened = await this.#portalOpenedPorts();
+        opened.set(port, now);
+        const kept = [...opened.entries()]
+          .sort((left, right) => right[1] - left[1])
+          .slice(0, MAX_PORTAL_OPENED);
+        await this.ctx.storage.put(
+          PORTAL_OPENED_STORAGE_KEY,
+          Object.fromEntries(kept.map(([key, at]) => [String(key), at])),
+        );
+        if (authority.portalRecovery !== true) return;
+        const remembered = await this.#dispatchDaemonOperation(
+          authority,
+          { operation: "services.remember", port },
+          DXD_MAX_REQUEST_FRAME_BYTES,
+          DAEMON_REQUEST_TIMEOUT_MS,
+        );
+        if (remembered.ok)
+          Schema.decodeUnknownOption(DxdServicesRememberResult)(
+            await remembered.json(),
+          );
+        else await remembered.body?.cancel();
+      })().catch(() => undefined),
+    );
+  }
+
+  /**
+   * Start the service the Thread's `.dx/services.yaml` declares for `port`,
+   * or else run again the undeclared server a Portal served there before;
+   * false when there is neither or it cannot start. Concurrent requests for
    * one port share the attempt.
    */
   #ensureService(authority: DaemonAuthority, port: number) {
     const inFlight = this.#serviceEnsures.get(port);
     if (inFlight !== undefined) return inFlight;
-    const ensure = (async () => {
-      const read = await this.#dispatchDaemonOperation(
-        authority,
-        {
-          operation: "files.read",
-          path: Schema.decodeUnknownSync(ThreadFilesPath)(
-            SERVICES_MANIFEST_PATH,
-          ),
-        },
-        DXD_MAX_REQUEST_FRAME_BYTES,
-        DAEMON_REQUEST_TIMEOUT_MS,
-      );
-      if (!read.ok) return false;
-      const manifest = Schema.decodeUnknownOption(DxdFilesReadResult)(
-        await read.json(),
-      );
-      if (Option.isNone(manifest) || manifest.value.kind !== "editable")
+    const started = async (response: Response) => {
+      if (!response.ok) {
+        await response.body?.cancel();
         return false;
-      const service = parseServicesManifest(manifest.value.content)?.find(
-        (candidate) => candidate.port === port,
-      );
-      if (service === undefined) return false;
-      const ensured = await this.#dispatchDaemonOperation(
-        authority,
-        {
-          operation: "services.ensure",
-          services: [
-            {
-              name: service.name,
-              command: service.command,
-              ...(service.cwd === undefined ? {} : { cwd: service.cwd }),
-              port: service.port,
-              env: service.env,
-            },
-          ],
-        },
-        DXD_MAX_REQUEST_FRAME_BYTES,
-        DAEMON_REQUEST_TIMEOUT_MS,
-      );
-      if (!ensured.ok) return false;
+      }
       const result = Schema.decodeUnknownOption(DxdServicesEnsureResult)(
-        await ensured.json(),
+        await response.json(),
       );
       return (
         Option.isSome(result) &&
         result.value.kind === "services" &&
         result.value.services.some((status) => status.state !== "failed")
+      );
+    };
+    const ensure = (async () => {
+      const service = (
+        await this.#readThreadServices(authority)
+      )?.services.find((candidate) => candidate.port === port);
+      if (service !== undefined)
+        return started(
+          await this.#dispatchDaemonOperation(
+            authority,
+            {
+              operation: "services.ensure",
+              services: [
+                {
+                  name: service.name,
+                  command: service.command,
+                  ...(service.cwd === undefined ? {} : { cwd: service.cwd }),
+                  port: service.port,
+                  env: service.env,
+                  ...(service.checkout === undefined
+                    ? {}
+                    : { checkout: service.checkout }),
+                },
+              ],
+            },
+            DXD_MAX_REQUEST_FRAME_BYTES,
+            DAEMON_REQUEST_TIMEOUT_MS,
+          ),
+        );
+      if (authority.portalRecovery !== true) return false;
+      return started(
+        await this.#dispatchDaemonOperation(
+          authority,
+          { operation: "services.recover", port },
+          DXD_MAX_REQUEST_FRAME_BYTES,
+          DAEMON_REQUEST_TIMEOUT_MS,
+        ),
       );
     })()
       .catch(() => false)
@@ -3775,6 +3930,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           pending.operation.operation !== "desktop.open" &&
           pending.operation.operation !== "desktop.focus" &&
           pending.operation.operation !== "services.ensure" &&
+          pending.operation.operation !== "services.remember" &&
+          pending.operation.operation !== "services.recover" &&
+          pending.operation.operation !== "services.manifests" &&
           pending.operation.operation !== "memory.snapshot" &&
           pending.operation.operation !== "memory.stop" &&
           pending.operation.operation !== "disk.snapshot" &&
@@ -5412,6 +5570,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           (control.value.capabilities as { serviceHost?: unknown })
             .serviceHost !== undefined,
         sandbox: control.value.capabilities.sandbox !== undefined,
+        portalRecovery: control.value.capabilities.portalRecovery !== undefined,
       };
       this.#orbMemory.reset();
       this.#orbDisk.reset();

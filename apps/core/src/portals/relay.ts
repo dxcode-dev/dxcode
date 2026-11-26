@@ -242,13 +242,34 @@ export interface GuestPort {
   readonly port: number;
 }
 
-/** Guest TCP listeners; only an explicit `wake` resumes a paused workspace. */
+export interface ExposedPort {
+  readonly port: number;
+  readonly name?: string;
+  readonly declared: boolean;
+}
+
+const isPort = (value: unknown): value is number =>
+  typeof value === "number" &&
+  Number.isInteger(value) &&
+  value >= 1 &&
+  value <= 65_535;
+
+/**
+ * Guest TCP listeners, and the ports the Portal list shows: declared in
+ * `.dx/services.yaml` or opened through a Portal. Only an explicit `wake`
+ * resumes a paused workspace.
+ */
 export const listGuestPorts = async (
   namespace: DurableObjectNamespace,
   threadId: ThreadId,
   wake = false,
 ): Promise<
-  | { readonly kind: "running"; readonly ports: ReadonlyArray<number> }
+  | {
+      readonly kind: "running";
+      readonly ports: ReadonlyArray<number>;
+      readonly exposed: ReadonlyArray<ExposedPort>;
+      readonly servicesFile: "valid" | "missing" | "invalid";
+    }
   | { readonly kind: "paused" | "unavailable" }
 > => {
   const response = await namespace.get(namespace.idFromName(threadId)).fetch(
@@ -267,21 +288,41 @@ export const listGuestPorts = async (
     };
   }
   const body = (await response.json().catch(() => undefined)) as
-    | { readonly ports?: unknown }
+    | {
+        readonly ports?: unknown;
+        readonly exposed?: unknown;
+        readonly manifest?: unknown;
+      }
     | undefined;
   if (!Array.isArray(body?.ports)) return { kind: "unavailable" };
   const ports = new Set<number>();
   for (const entry of body.ports) {
     const port = (entry as { readonly port?: unknown } | null)?.port;
-    if (
-      typeof port === "number" &&
-      Number.isInteger(port) &&
-      port >= 1 &&
-      port <= 65_535
-    )
-      ports.add(port);
+    if (isPort(port)) ports.add(port);
   }
-  return { kind: "running", ports: [...ports].sort((a, b) => a - b) };
+  const exposed = new Map<number, ExposedPort>();
+  for (const entry of Array.isArray(body.exposed) ? body.exposed : []) {
+    const candidate = entry as {
+      readonly port?: unknown;
+      readonly name?: unknown;
+      readonly declared?: unknown;
+    } | null;
+    if (!isPort(candidate?.port)) continue;
+    exposed.set(candidate.port, {
+      port: candidate.port,
+      ...(typeof candidate.name === "string" ? { name: candidate.name } : {}),
+      declared: candidate.declared === true,
+    });
+  }
+  return {
+    kind: "running",
+    ports: [...ports].sort((a, b) => a - b),
+    exposed: [...exposed.values()].sort((a, b) => a.port - b.port),
+    servicesFile:
+      body.manifest === "valid" || body.manifest === "missing"
+        ? body.manifest
+        : "invalid",
+  };
 };
 
 const LOOPBACK_ORIGIN =

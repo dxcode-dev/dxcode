@@ -39,7 +39,7 @@ export const openAskLine = async (
     .catch(() => null);
   return open === null
     ? undefined
-    : "(dx: this thread has an open ask in its artifacts, whose mention notified the person it waits on; its card shows Needs you.)";
+    : "(dx: this thread has an open ask in its artifacts, whose mention notified the person it waits on.)";
 };
 
 /**

@@ -29,18 +29,20 @@ import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * A Space's progress in workerd with real D1 and R2: how a thread it
- * started comes to count as shipped or archived, and the 30-day chart's
- * days.
+ * started comes to count as shipped, what its card says then, and the
+ * 30-day chart of merged pull requests and pushes.
  *
  * Ways it could go wrong: a merged PR ships no thread, ships a thread not
  * linked to it, or a closed-unmerged PR ships one; archiving from the Ship
  * outcome counts as a plain archive, or a plain archive as shipped; a later
  * signal overwrites the first reason; restoring unships a thread; a capture
  * counts a pull of the default branch, or a reset to it that dropped the
- * thread's work, as shipping it; a day is bucketed in UTC instead of the
- * viewer's zone; the open line forgets threads started before the window,
- * keeps counting a thread after it closed, or counts one closed before the
- * window; someone who cannot see the Space reads its progress.
+ * thread's work, as shipping it; a merge closes the thread's card instead of
+ * leaving it idle; the chart counts a thread instead of each pull request,
+ * counts a pull request linked to two threads twice, counts a closed,
+ * unverified, or out-of-window one, misses a push to main, or keeps a merged
+ * one open after its day; a day is bucketed in UTC instead of the viewer's
+ * zone; someone who cannot see the Space reads its progress.
  */
 
 // Thread creation runs for real; Flue's dispatch records nothing.
@@ -400,7 +402,8 @@ describe("how a Space's thread ships", () => {
       lifecycle_state: "active",
     });
     expect((await shipState(bystander))?.shipped_at).toBeNull();
-    expect(await spaceThreadState(spaceId, fixer)).toBe("shipped");
+    // The merge is a fact the chart counts; it doesn't close the thread.
+    expect(await spaceThreadState(spaceId, fixer)).toBe("idle");
 
     // The first reason stays: archiving from the Ship outcome later, and
     // restoring, keep it shipped by its merge.
@@ -423,7 +426,14 @@ describe("how a Space's thread ships", () => {
     });
 
     const today = (await progress(spaceId)).body.data;
-    expect(today.totals).toEqual({ shipped: 1, archived: 0, open: 1 });
+    // PR #12 merged; PR #13 closed unmerged and another repository's #12
+    // count nowhere.
+    expect(today.totals).toEqual({ merged: 1, pushed: 0, open: 0 });
+    expect(
+      (today.changes as Array<Record<string, unknown>>).map(
+        ({ id, state, threadId }) => ({ id, state, threadId }),
+      ),
+    ).toEqual([{ id: `${REPO}#12`, state: "merged", threadId: fixer }]);
   });
 
   it("links the PR a Space's thread opened while the Space works too, and ships it on merge", async () => {
@@ -509,7 +519,8 @@ describe("how a Space's thread ships", () => {
       ship_reason: null,
       lifecycle_state: "archived",
     });
-    expect(await spaceThreadState(spaceId, shipped)).toBe("shipped");
+    // Archived either way: shipping is not a state of its own.
+    expect(await spaceThreadState(spaceId, shipped)).toBe("archived");
     expect(await spaceThreadState(spaceId, research)).toBe("archived");
 
     // Only an archive comes from a Ship outcome.
@@ -537,10 +548,9 @@ describe("how a Space's thread ships", () => {
       ship_reason: "ship_archived",
       archived_at: null,
     });
+    // Nothing merged or was pushed, so the chart counts nothing.
     const data = (await progress(spaceId)).body.data;
-    expect(data.totals).toEqual({ shipped: 1, archived: 0, open: 1 });
-    const day = (data.days as SpaceProgressDay[]).at(-1);
-    expect(day).toMatchObject({ created: 2, shipped: 1, archived: 0 });
+    expect(data.totals).toEqual({ merged: 0, pushed: 0, open: 0 });
   });
 });
 
@@ -771,45 +781,99 @@ describe("a Space's progress by day", () => {
   };
   const dateOf = (instant: number) =>
     new Date(instant).toISOString().slice(0, 10);
+  const iso = (instant: number) => new Date(instant).toISOString();
 
-  const setTimes = (
+  /** A pull request linked to a thread, as webhooks leave it. */
+  const linkPull = (
     threadId: ThreadId,
-    times: {
-      readonly created: number;
-      readonly shipped?: number;
-      readonly archived?: number;
+    number: number,
+    pull: {
+      readonly state: "open" | "merged" | "closed";
+      readonly changedAt: number;
+      readonly linkedAt: number;
+      readonly verified?: boolean;
     },
   ) =>
     env.DB.prepare(
-      `UPDATE threads SET created_at = ?2, shipped_at = ?3,
-              ship_reason = CASE WHEN ?3 IS NULL THEN NULL ELSE 'pull_request_merged' END,
-              archived_at = ?4,
-              lifecycle_state = CASE WHEN ?4 IS NULL THEN 'active' ELSE 'archived' END
-        WHERE id = ?1`,
+      `INSERT INTO thread_github_link (thread_id, repository, repository_key,
+         number, kind, subject_json, created_at, verified)
+       VALUES (?1, ?2, lower(?2), ?3, 'pull', ?4, ?5, ?6)`,
     )
       .bind(
         threadId,
-        new Date(times.created).toISOString(),
-        times.shipped ?? null,
-        times.archived ?? null,
+        REPO,
+        number,
+        JSON.stringify({
+          title: `PR ${number}`,
+          summary: "",
+          state: pull.state,
+          changedAt: iso(pull.changedAt),
+        }),
+        iso(pull.linkedAt),
+        pull.verified === false ? 0 : 1,
       )
       .run();
 
-  it("counts each day's created, shipped, and archived threads and how many were open when it ended", async () => {
+  const pushedToMain = (threadId: ThreadId, at: number) =>
+    env.DB.prepare(
+      "UPDATE threads SET shipped_at = ?2, ship_reason = 'default_branch' WHERE id = ?1",
+    )
+      .bind(threadId, at)
+      .run();
+
+  it("counts each day's merged pull requests and pushes, once each, and the pull requests open when it ended", async () => {
     const spaceId = await createSpace();
-    const archivedThread = await startChild(spaceId, "Survey providers");
-    const oldOpen = await startChild(spaceId, "Long-running migration");
-    const shippedThread = await startChild(spaceId, "Fix coupon rounding");
-    const longGone = await startChild(spaceId, "Closed long ago");
-    await setTimes(archivedThread, {
-      created: noon(5),
-      archived: noon(2),
+    const home = await startChild(spaceId, "Signed-in home page");
+    const agent37 = await startChild(spaceId, "Claude Code on agent37");
+    const abandoned = await startChild(spaceId, "Survey providers");
+    const pusher = await startChild(spaceId, "Notification settings");
+    // One thread merged two pull requests the same day.
+    await linkPull(home, 51, {
+      state: "merged",
+      changedAt: noon(1),
+      linkedAt: noon(3),
     });
-    // Started before the window and still open: the line counts it.
-    await setTimes(oldOpen, { created: noon(10) });
-    await setTimes(shippedThread, { created: noon(3), shipped: noon(1) });
-    // Closed before the window: it counts nowhere.
-    await setTimes(longGone, { created: noon(20), archived: noon(15) });
+    await linkPull(home, 52, {
+      state: "merged",
+      changedAt: noon(1) + 3_600_000,
+      linkedAt: noon(3),
+    });
+    // Another merged one and has a draft open; it also linked #51 later,
+    // which still counts once, under the thread that linked it first.
+    await linkPull(agent37, 53, {
+      state: "open",
+      changedAt: noon(2),
+      linkedAt: noon(2),
+    });
+    await linkPull(agent37, 51, {
+      state: "merged",
+      changedAt: noon(1),
+      linkedAt: noon(2),
+    });
+    // Closed without merging, unverified, or merged before the window:
+    // none counts.
+    await linkPull(abandoned, 54, {
+      state: "closed",
+      changedAt: noon(2),
+      linkedAt: noon(4),
+    });
+    await linkPull(abandoned, 55, {
+      state: "merged",
+      changedAt: noon(2),
+      linkedAt: noon(4),
+      verified: false,
+    });
+    await linkPull(abandoned, 56, {
+      state: "merged",
+      changedAt: noon(20),
+      linkedAt: noon(21),
+    });
+    // Commits pushed straight to main.
+    await pushedToMain(pusher, noon(4));
+    // A thread archived after its merge still counts its merge.
+    await send(owner, `/v1/threads/${home}/archive`, "PATCH", {
+      archived: true,
+    });
 
     const response = await progress(spaceId, "?days=7&tz=UTC");
     expect(response.status).toBe(200);
@@ -820,37 +884,70 @@ describe("a Space's progress by day", () => {
       [6, 5, 4, 3, 2, 1, 0].map((ago) => dateOf(noon(ago))),
     );
     expect(
-      days.map(({ created, shipped, archived, openAtEnd }) => [
-        created,
-        shipped,
-        archived,
-        openAtEnd,
-      ]),
+      days.map(({ merged, pushed, openAtEnd }) => [merged, pushed, openAtEnd]),
     ).toEqual([
-      [0, 0, 0, 1],
-      [1, 0, 0, 2],
-      [0, 0, 0, 2],
-      [1, 0, 0, 3],
-      [0, 0, 1, 2],
-      [0, 1, 0, 1],
-      [0, 0, 0, 1],
+      [0, 0, 0],
+      [0, 0, 0],
+      [0, 1, 0],
+      [0, 0, 2],
+      [0, 0, 3],
+      [2, 0, 1],
+      [0, 0, 1],
     ]);
-    expect(days[1]?.threadIds).toEqual([archivedThread]);
-    expect(days[3]?.threadIds).toEqual([shippedThread]);
-    expect(days[4]?.threadIds).toEqual([archivedThread]);
-    expect(days[5]?.threadIds).toEqual([shippedThread]);
-    expect(data.totals).toEqual({ shipped: 1, archived: 1, open: 1 });
+    expect(days.map(({ changeIds }) => changeIds)).toEqual([
+      [],
+      [],
+      [pusher],
+      [],
+      [`${REPO}#53`],
+      [`${REPO}#52`, `${REPO}#51`],
+      [],
+    ]);
+    expect(data.totals).toEqual({ merged: 2, pushed: 1, open: 1 });
     expect(
-      (data.threads as Array<{ id: string; outcome: string; title: string }>)
-        .map(({ id, outcome, title }) => ({ id, outcome, title }))
-        .sort((a, b) => a.title.localeCompare(b.title)),
+      (data.changes as Array<Record<string, unknown>>).map(
+        ({ id, kind, number, state, threadId, threadTitle }) => ({
+          id,
+          kind,
+          number,
+          state,
+          threadId,
+          threadTitle,
+        }),
+      ),
     ).toEqual([
       {
-        id: shippedThread,
-        outcome: "shipped",
-        title: "Fix coupon rounding",
+        id: `${REPO}#52`,
+        kind: "pull_request",
+        number: 52,
+        state: "merged",
+        threadId: home,
+        threadTitle: "Signed-in home page",
       },
-      { id: archivedThread, outcome: "archived", title: "Survey providers" },
+      {
+        id: `${REPO}#51`,
+        kind: "pull_request",
+        number: 51,
+        state: "merged",
+        threadId: home,
+        threadTitle: "Signed-in home page",
+      },
+      {
+        id: `${REPO}#53`,
+        kind: "pull_request",
+        number: 53,
+        state: "open",
+        threadId: agent37,
+        threadTitle: "Claude Code on agent37",
+      },
+      {
+        id: pusher,
+        kind: "default_branch",
+        number: undefined,
+        state: "merged",
+        threadId: pusher,
+        threadTitle: "Notification settings",
+      },
     ]);
 
     // Thirty days by default, today last.
@@ -860,14 +957,14 @@ describe("a Space's progress by day", () => {
     expect(month.at(-1)?.date).toBe(dateOf(Date.now()));
   });
 
-  it("puts a thread on the day it happened in the viewer's time zone", async () => {
+  it("puts a merge on the day it happened in the viewer's time zone", async () => {
     const spaceId = await createSpace();
     const child = await startChild(spaceId, "Late-night fix");
     // 03:00 UTC two days ago: the evening before in Los Angeles, midday in
     // Tokyo.
     const today = new Date().toISOString().slice(0, 10);
     const at = Date.parse(`${today}T03:00:00Z`) - 2 * DAY;
-    await setTimes(child, { created: at });
+    await linkPull(child, 61, { state: "merged", changedAt: at, linkedAt: at });
     const utcDay = dateOf(at);
     const dayBefore = dateOf(at - DAY);
 
@@ -876,19 +973,8 @@ describe("a Space's progress by day", () => {
     const losAngeles = (
       await progress(spaceId, "?days=7&tz=America%2FLos_Angeles")
     ).body.data.days as SpaceProgressDay[];
-    expect(tokyo.find(({ created }) => created > 0)?.date).toBe(utcDay);
-    expect(losAngeles.find(({ created }) => created > 0)?.date).toBe(dayBefore);
-    // Open from that day on, in each zone.
-    const openFrom = (days: SpaceProgressDay[], date: string) =>
-      days.map(({ date: day, openAtEnd }) => [day >= date, openAtEnd === 1]);
-    expect(
-      openFrom(tokyo, utcDay).every(([inWindow, open]) => inWindow === open),
-    ).toBe(true);
-    expect(
-      openFrom(losAngeles, dayBefore).every(
-        ([inWindow, open]) => inWindow === open,
-      ),
-    ).toBe(true);
+    expect(tokyo.find(({ merged }) => merged > 0)?.date).toBe(utcDay);
+    expect(losAngeles.find(({ merged }) => merged > 0)?.date).toBe(dayBefore);
   });
 
   it("shows an empty Space as thirty flat days", async () => {
@@ -898,15 +984,14 @@ describe("a Space's progress by day", () => {
     expect(
       (data.days as SpaceProgressDay[]).every(
         (day) =>
-          day.created === 0 &&
-          day.shipped === 0 &&
-          day.archived === 0 &&
+          day.merged === 0 &&
+          day.pushed === 0 &&
           day.openAtEnd === 0 &&
-          day.threadIds.length === 0,
+          day.changeIds.length === 0,
       ),
     ).toBe(true);
-    expect(data.totals).toEqual({ shipped: 0, archived: 0, open: 0 });
-    expect(data.threads).toEqual([]);
+    expect(data.totals).toEqual({ merged: 0, pushed: 0, open: 0 });
+    expect(data.changes).toEqual([]);
   });
 
   it("shows progress only to those who can see the Space, and refuses a bad window", async () => {

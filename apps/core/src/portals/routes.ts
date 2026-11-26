@@ -158,18 +158,33 @@ const listPortals = async (context: Context<AppEnv>, wake: boolean) => {
         }),
     listPublicLinks(context.env.DB as D1Database, threadId, Date.now()),
   ]);
+  // Exposed ports only: declared, opened through a Portal, or public. A
+  // public port stays listed while nothing listens, so it can be made
+  // private.
+  const listening = new Set(listed.kind === "running" ? listed.ports : []);
+  const rows = new Map(
+    (listed.kind === "running" ? listed.exposed : []).map((exposed) => [
+      exposed.port,
+      exposed,
+    ]),
+  );
+  for (const link of publicLinks)
+    if (!rows.has(link.port))
+      rows.set(link.port, { port: link.port, declared: false });
   return context.json(
     Schema.encodeUnknownSync(GetThreadPortalsResponseSchema)({
       status: "success",
       data: {
         workspace: listed.kind,
-        portals:
-          listed.kind === "running"
-            ? listed.ports.map((port) => ({
-                port,
-                url: portalUrl(configuration, threadId, port),
-              }))
-            : [],
+        servicesFile:
+          listed.kind === "running" ? listed.servicesFile : "unknown",
+        portals: [...rows.values()]
+          .sort((left, right) => left.port - right.port)
+          .map((row) => ({
+            ...row,
+            url: portalUrl(configuration, threadId, row.port),
+            listening: listening.has(row.port),
+          })),
         publicLinks: publicLinks.map((link) =>
           publicLinkData(configuration, threadId, link),
         ),

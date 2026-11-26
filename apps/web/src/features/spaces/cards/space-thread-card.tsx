@@ -1,13 +1,7 @@
 import type { SpaceThreadItem, SpaceThreadState } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useParams, useSearch } from "@tanstack/react-router";
-import {
-  Archive,
-  CircleAlert,
-  CircleCheck,
-  CircleX,
-  GitPullRequestArrow,
-} from "lucide-react";
+import { Archive } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useTimeText } from "../../../shared/hooks/use-clock.js";
@@ -21,35 +15,22 @@ import {
 import { useSpaceThreadItem } from "./space-card-queries.js";
 import "./space-cards.css";
 
-/** A thread's state as an icon: the Orb while it works or rests, else a mark. */
+/** A thread's state as an icon: the Orb while it works or rests, else the archive. */
 function SpaceThreadStateIcon({
   state,
 }: {
   readonly state: SpaceThreadState | undefined;
 }) {
-  switch (state) {
-    case "needs_you":
-      return <CircleAlert className="space-thread-state-icon" aria-hidden />;
-    case "failed":
-      return <CircleX className="space-thread-state-icon" aria-hidden />;
-    case "ready_to_ship":
-      return (
-        <GitPullRequestArrow className="space-thread-state-icon" aria-hidden />
-      );
-    case "shipped":
-      return <CircleCheck className="space-thread-state-icon" aria-hidden />;
-    case "archived":
-      return <Archive className="space-thread-state-icon" aria-hidden />;
-    default:
-      return (
-        <OrbIcon
-          className="space-thread-state-icon"
-          staticWhenIdle
-          activityStatus={state === "working" ? "working" : "idle"}
-          aria-hidden="true"
-        />
-      );
-  }
+  if (state === "archived")
+    return <Archive className="space-thread-state-icon" aria-hidden />;
+  return (
+    <OrbIcon
+      className="space-thread-state-icon"
+      staticWhenIdle
+      activityStatus={state === "working" ? "working" : "idle"}
+      aria-hidden="true"
+    />
+  );
 }
 
 /** The Space whose page this is: the Thread the route opens. */

@@ -41,61 +41,61 @@ export const SpaceProgressQuerySchema = Schema.Struct({
 const Count = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 /**
- * One calendar day in the viewer's time zone: how many of the Space's threads
- * were created, shipped, and archived without shipping that day, and how
- * many were open when it ended. `threadIds` are the threads created,
- * shipped, or archived that day, newest first.
+ * One change a Space's threads shipped or have open: a pull request linked
+ * to one of its threads (`pull_request`), or a thread's own commits pushed
+ * straight to the default branch (`default_branch`). A pull request linked
+ * to several threads counts once, under the thread that linked it first.
+ */
+export const SpaceProgressChangeSchema = Schema.Struct({
+  /** `owner/name#number` for a pull request, the thread's ID for a push. */
+  id: Schema.String.check(Schema.isMaxLength(256)),
+  kind: Schema.Literals(["pull_request", "default_branch"]),
+  /** The pull request's number; absent for a push. */
+  number: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+  /** The pull request on GitHub; absent for a push. */
+  url: Schema.optional(Schema.String.check(Schema.isMaxLength(2_048))),
+  title: Schema.String.check(Schema.isMaxLength(512)),
+  /** A push is always merged: its commits are on the default branch. */
+  state: Schema.Literals(["merged", "open"]),
+  /** When it merged or was pushed; for an open pull request, when it opened. */
+  at: Timestamp,
+  threadId: ThreadId,
+  threadTitle: Schema.String.check(Schema.isMaxLength(512)),
+});
+
+export type SpaceProgressChange = typeof SpaceProgressChangeSchema.Type;
+
+/**
+ * One calendar day in the viewer's time zone: how many pull requests merged
+ * and how many pushes reached the default branch that day, and how many
+ * pull requests were open when it ended. `changeIds` are the changes that
+ * merged, were pushed, or opened and are still open that day, newest first.
  */
 export const SpaceProgressDaySchema = Schema.Struct({
   date: Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/)),
-  created: Count,
-  shipped: Count,
-  archived: Count,
+  merged: Count,
+  pushed: Count,
   openAtEnd: Count,
-  threadIds: Schema.Array(ThreadId),
+  changeIds: Schema.Array(Schema.String),
 });
 
 export type SpaceProgressDay = typeof SpaceProgressDaySchema.Type;
 
-/** Where a thread stands for the chart: shipping wins over archiving. */
-export const SpaceProgressOutcomeSchema = Schema.Literals([
-  "shipped",
-  "archived",
-  "open",
-]);
-
-export type SpaceProgressOutcome = typeof SpaceProgressOutcomeSchema.Type;
-
-/** A thread a day lists, enough to show it without another read. */
-export const SpaceProgressThreadSchema = Schema.Struct({
-  id: ThreadId,
-  title: Schema.String.check(Schema.isMaxLength(512)),
-  outcome: SpaceProgressOutcomeSchema,
-  createdAt: Timestamp,
-  shippedAt: Schema.NullOr(Timestamp),
-  shipReason: Schema.NullOr(ThreadShipReasonSchema),
-  archivedAt: Schema.NullOr(Timestamp),
-});
-
-export type SpaceProgressThread = typeof SpaceProgressThreadSchema.Type;
-
 /**
- * `GET /v1/spaces/:threadId/progress`: the Space's threads over the last
- * `days` days, oldest day first and today last.
- *
- * A thread is open from when it was created until it shipped or was
- * archived, whichever came first; `openAtEnd` counts threads open when the
- * day ended (now, for today), so a thread started before the window and
- * still open counts too. `totals` are what the window's days add up to:
- * threads shipped and archived in it, and threads open now.
+ * `GET /v1/spaces/:threadId/progress`: what the Space's threads shipped over
+ * the last `days` days, oldest day first and today last, counted from
+ * changes rather than thread states. A thread can merge several pull
+ * requests, or one while it still has work, and each counts on its day.
+ * `totals` add up the window's merged pull requests and pushes, and the
+ * pull requests open now.
  */
 export const SpaceProgressResponseSchema = successResponse(
   Schema.Struct({
     timeZone: Schema.String,
     days: Schema.Array(SpaceProgressDaySchema),
-    totals: Schema.Struct({ shipped: Count, archived: Count, open: Count }),
-    /** Every thread a day lists. */
-    threads: Schema.Array(SpaceProgressThreadSchema),
+    totals: Schema.Struct({ merged: Count, pushed: Count, open: Count }),
+    /** Every change a day lists. */
+    changes: Schema.Array(SpaceProgressChangeSchema),
   }),
 );
 

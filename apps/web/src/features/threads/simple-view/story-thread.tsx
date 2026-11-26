@@ -58,6 +58,7 @@ export function StoryThread({
   layout = "web",
   label = "Agent chat",
   fill = false,
+  footer,
 }: {
   readonly scenario: SimpleViewScenario;
   readonly view: ThreadView;
@@ -65,6 +66,11 @@ export function StoryThread({
   readonly label?: string;
   /** Fill the parent instead of a 1440×900 or 390×844 page. */
   readonly fill?: boolean;
+  /**
+   * Below the turns, as the page shows the Orb's preparation status; while
+   * it shows, the running turn's own line waits, as on the page.
+   */
+  readonly footer?: React.ReactNode;
 }) {
   const model = deriveTranscriptViewModel({
     messages: scenario.messages,
@@ -87,7 +93,12 @@ export function StoryThread({
           >
             <div className="agent-panel-stack">
               <section className="workspace-pane agent-pane" aria-label={label}>
-                <ThreadTranscript model={model} threadView={view} />
+                <ThreadTranscript
+                  model={model}
+                  threadView={view}
+                  footer={footer}
+                  showProcessingIndicator={footer === undefined}
+                />
               </section>
             </div>
           </div>

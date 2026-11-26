@@ -203,8 +203,8 @@ const serve = (
       return ok({
         timeZone: "UTC",
         days: [],
-        totals: { shipped: 0, archived: 0, open: 1 },
-        threads: [],
+        totals: { merged: 0, pushed: 0, open: 1 },
+        changes: [],
       });
     if (path === `/v1/spaces/${SPACE}/catch-up`) return ok({ catchUp: null });
     if (path === `/v1/spaces/${SPACE}/posts` && method === "GET") {

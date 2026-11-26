@@ -158,6 +158,9 @@ pub struct Daemon {
     connected: Arc<AtomicBool>,
     /// Declared services this daemon started; they outlive its sessions.
     services: Services,
+    /// Undeclared servers a Portal served, to run again; see
+    /// `portal_processes`.
+    portal_processes: crate::portal_processes::PortalProcesses,
     /// Held by the one running Desktop start, which can outlive the
     /// session that asked; Core asks again after a reconnect.
     desktop_start: Arc<std::sync::Mutex<()>>,
@@ -295,6 +298,7 @@ impl Daemon {
             workload_identity_epoch,
             connected,
             services,
+            portal_processes: crate::portal_processes::PortalProcesses::default(),
             desktop_start: Arc::default(),
             memory,
             disk,
@@ -1031,6 +1035,60 @@ impl Daemon {
                                     proxy::is_listening,
                                 ),
                             }
+                        };
+                        send_json(
+                            control,
+                            &ClientMessage::Response {
+                                generation,
+                                request_id: &request_id,
+                                result: OperationResult::Portal(result),
+                            },
+                        )
+                        .await?;
+                    }
+                    RequestOperation::Portal(PortalOperation::ServicesRemember { port }) => {
+                        let paths = self.service_paths(workspace_root);
+                        let remembered = port != 0
+                            && !proxy::INTERNAL_PORTS.contains(&port)
+                            && self.portal_processes.remember(port, &paths);
+                        send_json(
+                            control,
+                            &ClientMessage::Response {
+                                generation,
+                                request_id: &request_id,
+                                result: OperationResult::Portal(PortalResult::Remembered {
+                                    remembered,
+                                }),
+                            },
+                        )
+                        .await?;
+                    }
+                    RequestOperation::Portal(PortalOperation::ServicesManifests {}) => {
+                        send_json(
+                            control,
+                            &ClientMessage::Response {
+                                generation,
+                                request_id: &request_id,
+                                result: OperationResult::Portal(PortalResult::Manifests {
+                                    manifests: crate::services::manifests(workspace_root),
+                                }),
+                            },
+                        )
+                        .await?;
+                    }
+                    RequestOperation::Portal(PortalOperation::ServicesRecover { port }) => {
+                        let paths = self.service_paths(workspace_root);
+                        let recovered = (port != 0 && !proxy::INTERNAL_PORTS.contains(&port))
+                            .then(|| {
+                                self.portal_processes
+                                    .recover(port, &paths, proxy::is_listening)
+                            })
+                            .flatten();
+                        let result = match recovered {
+                            Some(status) => PortalResult::Services {
+                                services: vec![status],
+                            },
+                            None => PortalResult::Unavailable { reason: "unknown" },
                         };
                         send_json(
                             control,

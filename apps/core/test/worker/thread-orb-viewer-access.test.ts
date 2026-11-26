@@ -338,6 +338,8 @@ const ORB_ROUTES = [
     name: "Changes diff",
     path: "/changes/diff?range=all&path=.env&worktree=primary",
   },
+  // The owner's Project Ship settings (#2580).
+  { name: "Ship plan", path: "/changes/ship" },
   {
     name: "Terminal attach",
     path: "/terminal",

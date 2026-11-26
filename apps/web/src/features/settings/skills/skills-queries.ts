@@ -1,21 +1,36 @@
 import {
-  DecideSkillProposalResponseSchema,
+  ApprovePersonalSkillProposalEndpoint,
+  ApproveWorkspaceSkillProposalEndpoint,
   type DirectorySkillData,
-  DiscoverSkillsResponseSchema,
-  ExportSkillResponseSchema,
-  ImportSkillResponseSchema,
-  InstallSkillResponseSchema,
-  ListSkillsResponseSchema,
-  PreviewSkillResponseSchema,
-  PreviewSkillSourceResponseSchema,
-  PublishSkillVersionResponseSchema,
-  RemoveSkillResponseSchema,
+  DiscoverPersonalSkillsEndpoint,
+  DiscoverWorkspaceSkillsEndpoint,
+  ExportPersonalSkillEndpoint,
+  ExportWorkspaceSkillEndpoint,
+  ImportPersonalSkillEndpoint,
+  ImportWorkspaceSkillEndpoint,
+  InstallPersonalSkillEndpoint,
+  InstallWorkspaceSkillEndpoint,
+  ListPersonalSkillsEndpoint,
+  ListWorkspaceSkillsEndpoint,
+  PreviewPersonalSkillEndpoint,
+  PreviewPersonalSkillSourceEndpoint,
+  PreviewWorkspaceSkillEndpoint,
+  PreviewWorkspaceSkillSourceEndpoint,
+  PublishPersonalSkillVersionEndpoint,
+  PublishWorkspaceSkillVersionEndpoint,
+  ReadPersonalSkillFileEndpoint,
+  ReadWorkspaceSkillFileEndpoint,
+  RejectPersonalSkillProposalEndpoint,
+  RejectWorkspaceSkillProposalEndpoint,
+  RemovePersonalSkillEndpoint,
+  RemoveWorkspaceSkillEndpoint,
   type SkillData,
-  SkillFileResponseSchema,
   type SkillInstallSource,
   type SkillProposalData,
-  UpdateSkillStateResponseSchema,
-  UpdateSkillWorkspacePolicyResponseSchema,
+  type SkillProposalParamsSchema,
+  UpdatePersonalSkillStateEndpoint,
+  UpdateWorkspaceSkillPolicyEndpoint,
+  UpdateWorkspaceSkillStateEndpoint,
 } from "@dx/api";
 import type {
   SkillId,
@@ -25,7 +40,7 @@ import type {
   UserId,
 } from "@dx/domain";
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
-import { request, type SkillsTarget } from "../../../shared/api/client.js";
+import { dxClient, type SkillsTarget } from "../../../shared/api/client.js";
 
 export type {
   DirectorySkillData,
@@ -37,24 +52,30 @@ export type {
 
 // The skills API lives with the Skills settings, not in the shared client,
 // so the Thread page's first load doesn't carry its schemas.
-const skillsBase = (target: SkillsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/skills"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/skills`;
+const workspace = (target: Extract<SkillsTarget, { scope: "workspace" }>) => ({
+  workspaceSlug: target.workspaceSlug,
+});
 
 export const listSkills = async (target: SkillsTarget, signal?: AbortSignal) =>
-  (await request(skillsBase(target), ListSkillsResponseSchema, { signal }))
-    .data;
+  (target.scope === "personal"
+    ? await dxClient.call(ListPersonalSkillsEndpoint, {}, { signal })
+    : await dxClient.call(
+        ListWorkspaceSkillsEndpoint,
+        { params: workspace(target) },
+        { signal },
+      )
+  ).data;
 
 export const previewSkill = async (
   target: SkillsTarget,
   bundle: SkillImportBundle,
 ) =>
-  (
-    await request(`${skillsBase(target)}/preview`, PreviewSkillResponseSchema, {
-      method: "POST",
-      body: JSON.stringify(bundle),
-    })
+  (target.scope === "personal"
+    ? await dxClient.call(PreviewPersonalSkillEndpoint, { body: bundle })
+    : await dxClient.call(PreviewWorkspaceSkillEndpoint, {
+        params: workspace(target),
+        body: bundle,
+      })
   ).data;
 
 export const importSkill = async (
@@ -62,13 +83,17 @@ export const importSkill = async (
   bundle: SkillImportBundle,
   reviewedIntegrity: SkillIntegrity,
   enabled = false,
-): Promise<SkillData> =>
-  (
-    await request(skillsBase(target), ImportSkillResponseSchema, {
-      method: "POST",
-      body: JSON.stringify({ bundle, reviewedIntegrity, enabled }),
-    })
+): Promise<SkillData> => {
+  const body = { bundle, reviewedIntegrity, enabled };
+  return (
+    target.scope === "personal"
+      ? await dxClient.call(ImportPersonalSkillEndpoint, { body })
+      : await dxClient.call(ImportWorkspaceSkillEndpoint, {
+          params: workspace(target),
+          body,
+        })
   ).data;
+};
 
 export const publishSkillVersion = async (
   target: SkillsTarget,
@@ -76,17 +101,20 @@ export const publishSkillVersion = async (
   bundle: SkillImportBundle,
   reviewedIntegrity: SkillIntegrity,
   activate: boolean,
-): Promise<SkillData> =>
-  (
-    await request(
-      `${skillsBase(target)}/${encodeURIComponent(skillId)}/versions`,
-      PublishSkillVersionResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({ bundle, reviewedIntegrity, activate }),
-      },
-    )
+): Promise<SkillData> => {
+  const body = { bundle, reviewedIntegrity, activate };
+  return (
+    target.scope === "personal"
+      ? await dxClient.call(PublishPersonalSkillVersionEndpoint, {
+          params: { skillId },
+          body,
+        })
+      : await dxClient.call(PublishWorkspaceSkillVersionEndpoint, {
+          params: { ...workspace(target), skillId },
+          body,
+        })
   ).data;
+};
 
 export const updateSkillState = async (
   target: SkillsTarget,
@@ -97,26 +125,23 @@ export const updateSkillState = async (
     readonly pinned?: boolean;
   },
 ): Promise<SkillData> =>
-  (
-    await request(
-      `${skillsBase(target)}/${encodeURIComponent(skillId)}`,
-      UpdateSkillStateResponseSchema,
-      {
-        method: "PATCH",
-        body: JSON.stringify(input),
-      },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(UpdatePersonalSkillStateEndpoint, {
+        params: { skillId },
+        body: input,
+      })
+    : await dxClient.call(UpdateWorkspaceSkillStateEndpoint, {
+        params: { ...workspace(target), skillId },
+        body: input,
+      })
   ).data;
 
 export const removeSkill = async (target: SkillsTarget, skillId: SkillId) =>
-  (
-    await request(
-      `${skillsBase(target)}/${encodeURIComponent(skillId)}`,
-      RemoveSkillResponseSchema,
-      {
-        method: "DELETE",
-      },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(RemovePersonalSkillEndpoint, { params: { skillId } })
+    : await dxClient.call(RemoveWorkspaceSkillEndpoint, {
+        params: { ...workspace(target), skillId },
+      })
   ).data.removedSkillId;
 
 export const exportSkill = async (
@@ -124,13 +149,24 @@ export const exportSkill = async (
   skillId: SkillId,
   signal?: AbortSignal,
 ) =>
-  (
-    await request(
-      `${skillsBase(target)}/${encodeURIComponent(skillId)}/export`,
-      ExportSkillResponseSchema,
-      { signal },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(
+        ExportPersonalSkillEndpoint,
+        { params: { skillId } },
+        { signal },
+      )
+    : await dxClient.call(
+        ExportWorkspaceSkillEndpoint,
+        { params: { ...workspace(target), skillId } },
+        { signal },
+      )
   ).data;
+
+/** Callers pass the id they read; Core refuses one it cannot find. */
+const proposalParams = (proposalId: string) => ({
+  proposalId:
+    proposalId as (typeof SkillProposalParamsSchema.Type)["proposalId"],
+});
 
 /** Saves an agent's skill proposal the person reviewed. */
 export const approveSkillProposal = async (
@@ -138,24 +174,30 @@ export const approveSkillProposal = async (
   proposalId: string,
   reviewedIntegrity: SkillIntegrity,
 ) =>
-  (
-    await request(
-      `${skillsBase(target)}/proposals/${encodeURIComponent(proposalId)}/approve`,
-      DecideSkillProposalResponseSchema,
-      { method: "POST", body: JSON.stringify({ reviewedIntegrity }) },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(ApprovePersonalSkillProposalEndpoint, {
+        params: proposalParams(proposalId),
+        body: { reviewedIntegrity },
+      })
+    : await dxClient.call(ApproveWorkspaceSkillProposalEndpoint, {
+        params: { ...workspace(target), ...proposalParams(proposalId) },
+        body: { reviewedIntegrity },
+      })
   ).data;
 
 export const rejectSkillProposal = async (
   target: SkillsTarget,
   proposalId: string,
 ) =>
-  (
-    await request(
-      `${skillsBase(target)}/proposals/${encodeURIComponent(proposalId)}/reject`,
-      DecideSkillProposalResponseSchema,
-      { method: "POST", body: "{}" },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(RejectPersonalSkillProposalEndpoint, {
+        params: proposalParams(proposalId),
+        body: {},
+      })
+    : await dxClient.call(RejectWorkspaceSkillProposalEndpoint, {
+        params: { ...workspace(target), ...proposalParams(proposalId) },
+        body: {},
+      })
   ).data;
 
 export const updateSkillWorkspacePolicy = async (
@@ -163,14 +205,10 @@ export const updateSkillWorkspacePolicy = async (
   allowPersonalSkills: boolean,
 ) =>
   (
-    await request(
-      `${skillsBase(target)}/policy`,
-      UpdateSkillWorkspacePolicyResponseSchema,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ allowPersonalSkills }),
-      },
-    )
+    await dxClient.call(UpdateWorkspaceSkillPolicyEndpoint, {
+      params: workspace(target),
+      body: { allowPersonalSkills },
+    })
   ).data;
 
 /** skills.sh's most installed skills, or its matches for `query`. */
@@ -179,12 +217,17 @@ export const discoverSkills = async (
   query: string,
   signal?: AbortSignal,
 ) =>
-  (
-    await request(
-      `${skillsBase(target)}/discover?${new URLSearchParams({ q: query })}`,
-      DiscoverSkillsResponseSchema,
-      { signal },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(
+        DiscoverPersonalSkillsEndpoint,
+        { query: { q: query } },
+        { signal },
+      )
+    : await dxClient.call(
+        DiscoverWorkspaceSkillsEndpoint,
+        { params: workspace(target), query: { q: query } },
+        { signal },
+      )
   ).data.items;
 
 /** A skill from skills.sh or GitHub with all its files, before install. */
@@ -193,12 +236,17 @@ export const previewSkillSource = async (
   source: SkillInstallSource,
   signal?: AbortSignal,
 ) =>
-  (
-    await request(
-      `${skillsBase(target)}/sources/preview`,
-      PreviewSkillSourceResponseSchema,
-      { method: "POST", body: JSON.stringify({ source }), signal },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(
+        PreviewPersonalSkillSourceEndpoint,
+        { body: { source } },
+        { signal },
+      )
+    : await dxClient.call(
+        PreviewWorkspaceSkillSourceEndpoint,
+        { params: workspace(target), body: { source } },
+        { signal },
+      )
   ).data;
 
 export type SkillSourcePreview = Awaited<ReturnType<typeof previewSkillSource>>;
@@ -209,11 +257,14 @@ export const installSkill = async (
   source: SkillInstallSource,
   reviewedIntegrity: SkillIntegrity,
 ): Promise<SkillData> =>
-  (
-    await request(`${skillsBase(target)}/install`, InstallSkillResponseSchema, {
-      method: "POST",
-      body: JSON.stringify({ source, reviewedIntegrity }),
-    })
+  (target.scope === "personal"
+    ? await dxClient.call(InstallPersonalSkillEndpoint, {
+        body: { source, reviewedIntegrity },
+      })
+    : await dxClient.call(InstallWorkspaceSkillEndpoint, {
+        params: workspace(target),
+        body: { source, reviewedIntegrity },
+      })
   ).data;
 
 /** One file of a skill's active version. */
@@ -223,12 +274,17 @@ export const readSkillFile = async (
   path: string,
   signal?: AbortSignal,
 ) =>
-  (
-    await request(
-      `${skillsBase(target)}/${encodeURIComponent(skillId)}/files?${new URLSearchParams({ path })}`,
-      SkillFileResponseSchema,
-      { signal },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(
+        ReadPersonalSkillFileEndpoint,
+        { params: { skillId }, query: { path } },
+        { signal },
+      )
+    : await dxClient.call(
+        ReadWorkspaceSkillFileEndpoint,
+        { params: { ...workspace(target), skillId }, query: { path } },
+        { signal },
+      )
   ).data;
 
 export const skillKeys = {

@@ -362,6 +362,18 @@ const DRAFT = `\`\`\`dx-view
 <button>Connect data</button>
 \`\`\``;
 
+/** A follow-up just sent after an answered question: no step yet. */
+export const followUpJustSent = conversation(
+  answerOnly,
+  turn({
+    id: "turn-follow-up",
+    ask: "And where is the idle timeout set?",
+    sent: minutesAgo(0),
+    outcome: "running",
+    steps: [],
+  }),
+);
+
 /** A running turn that shows a draft mid-way, on purpose. */
 export const runningWithShownMedia = turn({
   id: "turn-running-shown",

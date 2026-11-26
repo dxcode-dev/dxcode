@@ -126,9 +126,11 @@ export const mayReadOrbContents = (access: ThreadAccess) => access !== "view";
  * authorization refuses them to anyone who may not read Orb contents.
  * `/storage` is only the list: it names every stored copy, the read-only
  * restart's rescued work included. A single stored file decides by itself.
+ * `/changes/ship` reads the owner's Project: its base branch and custom Ship
+ * prompt, which View sharing does not grant.
  */
 const ORB_CONTENT_ROUTE =
-  /^\/(?:(?:files|terminal|desktop|portals|memory|disk)(?:\/.*)?|files-sandbox|changes\/diff|storage)\/?$/;
+  /^\/(?:(?:files|terminal|desktop|portals|memory|disk)(?:\/.*)?|files-sandbox|changes\/(?:diff|ship)|storage)\/?$/;
 
 /** Whether this Thread request path reads the Orb's contents. */
 export const readsOrbContents = (path: string) => {

@@ -81,6 +81,23 @@
   color: var(--muted-foreground);
 }
 
+.thread-portals-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-portals-notice {
+  flex: none;
+  margin: 0;
+  padding: var(--space-1-5) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
+
 .thread-portals-hint {
   min-width: 0;
   overflow: hidden;

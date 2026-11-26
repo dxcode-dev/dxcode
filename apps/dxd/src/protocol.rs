@@ -134,6 +134,14 @@ pub struct ProxyCapability {
     pub version: u8,
 }
 
+/// Version 1: Core may send `services.remember`, `services.recover`, and
+/// `services.manifests`, and `services.ensure` specs may name a `checkout`;
+/// see [`crate::portal_processes`] and [`crate::services`].
+#[derive(Serialize)]
+pub struct PortalRecoveryCapability {
+    pub version: u8,
+}
+
 /// Version 1: Core may send `desktop.windows`, `desktop.open`, and
 /// `desktop.focus`; see [`crate::desktop`].
 #[derive(Serialize)]
@@ -228,6 +236,7 @@ pub struct Capabilities {
     pub plugin_drafts: PluginDraftsCapability,
     pub service_host: ServiceHostCapability,
     pub sandbox: SandboxCapability,
+    pub portal_recovery: PortalRecoveryCapability,
 }
 
 impl Capabilities {
@@ -249,6 +258,7 @@ impl Capabilities {
             plugin_drafts: PluginDraftsCapability { version: 1 },
             service_host: ServiceHostCapability { version: 1 },
             sandbox: SandboxCapability { version: 1 },
+            portal_recovery: PortalRecoveryCapability { version: 1 },
         }
     }
 
@@ -568,6 +578,17 @@ pub enum PortalOperation {
     ServicesEnsure {
         services: Vec<crate::services::ServiceSpec>,
     },
+    /// Record the process a Portal served on `port`; see
+    /// [`crate::portal_processes`].
+    #[serde(rename = "services.remember")]
+    ServicesRemember { port: u16 },
+    /// Run the process remembered for `port` again if nothing listens.
+    #[serde(rename = "services.recover")]
+    ServicesRecover { port: u16 },
+    /// The `.dx/services.yaml` of the primary checkout and of each
+    /// repository under `~/workspace/repos`.
+    #[serde(rename = "services.manifests")]
+    ServicesManifests {},
 }
 
 #[derive(Serialize)]
@@ -585,6 +606,12 @@ pub enum PortalResult {
     },
     Windows {
         windows: Vec<crate::desktop::DesktopWindow>,
+    },
+    Remembered {
+        remembered: bool,
+    },
+    Manifests {
+        manifests: Vec<crate::services::Manifest>,
     },
 }
 

@@ -14,6 +14,7 @@ import { INTERNAL_GUEST_PORTS } from "../portals/host.js";
  *     port: 5173
  *     cwd: apps/web        # optional, relative to the repository
  *     env: { FOO: bar }    # optional; PORT is always the service's port
+ * ports: [8080]            # optional: more Portals, with no command
  * ```
  *
  * Core validates the file; the resident daemon only starts what is not
@@ -79,7 +80,10 @@ const DeclaredServiceBody = Schema.Struct({
 });
 
 const ServicesManifest = Schema.Struct({
-  services: Schema.Record(Schema.String, DeclaredServiceBody),
+  services: Schema.optional(Schema.Record(Schema.String, DeclaredServiceBody)),
+  // Ports to list as Portals without a command dx runs, such as a server
+  // the setup script or another service starts.
+  ports: Schema.optional(Schema.Array(ServicePort)),
 });
 
 export interface DeclaredService {
@@ -90,13 +94,29 @@ export interface DeclaredService {
   readonly env: Readonly<Record<string, string>>;
 }
 
+export interface ServicesManifestDocument {
+  readonly services: ReadonlyArray<DeclaredService>;
+  /** `ports:` entries no service declares, ascending. */
+  readonly ports: ReadonlyArray<number>;
+}
+
 /**
  * The declared services, or `undefined` when the manifest is not valid YAML,
  * breaks a rule, declares more than `MAX_SERVICES`, or reuses a port.
  */
 export const parseServicesManifest = (
   text: string,
-): ReadonlyArray<DeclaredService> | undefined => {
+): ReadonlyArray<DeclaredService> | undefined =>
+  parseServicesManifestDocument(text)?.services;
+
+/**
+ * The declared services and extra Portal ports, or `undefined` when the
+ * manifest is refused (see `parseServicesManifest`), or lists more than
+ * `MAX_SERVICES` extra ports.
+ */
+export const parseServicesManifestDocument = (
+  text: string,
+): ServicesManifestDocument | undefined => {
   let document: unknown;
   try {
     document = parse(text, { maxAliasCount: 0 });
@@ -107,7 +127,8 @@ export const parseServicesManifest = (
     onExcessProperty: "error",
   });
   if (Option.isNone(manifest)) return undefined;
-  for (const [name, body] of Object.entries(manifest.value.services)) {
+  const declared = manifest.value.services ?? {};
+  for (const [name, body] of Object.entries(declared)) {
     const env = Object.entries(body.env ?? {});
     if (
       !SERVICE_NAME.test(name) ||
@@ -121,7 +142,7 @@ export const parseServicesManifest = (
     )
       return undefined;
   }
-  const services = Object.entries(manifest.value.services).map(
+  const services = Object.entries(declared).map(
     ([name, body]): DeclaredService => ({
       name,
       command: body.command,
@@ -140,5 +161,66 @@ export const parseServicesManifest = (
     new Set(services.map((service) => service.port)).size !== services.length
   )
     return undefined;
-  return services;
+  const servicePorts = new Set(services.map((service) => service.port));
+  const ports = [...new Set(manifest.value.ports ?? [])]
+    .filter((port) => !servicePorts.has(port))
+    .sort((left, right) => left - right);
+  if (ports.length > MAX_SERVICES) return undefined;
+  return { services, ports };
+};
+
+/** A declared service, and the checkout whose manifest declares it. */
+export interface CheckoutService extends DeclaredService {
+  /** A repository under `~/workspace/repos`; absent for the primary. */
+  readonly checkout?: string;
+}
+
+/** Every checkout's declared services and extra Portal ports, merged. */
+export interface ThreadServices {
+  readonly services: ReadonlyArray<CheckoutService>;
+  readonly ports: ReadonlyArray<number>;
+  /** `invalid` when dx refuses any checkout's manifest. */
+  readonly file: "valid" | "missing" | "invalid";
+}
+
+/**
+ * The manifests of the primary checkout and of the repositories under
+ * `~/workspace/repos`, merged in that order: a port the primary (or an
+ * earlier checkout) declares is not declared again. A refused manifest
+ * contributes nothing.
+ */
+export const mergeServicesManifests = (
+  manifests: ReadonlyArray<{
+    readonly checkout?: string | undefined;
+    readonly content: string;
+  }>,
+): ThreadServices => {
+  const services: CheckoutService[] = [];
+  const ports = new Set<number>();
+  const taken = new Set<number>();
+  let invalid = false;
+  for (const manifest of manifests) {
+    const document = parseServicesManifestDocument(manifest.content);
+    if (document === undefined) {
+      invalid = true;
+      continue;
+    }
+    for (const service of document.services) {
+      if (taken.has(service.port)) continue;
+      taken.add(service.port);
+      services.push(
+        manifest.checkout === undefined
+          ? service
+          : { ...service, checkout: manifest.checkout },
+      );
+    }
+    for (const port of document.ports) ports.add(port);
+  }
+  return {
+    services: services.slice(0, MAX_SERVICES * 4),
+    ports: [...ports]
+      .filter((port) => !taken.has(port))
+      .sort((left, right) => left - right),
+    file: invalid ? "invalid" : manifests.length === 0 ? "missing" : "valid",
+  };
 };

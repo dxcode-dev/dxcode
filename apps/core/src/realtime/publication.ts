@@ -89,6 +89,40 @@ const threadAudience = async (
 };
 
 /**
+ * Closes the realtime sockets of people no longer members of the workspace,
+ * so they stop hearing its change hints at once (#2584). The hub also checks
+ * on its alarm, which covers a removal this call misses.
+ */
+export const closeDepartedRealtimeMembers = async (
+  bindings: Pick<Bindings, "REALTIME_HUB">,
+  workspaceId: string,
+  departedUserId: string,
+): Promise<void> => {
+  if (bindings.REALTIME_HUB === undefined) return;
+  const audience = workspaceAudienceKey(workspaceId);
+  try {
+    const response = await bindings.REALTIME_HUB.getByName(audience).fetch(
+      "https://realtime.internal/members-changed",
+      {
+        method: "POST",
+        headers: {
+          [AUDIENCE_HEADER]: audience,
+          [PARTICIPANT_HEADER]: departedUserId,
+          [CLIENT_HEADER]: crypto.randomUUID(),
+        },
+      },
+    );
+    if (!response.ok)
+      throw new Error(`Realtime hub returned ${response.status}.`);
+  } catch (cause) {
+    realtimeLogger.warn("Realtime membership change was not delivered.", {
+      event: "realtime_membership_change_failed",
+      cause,
+    });
+  }
+};
+
+/**
  * Who has the Thread open right now, from its hub's memory-only presence.
  * An empty set when the hub, the binding, or the Thread is unavailable: a
  * notification that cannot tell holds nobody back.

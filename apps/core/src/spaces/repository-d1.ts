@@ -439,16 +439,8 @@ export interface SpaceThreadRow extends Record<string, unknown> {
   readonly archived_at: number | null;
   /** When it last came back from the archive, in epoch milliseconds. */
   readonly restored_at: number | null;
-  readonly attention_kind: "question" | "approval" | "failed" | null;
-  readonly summary_files: number | null;
-  /** An artifact of the thread holds an unchecked ask that mentions someone. */
-  readonly open_ask: number;
-  /** The thread follows a pull request that is still open. */
-  readonly open_pull: number;
   readonly turn_settled_at: string | null;
   readonly turn_failed: number;
-  /** Its last turn failed on its Claude plan's limit; it runs again at the reset. */
-  readonly plan_wait: number;
   readonly unread: number;
   readonly project_name: string;
   readonly workspace_access: "none" | "view" | "contribute";
@@ -497,24 +489,7 @@ export const listSpaceThreadRows = async (
                 project.name AS project_name,
                 ${displayNameSql("requester", "requester_account")} AS requested_by_name,
                 ${userImageSql("requester", "requester_account")} AS requested_by_image,
-                attention.kind AS attention_kind,
-                summary.summary_files,
-                EXISTS (
-                  SELECT 1 FROM thread_open_ask AS ask
-                    JOIN thread_artifact AS artifact ON artifact.id = ask.artifact_id
-                   WHERE ask.thread_id = thread.id AND artifact.deleted_at IS NULL
-                ) AS open_ask,
-                EXISTS (
-                  SELECT 1 FROM thread_github_link AS link
-                   WHERE link.thread_id = thread.id AND link.kind = 'pull'
-                     AND link.verified = 1
-                     AND json_extract(link.subject_json, '$.state') = 'open'
-                ) AS open_pull,
                 thread.turn_settled_at,
-                EXISTS (
-                  SELECT 1 FROM thread_plan_wait AS plan_wait
-                   WHERE plan_wait.thread_id = thread.id
-                ) AS plan_wait,
                 thread.turn_failed, ${threadUnreadSql("thread", "?2")} AS unread
            FROM threads AS thread
            JOIN threads AS space_thread ON space_thread.id = thread.parent_thread_id
@@ -522,9 +497,6 @@ export const listSpaceThreadRows = async (
            LEFT JOIN "user" AS requester ON requester.id = thread.requested_by_user_id
            LEFT JOIN personal_account AS requester_account
              ON requester_account.user_id = requester.id
-           LEFT JOIN thread_attention_request AS attention
-             ON attention.thread_id = thread.id
-           LEFT JOIN thread_changes_state AS summary ON summary.thread_id = thread.id
           WHERE thread.parent_thread_id = ?1
             AND +thread.owner_user_id = space_thread.owner_user_id
             AND thread.lifecycle_state != 'deleted'

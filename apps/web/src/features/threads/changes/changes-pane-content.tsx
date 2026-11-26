@@ -245,7 +245,9 @@ export function ChangesPaneContent({
         changes={changes}
         hasFiles={hasFiles}
         shipAction={
-          transport.getShipPlan === undefined ? null : (
+          // A View member may not send the Ship prompt, and the plan
+          // belongs to the owner's Project.
+          contentsHidden || transport.getShipPlan === undefined ? null : (
             <ShipAction
               threadId={threadId}
               transport={transport}
@@ -257,6 +259,7 @@ export function ChangesPaneContent({
           )
         }
         canPush={canPush}
+        showPush={!contentsHidden}
         pushPending={pushMutation.isPending}
         onPush={() => {
           pushMutation.reset();
@@ -729,6 +732,7 @@ function ChangesToolbar({
   hasFiles,
   shipAction,
   canPush,
+  showPush,
   pushPending,
   onPush,
   onReview,
@@ -750,6 +754,7 @@ function ChangesToolbar({
   /** The project's Ship Behavior action, when the pane has one. */
   readonly shipAction: React.ReactNode;
   readonly canPush: boolean;
+  readonly showPush: boolean;
   readonly pushPending: boolean;
   readonly onPush: () => void;
   readonly onReview: () => void;
@@ -769,21 +774,23 @@ function ChangesToolbar({
   return (
     <div className="changes-toolbar">
       {shipAction}
-      <Button
-        variant="ghost"
-        size="xs"
-        className="changes-action"
-        disabled={!canPush}
-        onClick={onPush}
-        title={pushTitle(changes)}
-      >
-        {pushPending ? (
-          <LoaderCircle className="changes-spin" aria-hidden="true" />
-        ) : (
-          <Upload aria-hidden="true" />
-        )}
-        {pushPending ? "Pushing…" : "Push"}
-      </Button>
+      {showPush ? (
+        <Button
+          variant="ghost"
+          size="xs"
+          className="changes-action"
+          disabled={!canPush}
+          onClick={onPush}
+          title={pushTitle(changes)}
+        >
+          {pushPending ? (
+            <LoaderCircle className="changes-spin" aria-hidden="true" />
+          ) : (
+            <Upload aria-hidden="true" />
+          )}
+          {pushPending ? "Pushing…" : "Push"}
+        </Button>
+      ) : null}
       <Button
         variant="ghost"
         size="xs"
@@ -1218,11 +1225,24 @@ const useParsedPatch = (
   return patch ? parse(patch, path, cacheKey) : undefined;
 };
 
+// The diff library reuses a parsed, highlighted diff whenever its cache key
+// matches, so two different patches must never share one (#2580). Each
+// distinct key gets its own number; the newest few keep theirs, so a file
+// collapsed and opened again still finds its highlight.
+const diffVersions = new Map<string, number>();
+let nextDiffVersion = 0;
+const DIFF_VERSIONS_KEPT = 256;
 const stableVersion = (value: string) => {
-  let hash = 0;
-  for (const character of value)
-    hash = (hash * 31 + character.charCodeAt(0)) | 0;
-  return hash >>> 0;
+  const known = diffVersions.get(value);
+  if (known !== undefined) return known;
+  nextDiffVersion += 1;
+  diffVersions.set(value, nextDiffVersion);
+  if (diffVersions.size > DIFF_VERSIONS_KEPT)
+    for (const oldest of diffVersions.keys()) {
+      diffVersions.delete(oldest);
+      break;
+    }
+  return nextDiffVersion;
 };
 
 const statusBadge = (status: ThreadChangedFile["status"]) =>

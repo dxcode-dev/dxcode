@@ -1,12 +1,13 @@
 // A Space's 30-day chart, read from a fake dx server through the real
 // queries, in the app's own styles.
 //
-// Ways it could go wrong: a day's button lacks its "Fri, Oct 9: N created,
-// N shipped, N archived" name, or names the wrong day; the legend shows other
-// totals than the server's; clicking a day lists another day's threads, or a
-// thread there does not open beside the chat; an empty Space draws no line or
-// a line off the baseline; realtime saying a thread changed leaves the chart
-// stale; the chart asks for days in UTC rather than the viewer's zone.
+// Ways it could go wrong: a day's button lacks its "Fri, Oct 9: N PRs merged,
+// N pushed to main, N open" name, or names the wrong day; the legend shows
+// other totals than the server's; clicking a day lists another day's changes,
+// or a change there does not open its thread beside the chat; an empty Space
+// draws no line or a line off the baseline; realtime saying a thread changed
+// leaves the chart stale; the chart asks for days in UTC rather than the
+// viewer's zone.
 
 import type { ThreadId, UserId } from "@dx/domain";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -53,67 +54,74 @@ const dayLabel = (date: string) =>
 
 interface Event {
   readonly ago: number;
-  readonly created?: number;
-  readonly shipped?: number;
-  readonly archived?: number;
-  readonly threadIds?: ReadonlyArray<ThreadId>;
+  readonly merged?: number;
+  readonly pushed?: number;
+  /** Pull requests opened that day and still open. */
+  readonly opened?: number;
+  readonly changeIds?: ReadonlyArray<string>;
 }
 
 /** Thirty days ending today, the open line following the events. */
-const progressData = (events: ReadonlyArray<Event>, openBefore = 0) => {
+const progressData = (events: ReadonlyArray<Event>) => {
   const today = "2026-11-07";
-  let open = openBefore;
+  let open = 0;
   const days = Array.from({ length: 30 }, (_, index) => {
     const ago = 29 - index;
     const event = events.find((candidate) => candidate.ago === ago);
-    const created = event?.created ?? 0;
-    const shipped = event?.shipped ?? 0;
-    const archived = event?.archived ?? 0;
-    open += created - shipped - archived;
+    const merged = event?.merged ?? 0;
+    const pushed = event?.pushed ?? 0;
+    open += event?.opened ?? 0;
     return {
       date: dateBefore(today, ago),
-      created,
-      shipped,
-      archived,
+      merged,
+      pushed,
       openAtEnd: open,
-      threadIds: event?.threadIds ?? [],
+      changeIds: event?.changeIds ?? [],
     };
+  });
+  const change = (
+    id: string,
+    title: string,
+    thread: number,
+    state: "merged" | "open",
+    kind: "pull_request" | "default_branch" = "pull_request",
+  ) => ({
+    id,
+    kind,
+    ...(kind === "pull_request"
+      ? {
+          number: Number(id.split("#")[1]),
+          url: `https://github.com/acme/checkout/pull/${id.split("#")[1]}`,
+        }
+      : {}),
+    title,
+    state,
+    at: "2026-11-06T10:00:00.000Z",
+    threadId: child(thread),
+    threadTitle: `Thread ${thread}`,
   });
   return {
     timeZone: "Europe/Berlin",
     days,
     totals: {
-      shipped: days.reduce((total, day) => total + day.shipped, 0),
-      archived: days.reduce((total, day) => total + day.archived, 0),
+      merged: days.reduce((total, day) => total + day.merged, 0),
+      pushed: days.reduce((total, day) => total + day.pushed, 0),
       open,
     },
-    threads: [
-      ["Rebuild the payment step", "open"],
-      ["Add Apple Pay to checkout", "open"],
-      ["Checkout Playwright tests", "open"],
-      ["Fix coupon total rounding", "shipped"],
-      ["Survey payment providers", "archived"],
-      ["Retry failed refunds", "shipped"],
-      ["Rename the cart events", "open"],
-    ].map(([title, outcome], index) => ({
-      id: child(index + 1),
-      title,
-      outcome,
-      createdAt: "2026-11-01T10:00:00.000Z",
-      shippedAt: outcome === "shipped" ? "2026-11-06T10:00:00.000Z" : null,
-      shipReason: outcome === "shipped" ? "pull_request_merged" : null,
-      archivedAt: outcome === "archived" ? "2026-11-05T10:00:00.000Z" : null,
-    })),
+    changes: [
+      change("acme/checkout#41", "Round coupon totals to cents", 4, "merged"),
+      change("acme/checkout#42", "Retry failed refunds", 6, "merged"),
+      change("acme/checkout#43", "Apple Pay button", 2, "open"),
+      change(child(5), "Rename the cart events", 5, "merged", "default_branch"),
+    ],
   };
 };
 
 const busy = progressData([
-  { ago: 12, created: 2, threadIds: [child(4), child(6)] },
-  { ago: 9, created: 1, threadIds: [child(5)] },
-  { ago: 7, shipped: 1, threadIds: [child(6)] },
-  { ago: 5, archived: 1, threadIds: [child(5)] },
-  { ago: 3, created: 3, threadIds: [child(1), child(2), child(3)] },
-  { ago: 1, created: 1, shipped: 1, threadIds: [child(7), child(4)] },
+  { ago: 7, merged: 1, changeIds: ["acme/checkout#42"] },
+  { ago: 5, pushed: 1, changeIds: [child(5)] },
+  { ago: 3, opened: 1, changeIds: ["acme/checkout#43"] },
+  { ago: 1, merged: 1, changeIds: ["acme/checkout#41"] },
 ]);
 const empty = progressData([]);
 
@@ -257,7 +265,7 @@ const shot = async (name: string, { away = false } = {}) => {
 const dayList = () =>
   document.querySelector<HTMLElement>(".space-progress-day");
 
-it("names each day, totals the legend, and lists a day's threads that open beside the chat", async () => {
+it("names each day, totals the legend, and lists a day's changes that open their threads beside the chat", async () => {
   const requests = serve([busy]);
   const { router } = await mount();
   await until(() => dayButtons().length === 30);
@@ -269,22 +277,18 @@ it("names each day, totals the legend, and lists a day's threads that open besid
     button.getAttribute("aria-label"),
   );
   expect(labels[0]).toBe(
-    `${dayLabel(busy.days[0]?.date ?? "")}: 0 created, 0 shipped, 0 archived`,
+    `${dayLabel(busy.days[0]?.date ?? "")}: 0 PRs merged, 0 pushed to main, 0 open`,
   );
   expect(labels[0]).toMatch(/^[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}: /);
   expect(labels[28]).toBe(
-    `${dayLabel("2026-11-06")}: 1 created, 1 shipped, 0 archived`,
+    `${dayLabel("2026-11-06")}: 1 PR merged, 0 pushed to main, 1 open`,
   );
   expect(labels[24]).toBe(
-    `${dayLabel("2026-11-02")}: 0 created, 0 shipped, 1 archived`,
+    `${dayLabel("2026-11-02")}: 0 PRs merged, 1 pushed to main, 0 open`,
   );
-  expect(legend()).toEqual(["2 shipped", "1 archived", "4 open"]);
-  // Bars: two shipped days, one archived day.
-  expect(
-    [...document.querySelectorAll(".space-progress-bar")].map((bar) =>
-      bar.getAttribute("data-kind"),
-    ),
-  ).toEqual(["shipped", "archived", "shipped"]);
+  expect(legend()).toEqual(["2 merged", "1 pushed", "1 open"]);
+  // Bars: one per day something merged or was pushed.
+  expect(document.querySelectorAll(".space-progress-bar")).toHaveLength(3);
   await shot("chart-light", { away: true });
 
   // Hovering a day tells all four counts.
@@ -293,11 +297,11 @@ it("names each day, totals the legend, and lists a day's threads that open besid
   await userEvent.hover(yesterday);
   await until(() => document.querySelector(".space-progress-tooltip") !== null);
   expect(document.querySelector(".space-progress-tooltip")?.textContent).toBe(
-    `${dayLabel("2026-11-06")}: 1 created, 1 shipped, 0 archived, 4 open`,
+    `${dayLabel("2026-11-06")}: 1 PR merged, 0 pushed to main, 1 open`,
   );
   await shot("chart-hover");
 
-  // Clicking it lists its threads.
+  // Clicking it lists its changes.
   await userEvent.click(yesterday);
   await until(() => dayList() !== null);
   expect(yesterday.getAttribute("aria-pressed")).toBe("true");
@@ -305,12 +309,12 @@ it("names each day, totals the legend, and lists a day's threads that open besid
     [...(dayList()?.querySelectorAll("li button") ?? [])].map(
       (button) => button.textContent,
     ),
-  ).toEqual(["Rename the cart eventsOpen", "Fix coupon total roundingShipped"]);
+  ).toEqual(["#41Round coupon totals to centsThread 4"]);
   await userEvent.unhover(yesterday);
   await shot("chart-day-open");
 
-  // A thread there opens beside the chat.
-  const fix = [...(dayList()?.querySelectorAll("li button") ?? [])][1];
+  // A change there opens its thread beside the chat.
+  const fix = [...(dayList()?.querySelectorAll("li button") ?? [])][0];
   if (!(fix instanceof HTMLButtonElement)) throw new Error("No thread row.");
   await userEvent.click(fix);
   await until(
@@ -320,29 +324,29 @@ it("names each day, totals the legend, and lists a day's threads that open besid
   expect(router.state.location.pathname).toBe(`/threads/${SPACE}`);
 
   // Another day replaces the list; clicking it again closes it.
-  const archivedDay = dayButtons()[24];
-  if (archivedDay === undefined) throw new Error("No day button.");
-  await userEvent.click(archivedDay);
+  const pushDay = dayButtons()[24];
+  if (pushDay === undefined) throw new Error("No day button.");
+  await userEvent.click(pushDay);
   await until(
     () => dayList()?.getAttribute("aria-label") === dayLabel("2026-11-02"),
   );
-  expect(dayList()?.textContent).toContain("Survey payment providersArchived");
-  await userEvent.click(archivedDay);
+  expect(dayList()?.textContent).toContain("Rename the cart eventsThread 5");
+  await userEvent.click(pushDay);
   await until(() => dayList() === null);
 });
 
-it("draws an empty Space as a flat line on the baseline with 0 shipped, 0 archived, 0 open", async () => {
+it("draws an empty Space as a flat line on the baseline with 0 merged, 0 pushed, 0 open", async () => {
   serve([empty]);
   await mount();
   await until(() => dayButtons().length === 30);
   expect(
     dayButtons().every((button) =>
-      /: 0 created, 0 shipped, 0 archived$/.test(
+      /: 0 PRs merged, 0 pushed to main, 0 open$/.test(
         button.getAttribute("aria-label") ?? "",
       ),
     ),
   ).toBe(true);
-  expect(legend()).toEqual(["0 shipped", "0 archived", "0 open"]);
+  expect(legend()).toEqual(["0 merged", "0 pushed", "0 open"]);
   expect(document.querySelectorAll(".space-progress-bar")).toHaveLength(0);
   const points = (
     document.querySelector(".space-progress-line")?.getAttribute("points") ?? ""
@@ -357,7 +361,7 @@ it("draws an empty Space as a flat line on the baseline with 0 shipped, 0 archiv
   await userEvent.click(today);
   await until(() => dayList() !== null);
   expect(dayList()?.textContent).toContain(
-    "No threads started, shipped, or archived this day.",
+    "Nothing merged or pushed this day.",
   );
   await userEvent.click(today);
   await shot("chart-empty", { away: true });
@@ -369,9 +373,9 @@ it("refreshes when realtime says a thread changed, in light and dark", async () 
   await until(() => legend()[2] === "0 open");
   await shot("chart-empty-dark", { away: true });
   await React.act(() => invalidateSpaceForThread(client, viewer, child(9)));
-  await until(() => legend()[2] === "4 open");
+  await until(() => legend()[2] === "1 open");
   expect(requests).toHaveLength(2);
-  expect(legend()).toEqual(["2 shipped", "1 archived", "4 open"]);
+  expect(legend()).toEqual(["2 merged", "1 pushed", "1 open"]);
   await shot("chart-dark", { away: true });
 });
 

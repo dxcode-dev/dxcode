@@ -71,27 +71,26 @@ export function SimpleWorkingLine({
   );
 }
 
-/** A finished turn's one line: how it ended and how long it took. */
+/**
+ * The line a turn that ended early leaves: stopped, or didn't finish, and
+ * after how long. A turn that finished leaves none; its answer says so.
+ */
 export function SimpleTurnSummary({
   outcome,
   durationMs,
 }: {
-  readonly outcome: Exclude<SimpleTurn["outcome"], "working">;
+  readonly outcome: "stopped" | "failed";
   readonly durationMs?: number;
 }) {
   const duration = formatDuration(durationMs);
   const text =
-    outcome === "done"
+    outcome === "stopped"
       ? duration === undefined
-        ? "Done"
-        : `Done in ${duration}`
-      : outcome === "stopped"
-        ? duration === undefined
-          ? "Stopped"
-          : `Stopped after ${duration}`
-        : duration === undefined
-          ? "Didn't finish"
-          : `Didn't finish after ${duration}`;
+        ? "Stopped"
+        : `Stopped after ${duration}`
+      : duration === undefined
+        ? "Didn't finish"
+        : `Didn't finish after ${duration}`;
   return (
     <p className="simple-turn-status" data-state={outcome}>
       {text}
@@ -157,9 +156,9 @@ function SimpleTurnLinks({
 
 /**
  * One turn in the Simple thread view (Settings → Appearance → Thread View):
- * the person's message, the cards and media the agent showed, its answer,
- * then one line saying how the turn ended and how long it took. While it
- * runs, a single line says what the agent is doing.
+ * the person's message, the cards and media the agent showed, and its
+ * answer. A turn that ended early adds one line saying so. While it runs, a
+ * single line says what the agent is doing.
  */
 export function SimpleTranscriptTurn({
   turn,
@@ -210,7 +209,7 @@ export function SimpleTranscriptTurn({
               : { startedAt: simple.startedAt })}
           />
         ) : null
-      ) : answered ? (
+      ) : answered && simple.outcome !== "done" ? (
         <SimpleTurnSummary
           outcome={simple.outcome}
           {...(simple.durationMs === undefined

@@ -547,12 +547,14 @@ describe("The Space agent's management tools", () => {
       requester: { name: "Ben Member" },
       request_post_id: asked.id,
     });
-    expect(byTitle["Release notes"]).toMatchObject({ state: "inactive" });
-    // A question nobody answered is never just inactive.
-    expect(byTitle["Refund provider"]).toMatchObject({ state: "needs-input" });
+    // Any thread not running or archived is idle, however old, whatever it
+    // asks or shipped: the agent reads its report to judge whether it is done.
+    expect(byTitle["Release notes"]).toMatchObject({ state: "idle" });
+    expect(byTitle["Refund provider"]).toMatchObject({ state: "idle" });
     expect(byTitle["Tax rounding"]).toMatchObject({
-      state: "shipped",
+      state: "idle",
       commits_landed: true,
+      shipped: true,
     });
     const onlyWorking = await call(tools, "list_space_threads", {
       state: "working",

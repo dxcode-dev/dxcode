@@ -865,7 +865,7 @@ describe("Messages the Space's agent receives", () => {
     expect(received).toHaveLength(2);
     expect(received[0]).not.toContain("open ask");
     expect(received[1]).toContain(
-      "(dx: this thread has an open ask in its artifacts, whose mention notified the person it waits on; its card shows Needs you.)",
+      "(dx: this thread has an open ask in its artifacts, whose mention notified the person it waits on.)",
     );
     expect((await posts(owner, spaceId)).items).toEqual([]);
     // Two children, an artifact, and two reports: past 5 s under load.

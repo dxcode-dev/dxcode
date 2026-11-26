@@ -997,7 +997,7 @@ describe("Portal host routing in workerd", () => {
     expect(await thrown.text()).not.toContain("sandbox-secret");
   });
 
-  it("lists guest ports as Portal URLs without waking the workspace", async () => {
+  it("lists only exposed ports as Portal URLs without waking the workspace", async () => {
     const owner = await signUp("ports");
     const outsider = await signUp("ports-outsider");
     const threadId = await createThread(owner.userId);
@@ -1011,13 +1011,22 @@ describe("Portal host routing in workerd", () => {
         { ...bindings, ...overrides },
       );
 
+    // 8080 and 5432 listen but nobody declared or opened them: hidden.
     next = Response.json({
       ports: [
         { port: 8080, address: "0.0.0.0" },
+        { port: 5432, address: "127.0.0.1" },
         { port: 5173, address: "127.0.0.1" },
         { port: 5173, address: "::1" },
+        { port: 4000, address: "127.0.0.1" },
         { port: 0, address: "0.0.0.0" },
       ],
+      exposed: [
+        { port: 5173, name: "web", declared: true },
+        { port: 3000, name: "api", declared: true },
+        { port: 4000, declared: false },
+      ],
+      manifest: "valid",
     });
     const running = await list(owner.cookie);
     expect(running.status).toBe(200);
@@ -1025,9 +1034,28 @@ describe("Portal host routing in workerd", () => {
       status: "success",
       data: {
         workspace: "running",
+        servicesFile: "valid",
         portals: [
-          { port: 5173, url: `${portalOriginFor(threadId, 5173)}/` },
-          { port: 8080, url: `${portalOriginFor(threadId, 8080)}/` },
+          {
+            port: 3000,
+            name: "api",
+            declared: true,
+            listening: false,
+            url: `${portalOriginFor(threadId, 3000)}/`,
+          },
+          {
+            port: 4000,
+            declared: false,
+            listening: true,
+            url: `${portalOriginFor(threadId, 4000)}/`,
+          },
+          {
+            port: 5173,
+            name: "web",
+            declared: true,
+            listening: true,
+            url: `${portalOriginFor(threadId, 5173)}/`,
+          },
         ],
         publicLinks: [],
         canPublish: true,
@@ -1079,6 +1107,7 @@ describe("Portal host routing in workerd", () => {
       status: "success",
       data: {
         workspace: "paused",
+        servicesFile: "unknown",
         portals: [],
         publicLinks: [],
         canPublish: true,
@@ -2134,7 +2163,11 @@ describe("Portal hardening in workerd", () => {
     const owner = await signUp("wake");
     const threadId = await createThread(owner.userId);
     const execution = fakeExecution(() =>
-      Response.json({ ports: [{ port: 5173, address: "0.0.0.0" }] }),
+      Response.json({
+        ports: [{ port: 5173, address: "0.0.0.0" }],
+        exposed: [{ port: 5173, name: "web", declared: true }],
+        manifest: "valid",
+      }),
     );
     const bindings = { ...baseBindings, THREAD_EXECUTION: execution.namespace };
     const woken = await app.request(
@@ -2146,7 +2179,7 @@ describe("Portal hardening in workerd", () => {
     expect(await woken.json()).toMatchObject({
       data: {
         workspace: "running",
-        portals: [{ port: 5173 }],
+        portals: [{ port: 5173, name: "web", listening: true }],
       },
     });
     expect(execution.calls[0]?.headers.get("x-dx-proxy-wake")).toBe("1");

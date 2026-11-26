@@ -789,7 +789,7 @@ describe("Space thread cards in workerd with real D1", () => {
     expect((await card(spaceId, childId)).state).toBe("idle");
   });
 
-  it("shows each card's state from the thread's own signals", async () => {
+  it("shows each card's state from facts only: running, archived, or idle whatever it asks or shipped", async () => {
     const spaceId = await newSpace();
     const childId = await startChild(spaceId, "Coupon rounding");
     const otherSpace = await newSpace("Search relevance");
@@ -823,7 +823,8 @@ describe("Space thread cards in workerd with real D1", () => {
         log: { info() {}, warn() {}, error() {}, debug() {} },
       } as never)) as { output: { artifact_id: string } }
     ).output.artifact_id;
-    expect((await card(spaceId, childId)).state).toBe("needs_you");
+    // An open ask is the thread's to say on its row, not a state.
+    expect((await card(spaceId, childId)).state).toBe("idle");
 
     // Ticking the ask answers it.
     const saved = await saveArtifact(bindings, {
@@ -845,7 +846,7 @@ describe("Space thread cards in workerd with real D1", () => {
     });
     expect((await card(spaceId, childId)).state).toBe("idle");
 
-    // An open pull request, or uncommitted changes, is ready to ship.
+    // An open pull request leaves it idle; so does its merge.
     await env.DB.prepare(
       `INSERT INTO thread_github_link (thread_id, repository, repository_key, number, kind, subject_json, created_at, verified)
        VALUES (?1, 'acme/checkout', 'acme/checkout', 7, 'pull', ?2, ?3, 1)`,
@@ -856,7 +857,7 @@ describe("Space thread cards in workerd with real D1", () => {
         new Date().toISOString(),
       )
       .run();
-    expect((await card(spaceId, childId)).state).toBe("ready_to_ship");
+    expect((await card(spaceId, childId)).state).toBe("idle");
     await env.DB.prepare(
       "UPDATE thread_github_link SET subject_json = json_set(subject_json, '$.state', 'merged') WHERE thread_id = ?",
     )
@@ -864,33 +865,37 @@ describe("Space thread cards in workerd with real D1", () => {
       .run();
     expect((await card(spaceId, childId)).state).toBe("idle");
 
-    // A failed turn shows Failed until a turn starts again.
+    // A failed turn rests idle; its status line says what stopped it.
     await env.DB.prepare("UPDATE threads SET turn_failed = 1 WHERE id = ?")
       .bind(childId)
       .run();
-    expect((await card(spaceId, childId)).state).toBe("failed");
+    expect((await card(spaceId, childId)).state).toBe("idle");
 
-    // Archiving, then shipping, which wins.
+    // Shipped and resting is still idle: only archiving closes a thread.
+    await env.DB.prepare(
+      "UPDATE threads SET shipped_at = ?2, ship_reason = 'pull_request_merged' WHERE id = ?1",
+    )
+      .bind(childId, Date.now())
+      .run();
+    const shipped = await card(spaceId, childId);
+    expect(shipped.state).toBe("idle");
+    expect(shipped.shippedAt).not.toBeNull();
+
+    // Archiving closes it, shipped or not.
     await env.DB.prepare(
       "UPDATE threads SET lifecycle_state = 'archived', archived_at = ?2 WHERE id = ?1",
     )
       .bind(childId, Date.now())
       .run();
     expect((await card(spaceId, childId)).state).toBe("archived");
-    await env.DB.prepare(
-      "UPDATE threads SET shipped_at = ?2, ship_reason = 'pull_request_merged' WHERE id = ?1",
-    )
-      .bind(childId, Date.now())
-      .run();
-    expect((await card(spaceId, childId)).state).toBe("shipped");
 
     // The list carries the same state.
     const listed = (await send(member, `/v1/spaces/${spaceId}/threads`)).body
       .data.items as SpaceThreadItem[];
-    expect(listed.find(({ id }) => id === childId)?.state).toBe("shipped");
+    expect(listed.find(({ id }) => id === childId)?.state).toBe("archived");
   });
 
-  it("moves a shipped thread back to open while it runs again, and back to Shipped once it rests", async () => {
+  it("keeps a thread whose pull request merged idle, whatever it does next, until it is archived", async () => {
     const spaceId = await newSpace();
     const childId = await startChild(spaceId, "Coupon rounding");
     await settleFirstTurn(childId);
@@ -900,9 +905,10 @@ describe("Space thread cards in workerd with real D1", () => {
     )
       .bind(childId, shippedAt)
       .run();
-    expect((await card(spaceId, childId)).state).toBe("shipped");
+    // The Signed-in home page case: a small PR merged, the main work goes on.
+    expect((await card(spaceId, childId)).state).toBe("idle");
 
-    // Someone asks it for more after it shipped: it runs, so it is open.
+    // Someone asks it for more after it shipped: it runs.
     await recordFlueThreadActivity(
       observation({
         type: "submission_running",
@@ -918,7 +924,7 @@ describe("Space thread cards in workerd with real D1", () => {
       .data.items as SpaceThreadItem[];
     expect(listed.find(({ id }) => id === childId)?.state).toBe("working");
 
-    // It asks a person something: Needs You, not Shipped.
+    // It asks a person something and rests: idle, never Shipped.
     await env.DB.prepare(
       "INSERT INTO thread_attention_request (thread_id, kind, requested_at) VALUES (?, 'question', ?)",
     )
@@ -933,17 +939,15 @@ describe("Space thread cards in workerd with real D1", () => {
       }),
       { env: bindings } as never,
     );
-    expect((await card(spaceId, childId)).state).toBe("needs_you");
+    expect((await card(spaceId, childId)).state).toBe("idle");
     await env.DB.prepare(
       "DELETE FROM thread_attention_request WHERE thread_id = ?",
     )
       .bind(childId)
       .run();
+    expect((await card(spaceId, childId)).state).toBe("idle");
 
-    // It rests with nothing new to ship: Shipped again.
-    expect((await card(spaceId, childId)).state).toBe("shipped");
-
-    // It opened a new pull request after shipping: Ready to Ship.
+    // It opened a new pull request after shipping: still idle.
     await env.DB.prepare(
       `INSERT INTO thread_github_link (thread_id, repository, repository_key, number, kind, subject_json, created_at, verified)
        VALUES (?1, 'acme/checkout', 'acme/checkout', 8, 'pull', ?2, ?3, 1)`,
@@ -954,12 +958,12 @@ describe("Space thread cards in workerd with real D1", () => {
         new Date().toISOString(),
       )
       .run();
-    expect((await card(spaceId, childId)).state).toBe("ready_to_ship");
+    expect((await card(spaceId, childId)).state).toBe("idle");
     await env.DB.prepare("DELETE FROM thread_github_link WHERE thread_id = ?")
       .bind(childId)
       .run();
 
-    // A turn after shipping failed: Failed, not Shipped.
+    // A turn after shipping failed: idle.
     await recordFlueThreadActivity(
       observation({
         type: "submission_running",
@@ -977,9 +981,9 @@ describe("Space thread cards in workerd with real D1", () => {
       }),
       { env: bindings } as never,
     );
-    expect((await card(spaceId, childId)).state).toBe("failed");
+    expect((await card(spaceId, childId)).state).toBe("idle");
 
-    // Shipped from its Ship outcome, archived, then restored and running.
+    // Shipped from its Ship outcome and archived, then restored and running.
     const restored = await startChild(spaceId, "Refund totals");
     await settleFirstTurn(restored);
     await env.DB.prepare(
@@ -987,7 +991,7 @@ describe("Space thread cards in workerd with real D1", () => {
     )
       .bind(restored, Date.now() - 60_000)
       .run();
-    expect((await card(spaceId, restored)).state).toBe("shipped");
+    expect((await card(spaceId, restored)).state).toBe("archived");
     await env.DB.prepare(
       "UPDATE threads SET lifecycle_state = 'active', restored_at = ?2 WHERE id = ?1",
     )
@@ -1004,7 +1008,7 @@ describe("Space thread cards in workerd with real D1", () => {
     expect((await card(spaceId, restored)).state).toBe("working");
   });
 
-  it("shows a thread waiting for its Claude plan to reset as resting, not Failed", async () => {
+  it("shows a thread waiting for its Claude plan to reset as idle", async () => {
     const spaceId = await newSpace();
     const childId = await startChild(spaceId, "Coupon rounding");
     await recordFlueThreadActivity(
@@ -1042,7 +1046,7 @@ describe("Space thread cards in workerd with real D1", () => {
     );
     expect((await card(spaceId, childId)).state).toBe("working");
 
-    // A failure that is not a plan limit still shows Failed.
+    // A failure that is not a plan limit rests idle too.
     await recordFlueThreadActivity(
       observation({
         type: "submission_settled",
@@ -1053,7 +1057,7 @@ describe("Space thread cards in workerd with real D1", () => {
       }),
       { env: bindings } as never,
     );
-    expect((await card(spaceId, childId)).state).toBe("failed");
+    expect((await card(spaceId, childId)).state).toBe("idle");
   });
 
   it("settles a turn whose settlement dx missed, so a thread that stopped stops showing as running", async () => {
@@ -1083,7 +1087,7 @@ describe("Space thread cards in workerd with real D1", () => {
     await reconcileStaleThreadActivity(bindings, Date.now());
 
     expect((await card(spaceId, lost)).state).toBe("idle");
-    expect((await card(spaceId, failed)).state).toBe("failed");
+    expect((await card(spaceId, failed)).state).toBe("idle");
     expect((await card(spaceId, running)).state).toBe("working");
     expect((await card(spaceId, orphan)).state).toBe("idle");
     const statuses = (
@@ -1287,7 +1291,7 @@ describe("Space thread cards in workerd with real D1", () => {
     // The model was told what became of each.
     const input = JSON.stringify(model.calls[0]?.input);
     expect(input).toContain('\\"state\\":\\"archived\\"');
-    expect(input).toContain('\\"state\\":\\"shipped\\"');
+    expect(input).toContain('\\"change\\":\\"shipped\\"');
     expect(body).toContain(
       `[Survey the test suite](/threads/${archived}) was archived.`,
     );

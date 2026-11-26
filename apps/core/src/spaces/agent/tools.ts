@@ -1,8 +1,4 @@
-import {
-  SPACE_GOAL_MAX_LENGTH,
-  SPACE_POST_MAX_LENGTH,
-  type SpaceThreadState,
-} from "@dx/api";
+import { SPACE_GOAL_MAX_LENGTH, SPACE_POST_MAX_LENGTH } from "@dx/api";
 import {
   parseThreadReference,
   THREAD_COLORS,
@@ -61,8 +57,6 @@ import {
  * `tool-descriptions.ts`.
  */
 
-/** A thread that has done nothing for this long is inactive. */
-export const INACTIVE_AFTER_MS = 72 * 60 * 60 * 1000;
 /** The Space's own status line, as the thread lists show it. */
 const STATUS_MAX_LENGTH = 120;
 
@@ -86,38 +80,6 @@ const reactionInput = (tool: SpaceToolName) =>
   );
 
 const iso = (value: number | string) => new Date(value).toISOString();
-
-type ListedState = (typeof SPACE_THREAD_STATES)[number];
-
-/**
- * A thread's state as `list_space_threads` names it, from the state its
- * card shows (`spaceThreadState`): a failure waits on a person like a
- * question does; a question or ask stays needs-input however old it is;
- * any other thread that is not running, shipped, or archived is scheduled
- * while it waits for a scheduled run, else inactive after 72 hours without
- * activity.
- */
-export const listedThreadState = (input: {
-  readonly state: SpaceThreadState;
-  readonly scheduled: boolean;
-  readonly lastActivityAt: number;
-  readonly now: number;
-}): ListedState => {
-  if (
-    input.state === "working" ||
-    input.state === "shipped" ||
-    input.state === "archived"
-  )
-    return input.state;
-  if (input.state === "needs_you") return "needs-input";
-  if (input.scheduled) return "scheduled";
-  if (input.now - input.lastActivityAt >= INACTIVE_AFTER_MS) return "inactive";
-  return input.state === "failed"
-    ? "needs-input"
-    : input.state === "ready_to_ship"
-      ? "ready-to-ship"
-      : "idle";
-};
 
 export const createSpaceTools = (
   spaceThreadId: string,
@@ -421,7 +383,6 @@ export const createSpaceTools = (
           | { name: string | null; handle: string | null }
           | undefined;
         const origin = await dxOrigin(context.bindings);
-        const now = Date.now();
         const since =
           data.since === undefined ? undefined : Date.parse(data.since);
         const listed = items.flatMap((item) => {
@@ -429,12 +390,7 @@ export const createSpaceTools = (
           const lastActivityAt = DateTime.toEpochMillis(
             item.lastActivityAt ?? item.createdAt,
           );
-          const state = listedThreadState({
-            state: item.state,
-            scheduled: row?.scheduled === 1,
-            lastActivityAt,
-            now,
-          });
+          const state = item.state;
           if (
             data.state === undefined
               ? state === "archived"
@@ -473,6 +429,7 @@ export const createSpaceTools = (
                 pull === null
                   ? null
                   : { state: pull.state ?? "unknown", url: pull.url },
+              scheduled: row?.scheduled === 1,
               commits_landed: row?.ship_reason === "default_branch",
               shipped: item.shippedAt !== null,
             },

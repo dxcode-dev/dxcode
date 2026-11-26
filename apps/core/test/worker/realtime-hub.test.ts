@@ -1,9 +1,10 @@
-import { env } from "cloudflare:test";
+import { env, runDurableObjectAlarm } from "cloudflare:test";
 import { ThreadId, UserId } from "@dx/domain";
 import { Schema } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import app from "../../src/app.js";
 import {
+  closeDepartedRealtimeMembers,
   publishArtifactInvalidation,
   publishRealtimeInvalidation,
 } from "../../src/realtime/publication.js";
@@ -537,6 +538,92 @@ describe("RealtimeHub", () => {
         .map(({ threadId: id }) => id),
     ).toEqual([space]);
     memberSocket.socket.close();
+  });
+
+  // An admin removes a member while their tab is open: workspace-wide hints
+  // stop reaching it, at once on removal and on the hub's own check (#2584).
+  it("closes the sockets of people removed from the workspace", async () => {
+    const departed = "realtime-departed";
+    const audience = `workspace:${departed}`;
+    // A person belongs to one workspace, so these are new people.
+    const [stays, removed, second] = [user(904), user(905), user(906)];
+    await env.DB.batch([
+      ...[stays, removed, second].map((id) =>
+        env.DB.prepare(
+          'INSERT OR IGNORE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)',
+        ).bind(id, `Departed ${id}`, `departed-${id}@example.test`, 1, 1),
+      ),
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO organization (id, name, slug, createdAt) VALUES (?, ?, ?, ?)",
+      ).bind(departed, "Departed", "departed", 1),
+      ...[stays, removed, second].map((id) =>
+        env.DB.prepare(
+          "INSERT OR IGNORE INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'member', ?)",
+        ).bind(`${departed}-${id}`, departed, id, 1),
+      ),
+    ]);
+    const removeMember = (id: UserId) =>
+      env.DB.prepare(
+        "DELETE FROM member WHERE organizationId = ? AND userId = ?",
+      )
+        .bind(departed, id)
+        .run();
+    const closed = (socket: WebSocket) =>
+      new Promise<CloseEvent>((resolve) =>
+        socket.addEventListener("close", resolve, { once: true }),
+      );
+    const ownerSocket = await connect(audience, stays, client(31));
+    const memberSocket = await connect(audience, removed, client(32));
+    const secondSocket = await connect(audience, second, client(33));
+    await Promise.all([
+      ownerSocket.first,
+      memberSocket.first,
+      secondSocket.first,
+    ]);
+    const memberClosed = closed(memberSocket.socket);
+    const secondClosed = closed(secondSocket.socket);
+    let ownerClosed = false;
+    ownerSocket.socket.addEventListener("close", () => {
+      ownerClosed = true;
+    });
+
+    // Removal tells the hub.
+    await removeMember(removed);
+    await closeDepartedRealtimeMembers(env, departed, removed);
+    await expect(memberClosed).resolves.toMatchObject({ code: 4403 });
+
+    // A removal the hub was not told about closes on its next check.
+    await removeMember(second);
+    await runDurableObjectAlarm(env.REALTIME_HUB.getByName(audience));
+    await expect(secondClosed).resolves.toMatchObject({ code: 4403 });
+
+    // Members stay connected and keep hearing workspace-wide hints.
+    const ownerEvent = nextMessage(ownerSocket.socket);
+    const published = await env.REALTIME_HUB.getByName(audience).fetch(
+      "https://realtime.internal/invalidate",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-dx-realtime-audience": audience,
+          "x-dx-realtime-participant": stays,
+          "x-dx-realtime-client": client(34),
+        },
+        body: JSON.stringify({
+          type: "thread.invalidated",
+          threadId,
+          ownerUserId: stays,
+          recipients: "audience",
+        }),
+      },
+    );
+    expect(published.status).toBe(200);
+    await expect(ownerEvent).resolves.toMatchObject({
+      type: "thread.invalidated",
+      threadId,
+    });
+    expect(ownerClosed).toBe(false);
+    ownerSocket.socket.close();
   });
 
   it("rejects payloads that could carry conversation or terminal content", async () => {

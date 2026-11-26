@@ -108,7 +108,7 @@ services:
     cwd: apps/web
 ```
 
-The command must listen on `$PORT`. With Portals on, dx starts a stopped service when its Portal is opened. A Vite server also needs the Portal domain in `server.allowedHosts`.
+The command must listen on `$PORT`. With Portals on, the Portal tab lists declared services, and dx starts a stopped one when its Portal is opened. For a server dx should list but not start (one `setup` or another service starts), add its port under a top-level `ports: [8080]`. A Vite server also needs the Portal domain in `server.allowedHosts`.
 
 ### 7. Prove it in this Orb
 

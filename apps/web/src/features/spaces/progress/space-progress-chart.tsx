@@ -1,11 +1,16 @@
 import type {
+  SpaceProgressChange,
+  SpaceProgressData,
   SpaceProgressDay,
-  SpaceProgressOutcome,
-  SpaceProgressThread,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import {
+  GitCommitHorizontal,
+  GitMerge,
+  GitPullRequestArrow,
+  X,
+} from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
@@ -16,14 +21,10 @@ import {
 } from "./space-progress-queries.js";
 import "./space-progress.css";
 
-/** One day's column in the SVG's own units; the SVG stretches to fit. */
 const COLUMN = 10;
 const BAR = 6;
 const HEIGHT = 100;
-/** Room above the highest value for the line's end dot. */
 const TOP = 10;
-/** The surface gap between a day's shipped and archived segments. */
-const GAP = 3;
 
 const dayFormat = new Intl.DateTimeFormat("en-US", {
   weekday: "short",
@@ -32,40 +33,26 @@ const dayFormat = new Intl.DateTimeFormat("en-US", {
   timeZone: "UTC",
 });
 
-/** "Fri, Oct 9" for `YYYY-MM-DD`. */
 const dayLabel = (date: string) =>
   dayFormat.format(new Date(`${date}T00:00:00Z`));
 
-const OUTCOME_LABEL: Record<SpaceProgressOutcome, string> = {
-  shipped: "Shipped",
-  archived: "Archived",
-  open: "Open",
-};
+const shippedOf = (day: SpaceProgressDay) => day.merged + day.pushed;
 
-/** Geometry for the bars, the open line, and its end dot. */
 const plotOf = (days: ReadonlyArray<SpaceProgressDay>) => {
   const most = Math.max(
     1,
-    ...days.map(({ openAtEnd, shipped, archived }) =>
-      Math.max(openAtEnd, shipped + archived),
-    ),
+    ...days.map((day) => Math.max(day.openAtEnd, shippedOf(day))),
   );
   const y = (value: number) => HEIGHT - (value / most) * (HEIGHT - TOP);
-  const height = (value: number) => (value / most) * (HEIGHT - TOP);
   const center = (index: number) => index * COLUMN + COLUMN / 2;
   const points = days.map(
     ({ openAtEnd }, index) => [center(index), y(openAtEnd)] as const,
   );
   const line = points.map(([x, top]) => `${x},${top}`).join(" ");
-  const first = points[0];
   const last = points.at(-1);
   return {
     width: days.length * COLUMN,
     line,
-    area:
-      first === undefined || last === undefined
-        ? ""
-        : `${first[0]},${HEIGHT} ${line} ${last[0]},${HEIGHT}`,
     end:
       last === undefined
         ? undefined
@@ -73,53 +60,50 @@ const plotOf = (days: ReadonlyArray<SpaceProgressDay>) => {
             left: `${(last[0] / (days.length * COLUMN)) * 100}%`,
             top: `${(last[1] / HEIGHT) * 100}%`,
           },
-    bars: days.flatMap(({ date, shipped, archived }, index) => {
-      const x = index * COLUMN + (COLUMN - BAR) / 2;
-      const shippedHeight = height(shipped);
-      const archivedHeight = height(archived);
-      return [
-        ...(shipped > 0
-          ? [
-              {
-                key: `${date}-shipped`,
-                kind: "shipped",
-                x,
-                y: HEIGHT - shippedHeight,
-                height: shippedHeight,
-              },
-            ]
-          : []),
-        ...(archived > 0
-          ? [
-              {
-                key: `${date}-archived`,
-                kind: "archived",
-                x,
-                // Above the shipped segment, a surface gap between them.
-                y: HEIGHT - shippedHeight - archivedHeight,
-                height: Math.max(0, archivedHeight - (shipped > 0 ? GAP : 0)),
-              },
-            ]
-          : []),
-      ];
+    bars: days.flatMap((day, index) => {
+      const shipped = shippedOf(day);
+      return shipped === 0
+        ? []
+        : [
+            {
+              key: day.date,
+              x: index * COLUMN + (COLUMN - BAR) / 2,
+              y: y(shipped),
+              height: HEIGHT - y(shipped),
+            },
+          ];
     }),
   };
 };
 
-const summary = (day: SpaceProgressDay) =>
-  `${dayLabel(day.date)}: ${day.created} created, ${day.shipped} shipped, ${day.archived} archived`;
+const plural = (count: number, one: string, many: string) =>
+  `${count} ${count === 1 ? one : many}`;
 
-function DayThreads({
+const summary = (day: SpaceProgressDay) =>
+  `${dayLabel(day.date)}: ${plural(day.merged, "PR", "PRs")} merged, ${day.pushed} pushed to main, ${day.openAtEnd} open`;
+
+function ChangeIcon({ change }: { readonly change: SpaceProgressChange }) {
+  if (change.kind === "default_branch")
+    return <GitCommitHorizontal aria-hidden="true" />;
+  return change.state === "merged" ? (
+    <GitMerge aria-hidden="true" />
+  ) : (
+    <GitPullRequestArrow aria-hidden="true" />
+  );
+}
+
+function DayChanges({
   day,
-  threads,
+  changes,
+  onOpenThread,
   onClose,
 }: {
   readonly day: SpaceProgressDay;
-  readonly threads: ReadonlyMap<ThreadId, SpaceProgressThread>;
+  readonly changes: ReadonlyMap<string, SpaceProgressChange>;
+  readonly onOpenThread: (threadId: ThreadId) => void;
   readonly onClose: () => void;
 }) {
-  const openThread = useOpenSpaceThread();
-  const listed = day.threadIds.flatMap((id) => threads.get(id) ?? []);
+  const listed = day.changeIds.flatMap((id) => changes.get(id) ?? []);
   return (
     <section className="space-progress-day" aria-label={dayLabel(day.date)}>
       <header>
@@ -135,19 +119,27 @@ function DayThreads({
         </Button>
       </header>
       {listed.length === 0 ? (
-        <p>No threads started, shipped, or archived this day.</p>
+        <p>Nothing merged or pushed this day.</p>
       ) : (
         <ul>
-          {listed.map((thread) => (
-            <li key={thread.id}>
-              <button type="button" onClick={() => openThread(thread.id)}>
-                <span
-                  className="space-progress-outcome"
-                  data-outcome={thread.outcome}
-                  aria-hidden="true"
-                />
-                <span className="space-progress-day-title">{thread.title}</span>
-                <small>{OUTCOME_LABEL[thread.outcome]}</small>
+          {listed.map((change) => (
+            <li key={change.id}>
+              <button
+                type="button"
+                className="space-shipped-change"
+                data-state={change.state}
+                onClick={() => onOpenThread(change.threadId)}
+              >
+                <ChangeIcon change={change} />
+                <span className="space-progress-day-title">
+                  {change.number === undefined ? null : (
+                    <span className="space-shipped-number">
+                      #{change.number}
+                    </span>
+                  )}
+                  {change.title}
+                </span>
+                <small>{change.threadTitle}</small>
               </button>
             </li>
           ))}
@@ -158,20 +150,19 @@ function DayThreads({
 }
 
 /**
- * The threads a Space started over the last 30 days: per day, bars of how
- * many shipped (green) and were archived without shipping (gray), and a
- * line of how many were open when the day ended. Each day is a button that
- * lists its threads.
+ * What a Space shipped over the last 30 days: per day, a bar of the pull
+ * requests that merged plus direct pushes to main, and a line of the pull
+ * requests still open. Each day is a button that lists its changes, and a
+ * change opens the thread that made it.
  */
-export function SpaceProgressChart({
-  spaceThreadId,
+export function SpaceProgressChartView({
+  progress,
+  onOpenThread,
 }: {
-  readonly spaceThreadId: ThreadId;
+  /** Undefined while it loads. */
+  readonly progress: SpaceProgressData | undefined;
+  readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
-  const { identity } = useAuthenticatedIdentity();
-  const progress = useQuery(
-    spaceProgressQueryOptions(identity.id, spaceThreadId, viewerTimeZone()),
-  ).data;
   const [hovered, setHovered] = React.useState<string | undefined>();
   const [selected, setSelected] = React.useState<string | undefined>();
   const days = progress?.days ?? [];
@@ -179,16 +170,16 @@ export function SpaceProgressChart({
   const hoveredIndex = days.findIndex(({ date }) => date === hovered);
   const hoveredDay = days[hoveredIndex];
   const selectedDay = days.find(({ date }) => date === selected);
-  const totals = progress?.totals ?? { shipped: 0, archived: 0, open: 0 };
-  const threads = new Map(
-    (progress?.threads ?? []).map((thread) => [thread.id, thread]),
+  const totals = progress?.totals ?? { merged: 0, pushed: 0, open: 0 };
+  const changes = new Map(
+    (progress?.changes ?? []).map((change) => [change.id, change]),
   );
   return (
     <div className="space-progress">
       <div className="space-progress-chart">
         <fieldset
           className="space-progress-plot"
-          aria-label="Threads over the last 30 days"
+          aria-label="Pull requests and pushes over the last 30 days"
           aria-busy={progress === undefined}
           onMouseLeave={() => setHovered(undefined)}
         >
@@ -199,12 +190,11 @@ export function SpaceProgressChart({
               preserveAspectRatio="none"
               aria-hidden="true"
             >
-              <polygon className="space-progress-area" points={plot.area} />
               {plot.bars.map((bar) => (
                 <rect
                   key={bar.key}
                   className="space-progress-bar"
-                  data-kind={bar.kind}
+                  data-kind="shipped"
                   x={bar.x}
                   y={bar.y}
                   width={BAR}
@@ -261,7 +251,7 @@ export function SpaceProgressChart({
                 left: `${((hoveredIndex + 0.5) / days.length) * 100}%`,
               }}
             >
-              {`${summary(hoveredDay)}, ${hoveredDay.openAtEnd} open`}
+              {summary(hoveredDay)}
             </div>
           )}
         </fieldset>
@@ -272,15 +262,15 @@ export function SpaceProgressChart({
               data-kind="shipped"
               aria-hidden="true"
             />
-            <strong>{totals.shipped}</strong> shipped
+            <strong>{totals.merged}</strong> merged
           </li>
           <li>
             <span
               className="space-progress-swatch"
-              data-kind="archived"
+              data-kind="shipped"
               aria-hidden="true"
             />
-            <strong>{totals.archived}</strong> archived
+            <strong>{totals.pushed}</strong> pushed
           </li>
           <li>
             <span
@@ -293,13 +283,33 @@ export function SpaceProgressChart({
         </ul>
       </div>
       {selectedDay === undefined ? null : (
-        <DayThreads
+        <DayChanges
           key={selectedDay.date}
           day={selectedDay}
-          threads={threads}
+          changes={changes}
+          onOpenThread={onOpenThread}
           onClose={() => setSelected(undefined)}
         />
       )}
     </div>
+  );
+}
+
+/** The Space panel's chart, read in the viewer's time zone. */
+export function SpaceProgressChart({
+  spaceThreadId,
+}: {
+  readonly spaceThreadId: ThreadId;
+}) {
+  const { identity } = useAuthenticatedIdentity();
+  const progress = useQuery(
+    spaceProgressQueryOptions(identity.id, spaceThreadId, viewerTimeZone()),
+  ).data;
+  const openThread = useOpenSpaceThread();
+  return (
+    <SpaceProgressChartView
+      progress={progress}
+      onOpenThread={(threadId) => openThread(threadId)}
+    />
   );
 }

@@ -27,20 +27,17 @@ export const epochOf = (value: DateTime.Utc): number =>
   DateTime.toEpochMillis(value);
 
 /**
- * The Space panel's sections, in order: what needs a person first, then
- * what runs, then what finished. Shipped and Archived start collapsed.
+ * The Space panel's sections, in order, one per state: `working` runs a
+ * turn, `idle` is any other open thread, whose row says what it did or
+ * asks for, and `archived`. Archived starts collapsed.
  */
 export const SPACE_THREAD_SECTIONS: ReadonlyArray<{
   readonly state: SpaceThreadState;
   readonly label: string;
   readonly collapsed: boolean;
 }> = [
-  { state: "needs_you", label: "Needs You", collapsed: false },
-  { state: "ready_to_ship", label: "Ready to Ship", collapsed: false },
   { state: "working", label: "Working", collapsed: false },
   { state: "idle", label: "Idle", collapsed: false },
-  { state: "failed", label: "Failed", collapsed: false },
-  { state: "shipped", label: "Shipped", collapsed: true },
   { state: "archived", label: "Archived", collapsed: true },
 ];
 

@@ -34,7 +34,16 @@ const portalsApi = (canPublish: boolean) => {
     if (method === "GET" && path === listPath)
       return json({
         workspace: "running",
-        portals: [{ port: 3000, url: portalUrl }],
+        servicesFile: "valid",
+        portals: [
+          {
+            port: 3000,
+            url: portalUrl,
+            name: "web",
+            declared: true,
+            listening: true,
+          },
+        ],
         publicLinks:
           expiresAt === undefined
             ? []
