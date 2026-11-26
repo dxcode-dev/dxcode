@@ -7,11 +7,12 @@ import {
   CreateConnectionRequestSchema,
   DeleteConnectionResponseSchema,
   ListConnectionsResponseSchema,
-  ModelConnectionNotFoundResponseSchema,
-  ModelRoutingForbiddenResponseSchema,
-  ModelRoutingInvalidRequestResponseSchema,
-  ModelRoutingMutationForbiddenResponseSchema,
-  ModelRoutingUnavailableResponseSchema,
+  ModelRoutingPersonalPath,
+  ModelRoutingWorkspacePath,
+  ModeParamsSchema,
+  modelRoutingRefusals,
+  ProfileResponseSchema,
+  PutModeRequestSchema,
   ReorderConnectionsRequestSchema,
   ReorderConnectionsResponseSchema,
   SetClaudePlanRequestSchema,
@@ -21,24 +22,13 @@ import {
 } from "./model-routing.js";
 
 /**
- * The endpoints over `model-routing.ts`'s schemas. Apart from them, so code that
- * imports only the schemas (some on the Thread page's first load) does not
- * carry the endpoint definitions.
+ * Settings → Models endpoints: connections, the catalog, and mode profile
+ * changes. In their own module, because the Thread page loads
+ * `model-routing.ts` for its routing reads and never calls these
+ * (wiki/headless-client.md).
  */
 
 // Endpoints ---------------------------------------------------------------
-
-const modelRoutingRefusals = [
-  { status: 400, schema: ModelRoutingInvalidRequestResponseSchema },
-  { status: 403, schema: ModelRoutingForbiddenResponseSchema },
-  { status: 403, schema: ModelRoutingMutationForbiddenResponseSchema },
-  { status: 404, schema: ModelConnectionNotFoundResponseSchema },
-  { status: 503, schema: ModelRoutingUnavailableResponseSchema },
-];
-
-const ModelRoutingPersonalPath = "/v1/settings/personal/model-routing";
-const ModelRoutingWorkspacePath =
-  "/v1/settings/workspaces/:workspaceSlug/model-routing";
 
 export const GetPersonalModelCatalogEndpoint = defineEndpoint({
   id: "modelRouting.personal.catalog",
@@ -220,5 +210,49 @@ export const ReorderWorkspaceModelConnectionsEndpoint = defineEndpoint({
   params: WorkspaceModelRoutingParamsSchema,
   body: ReorderConnectionsRequestSchema,
   success: ReorderConnectionsResponseSchema,
+  refusals: modelRoutingRefusals,
+});
+
+export const PutPersonalProfileModeEndpoint = defineEndpoint({
+  id: "modelRouting.personal.putProfileMode",
+  method: "PUT",
+  path: `${ModelRoutingPersonalPath}/profile/modes/:mode`,
+  params: ModeParamsSchema,
+  body: PutModeRequestSchema,
+  success: ProfileResponseSchema,
+  refusals: modelRoutingRefusals,
+});
+
+export const PutWorkspaceProfileModeEndpoint = defineEndpoint({
+  id: "modelRouting.workspace.putProfileMode",
+  method: "PUT",
+  path: `${ModelRoutingWorkspacePath}/profile/modes/:mode`,
+  params: Schema.Struct({
+    ...WorkspaceModelRoutingParamsSchema.fields,
+    ...ModeParamsSchema.fields,
+  }),
+  body: PutModeRequestSchema,
+  success: ProfileResponseSchema,
+  refusals: modelRoutingRefusals,
+});
+
+export const ResetPersonalProfileModeEndpoint = defineEndpoint({
+  id: "modelRouting.personal.resetProfileMode",
+  method: "DELETE",
+  path: `${ModelRoutingPersonalPath}/profile/modes/:mode`,
+  params: ModeParamsSchema,
+  success: ProfileResponseSchema,
+  refusals: modelRoutingRefusals,
+});
+
+export const ResetWorkspaceProfileModeEndpoint = defineEndpoint({
+  id: "modelRouting.workspace.resetProfileMode",
+  method: "DELETE",
+  path: `${ModelRoutingWorkspacePath}/profile/modes/:mode`,
+  params: Schema.Struct({
+    ...WorkspaceModelRoutingParamsSchema.fields,
+    ...ModeParamsSchema.fields,
+  }),
+  success: ProfileResponseSchema,
   refusals: modelRoutingRefusals,
 });

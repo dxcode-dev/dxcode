@@ -123,6 +123,7 @@ describe("settings routes in workerd with real D1", () => {
         terminalTheme: "github",
         textSize: "default",
         threadWidth: "default",
+        threadView: "simple",
         terminalAppearance: "match",
         codeFontFamily: null,
         codeFontSize: null,
@@ -171,7 +172,7 @@ describe("settings routes in workerd with real D1", () => {
     ]);
   });
 
-  it("saves text size and thread width with the account's other appearance values", async () => {
+  it("saves text size, thread width, and thread view with the account's other appearance values", async () => {
     const app = createSettingsApp(owner);
     const patch = (body: unknown) =>
       app.request(
@@ -194,11 +195,16 @@ describe("settings routes in workerd with real D1", () => {
         appearance: "dark",
         textSize: "larger",
         threadWidth: "default",
+        threadView: "simple",
       },
     });
     const wide = await patch({ threadWidth: "full" });
     await expect(wide.json()).resolves.toMatchObject({
       data: { textSize: "larger", threadWidth: "full" },
+    });
+    const detailed = await patch({ threadView: "detailed" });
+    await expect(detailed.json()).resolves.toMatchObject({
+      data: { textSize: "larger", threadWidth: "full", threadView: "detailed" },
     });
 
     const reread = await createSettingsApp(owner).request(
@@ -207,7 +213,7 @@ describe("settings routes in workerd with real D1", () => {
       { DB: env.DB },
     );
     await expect(reread.json()).resolves.toMatchObject({
-      data: { textSize: "larger", threadWidth: "full" },
+      data: { textSize: "larger", threadWidth: "full", threadView: "detailed" },
     });
     const other = await createSettingsApp(outsider).request(
       "/settings/personal/account",
@@ -215,7 +221,11 @@ describe("settings routes in workerd with real D1", () => {
       { DB: env.DB },
     );
     await expect(other.json()).resolves.toMatchObject({
-      data: { textSize: "default", threadWidth: "default" },
+      data: {
+        textSize: "default",
+        threadWidth: "default",
+        threadView: "simple",
+      },
     });
   });
 
@@ -548,6 +558,7 @@ describe("settings routes in workerd with real D1", () => {
     [JSON.stringify({ terminalTheme: "unknown" }), "terminalTheme"],
     [JSON.stringify({ textSize: "huge" }), "textSize"],
     [JSON.stringify({ threadWidth: 900 }), "threadWidth"],
+    [JSON.stringify({ threadView: "compact" }), "threadView"],
     [JSON.stringify({ terminalAppearance: "sepia" }), "terminalAppearance"],
     [JSON.stringify({ codeFontFamily: "Menlo; color: red" }), "codeFontFamily"],
     [JSON.stringify({ codeFontFamily: "" }), "codeFontFamily"],

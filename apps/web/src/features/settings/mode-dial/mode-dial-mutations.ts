@@ -1,14 +1,60 @@
 import type { PutModeRequestSchema } from "@dx/api";
-import type { ModeId } from "@dx/domain";
+import {
+  PutPersonalProfileModeEndpoint,
+  PutWorkspaceProfileModeEndpoint,
+  ResetPersonalProfileModeEndpoint,
+  ResetWorkspaceProfileModeEndpoint,
+} from "@dx/api";
+import type { ModeId, WorkspaceSlug } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import {
+  dxClient,
   type ModelRoutingTarget,
-  putProfileMode,
-  putWorkspaceProfileMode,
-  resetProfileMode,
-  resetWorkspaceProfileMode,
 } from "../../../shared/api/client.js";
 import { modelRoutingKey } from "../model-routing/model-routing-queries.js";
+
+/** Callers pass the mode they read; Core refuses one it does not know. */
+const modeParams = (mode: string) => ({ mode: mode as ModeId });
+
+const putProfileMode = async (
+  mode: string,
+  config: typeof PutModeRequestSchema.Encoded,
+) =>
+  (
+    await dxClient.call(PutPersonalProfileModeEndpoint, {
+      params: modeParams(mode),
+      body: config,
+    })
+  ).data;
+
+const resetProfileMode = async (mode: string) =>
+  (
+    await dxClient.call(ResetPersonalProfileModeEndpoint, {
+      params: modeParams(mode),
+    })
+  ).data;
+
+const putWorkspaceProfileMode = async (
+  workspaceSlug: WorkspaceSlug,
+  mode: string,
+  config: typeof PutModeRequestSchema.Encoded,
+) =>
+  (
+    await dxClient.call(PutWorkspaceProfileModeEndpoint, {
+      params: { workspaceSlug, ...modeParams(mode) },
+      body: config,
+    })
+  ).data;
+
+const resetWorkspaceProfileMode = async (
+  workspaceSlug: WorkspaceSlug,
+  mode: string,
+) =>
+  (
+    await dxClient.call(ResetWorkspaceProfileModeEndpoint, {
+      params: { workspaceSlug, ...modeParams(mode) },
+    })
+  ).data;
 
 export const modeDialMutationOptions = (
   queryClient: QueryClient,

@@ -426,6 +426,7 @@ const ACCOUNT = {
   terminalTheme: "github",
   textSize: "default",
   threadWidth: "default",
+  threadView: "detailed",
   terminalAppearance: "match",
   codeFontFamily: null,
   codeFontSize: null,

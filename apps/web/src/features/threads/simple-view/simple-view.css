@@ -1,0 +1,139 @@
+/* The Simple thread view: a turn is the prompt, what the agent showed, its
+   answer, and one quiet line. See simple-turn.tsx. */
+
+.simple-turn-status {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  margin: var(--space-2) 0 var(--space-4);
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  line-height: var(--leading-5);
+}
+
+.simple-turn-status[data-state="failed"] {
+  color: var(--destructive);
+}
+
+/* The dot breathes, with a soft ring, so a long step still looks alive. */
+.simple-turn-status[data-state="working"] .processing-dot {
+  position: relative;
+  animation: simple-turn-breathe 2s ease-in-out infinite;
+}
+.simple-turn-status[data-state="working"] .processing-dot::after {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  content: "";
+  background: var(--foreground);
+  animation: simple-turn-ring 2s ease-out infinite;
+}
+
+.simple-turn-status-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* A light sweep across the words says work goes on between steps. */
+.simple-turn-activity {
+  background:
+    linear-gradient(
+      90deg,
+      var(--muted-foreground) 0%,
+      var(--muted-foreground) 35%,
+      var(--foreground) 50%,
+      var(--muted-foreground) 65%,
+      var(--muted-foreground) 100%
+    )
+    0 0 / 250% 100%;
+  background-clip: text;
+  color: transparent;
+  animation:
+    simple-turn-step-in var(--duration-normal) ease-out,
+    simple-turn-sweep 2.6s linear infinite;
+}
+
+.simple-turn-elapsed::before {
+  margin-right: var(--space-2);
+  content: "·";
+}
+
+.message-image-tiles.simple-turn-media {
+  justify-content: flex-start;
+  max-width: none;
+  margin: var(--space-2) 0 0;
+}
+.simple-turn-media .message-image-tile {
+  width: 80px;
+  height: 80px;
+}
+
+.simple-turn-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.simple-turn-links a {
+  max-width: 100%;
+  text-decoration: none;
+}
+.simple-turn-link-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes simple-turn-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes simple-turn-ring {
+  0% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+@keyframes simple-turn-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+@keyframes simple-turn-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .simple-turn-status[data-state="working"] .processing-dot,
+  .simple-turn-status[data-state="working"] .processing-dot::after,
+  .simple-turn-activity {
+    animation: none;
+  }
+  .simple-turn-status[data-state="working"] .processing-dot::after {
+    display: none;
+  }
+  .simple-turn-activity {
+    background: none;
+    color: inherit;
+  }
+}

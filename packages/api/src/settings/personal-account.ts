@@ -12,6 +12,7 @@ import {
   PersonalTerminalAppearance,
   PersonalTerminalTheme,
   PersonalTextSize,
+  PersonalThreadView,
   PersonalThreadWidth,
   UpdatePersonalComposerDefaultsInput,
 } from "@dx/domain";
@@ -31,6 +32,7 @@ export const PersonalAccountDataSchema = Schema.Struct({
   terminalTheme: PersonalTerminalTheme,
   textSize: PersonalTextSize,
   threadWidth: PersonalThreadWidth,
+  threadView: PersonalThreadView,
   terminalAppearance: PersonalTerminalAppearance,
   codeFontFamily: Schema.NullOr(PersonalCodeFontFamily),
   codeFontSize: Schema.NullOr(PersonalCodeFontSize),
@@ -84,6 +86,7 @@ export const UpdatePersonalAppearanceRequestSchema = Schema.Struct({
   terminalTheme: Schema.optional(PersonalTerminalTheme),
   textSize: Schema.optional(PersonalTextSize),
   threadWidth: Schema.optional(PersonalThreadWidth),
+  threadView: Schema.optional(PersonalThreadView),
   terminalAppearance: Schema.optional(PersonalTerminalAppearance),
   codeFontFamily: Schema.optional(Schema.NullOr(PersonalCodeFontFamily)),
   codeFontSize: Schema.optional(Schema.NullOr(PersonalCodeFontSize)),

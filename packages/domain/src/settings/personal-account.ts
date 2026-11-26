@@ -73,6 +73,10 @@ export const PersonalThreadWidth = Schema.Literals([
 ]);
 export type PersonalThreadWidth = typeof PersonalThreadWidth.Type;
 
+/** How a Thread's transcript shows a turn: every step, or only what the agent shows. */
+export const PersonalThreadView = Schema.Literals(["detailed", "simple"]);
+export type PersonalThreadView = typeof PersonalThreadView.Type;
+
 /** Whether the terminal follows the app's theme or always uses one scheme. */
 export const PersonalTerminalAppearance = Schema.Literals([
   "match",
@@ -159,6 +163,7 @@ export const PersonalAccount = Schema.Struct({
   terminalTheme: PersonalTerminalTheme,
   textSize: PersonalTextSize,
   threadWidth: PersonalThreadWidth,
+  threadView: PersonalThreadView,
   terminalAppearance: PersonalTerminalAppearance,
   /** `null` uses the default Code Font value. */
   codeFontFamily: Schema.NullOr(PersonalCodeFontFamily),
@@ -188,6 +193,7 @@ export const UpdatePersonalAppearanceInput = Schema.Struct({
   terminalTheme: Schema.optional(PersonalTerminalTheme),
   textSize: Schema.optional(PersonalTextSize),
   threadWidth: Schema.optional(PersonalThreadWidth),
+  threadView: Schema.optional(PersonalThreadView),
   terminalAppearance: Schema.optional(PersonalTerminalAppearance),
   /** `null` clears the value back to the default. */
   codeFontFamily: Schema.optional(Schema.NullOr(PersonalCodeFontFamily)),
@@ -207,6 +213,7 @@ export const PersonalAppearanceFields = {
   terminalTheme: PersonalTerminalTheme,
   textSize: PersonalTextSize,
   threadWidth: PersonalThreadWidth,
+  threadView: PersonalThreadView,
   terminalAppearance: PersonalTerminalAppearance,
   codeFontFamily: Schema.NullOr(PersonalCodeFontFamily),
   codeFontSize: Schema.NullOr(PersonalCodeFontSize),

@@ -21,7 +21,7 @@ import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
 import { ProjectsIcon } from "../../shared/ui/projects-icon.js";
 import { SharedRowContextMenu } from "../../shared/ui/row-context-menu.js";
-import { mailboxQueryOptions } from "../mailbox/mailbox-queries.js";
+import { mailboxQueryOptions } from "../mailbox/mailbox-summary-queries.js";
 import { NotificationInbox } from "./notification-inbox.js";
 import {
   type AccountMenuItems,

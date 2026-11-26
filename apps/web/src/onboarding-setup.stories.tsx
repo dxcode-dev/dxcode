@@ -17,6 +17,7 @@ import {
   type ModelStepState,
   OnboardingFrame,
   ProjectsStep,
+  ThreadViewStep,
   WelcomeStep,
 } from "./features/onboarding/onboarding.js";
 import {
@@ -36,7 +37,10 @@ import {
   STARTER_TASKS,
   StarterTasks,
 } from "./features/onboarding/onboarding-tour.js";
+import type { ThreadView } from "./shared/theme/theme-store.js";
+import { THREAD_VIEW_OPTIONS } from "./shared/theme/thread-view-options.js";
 import { Button } from "./shared/ui/button.js";
+import { ChoiceCards } from "./shared/ui/choice-cards.js";
 import { StoryQueryProvider } from "./testing/story-query-provider.js";
 
 /**
@@ -570,6 +574,58 @@ export const InvitedProjects: Story = {
   render: () => <Projects selected={WORKSPACE_PROJECTS[0]?.id} />,
 };
 
+// ─── Thread view ────────────────────────────────────────────────────────────
+
+/** The View step's choice, held in the story instead of the account. */
+function ViewPicker() {
+  const [view, setView] = React.useState<ThreadView>("detailed");
+  return (
+    <ChoiceCards
+      label="Thread view"
+      name="thread-view"
+      size="lg"
+      value={view}
+      options={THREAD_VIEW_OPTIONS}
+      onValueChange={setView}
+    />
+  );
+}
+
+/**
+ * Detailed or Simple threads, before the first thread; the app's step saves
+ * the choice to the account as Settings → Appearance does. The test picks
+ * Simple.
+ */
+export const ThreadViewChoice: Story = {
+  name: "3 · View · Detailed or Simple",
+  render: () => (
+    <OnboardingFrame
+      steps={NEW_STEPS}
+      current="View"
+      onBack={noop}
+      onSkip={noop}
+      footer={<Actions primary="Continue" />}
+    >
+      <ThreadViewStep picker={<ViewPicker />} />
+    </OnboardingFrame>
+  ),
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    const simple = page.getByRole("radio", { name: /^Simple/ });
+    await userEvent.click(simple);
+    await expect(simple).toBeChecked();
+    await expect(
+      page.getByRole("radio", { name: /^Detailed/ }),
+    ).not.toBeChecked();
+  },
+};
+
+export const PhoneThreadView: Story = {
+  ...ThreadViewChoice,
+  name: "Phone · 3 · View",
+  globals: { viewport: { value: "phone" } },
+};
+
 // ─── First thread ───────────────────────────────────────────────────────────
 
 /**
@@ -599,7 +655,7 @@ function FirstThread({ project }: { readonly project?: string }) {
 }
 
 export const FirstThreadTasks: Story = {
-  name: "4 · First thread · starter tasks",
+  name: "5 · First thread · starter tasks",
   render: () => <FirstThread project="Storefront" />,
   play: async ({ canvasElement }) => {
     const page = within(canvasElement);
@@ -611,7 +667,7 @@ export const FirstThreadTasks: Story = {
 
 /** The home page's checklist card, as Features/Home shows it. */
 export const Checklist: Story = {
-  name: "5 · Home checklist card",
+  name: "6 · Home checklist card",
   parameters: { layout: "centered" },
   render: () => <SetupChecklist done={["model"]} />,
 };
@@ -653,12 +709,12 @@ export const PhoneProjects: Story = {
 export const PhoneFirstThread: Story = {
   ...phone,
   render: () => <FirstThread project="Storefront" />,
-  name: "Phone · 4 · First thread",
+  name: "Phone · 5 · First thread",
 };
 
 // ─── Whole flow ─────────────────────────────────────────────────────────────
 
-type Step = "join" | "model" | "project" | "thread";
+type Step = "join" | "model" | "project" | "view" | "thread";
 
 /** The invited flow, clickable end to end. */
 function InvitedFlow() {
@@ -711,7 +767,7 @@ function InvitedFlow() {
           <Actions
             primary="Continue"
             primaryDisabled={project === undefined}
-            onPrimary={() => setStep("thread")}
+            onPrimary={() => setStep("view")}
           />
         }
       >
@@ -722,6 +778,18 @@ function InvitedFlow() {
           repositoryIcon={repositoryIcon}
           onSelect={setProject}
         />
+      </OnboardingFrame>
+    );
+  if (step === "view")
+    return (
+      <OnboardingFrame
+        steps={INVITED_STEPS}
+        current="View"
+        footer={
+          <Actions primary="Continue" onPrimary={() => setStep("thread")} />
+        }
+      >
+        <ThreadViewStep picker={<ViewPicker />} />
       </OnboardingFrame>
     );
   return (
@@ -736,7 +804,8 @@ function InvitedFlow() {
 
 /**
  * Invited, end to end: join, skip Model because the workspace provides
- * models, pick an existing project, then its first task.
+ * models, pick an existing project, pick Simple threads, then its first
+ * task.
  */
 export const InvitedFlowInteractive: Story = {
   name: "0 · Invited flow (interactive)",
@@ -752,6 +821,8 @@ export const InvitedFlowInteractive: Story = {
     await userEvent.click(page.getByRole("button", { name: "Continue" }));
     await expect(page.getByRole("button", { name: /Infra/ })).toBeDisabled();
     await userEvent.click(page.getByRole("button", { name: /Storefront/ }));
+    await userEvent.click(page.getByRole("button", { name: "Continue" }));
+    await userEvent.click(page.getByRole("radio", { name: /^Simple/ }));
     await userEvent.click(page.getByRole("button", { name: "Continue" }));
     await expect(
       page.getByText("Start small in Storefront", { exact: false }),

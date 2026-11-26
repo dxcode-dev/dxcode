@@ -327,3 +327,34 @@ export const MailNotFoundResponseSchema = errorResponse(
   "MAIL_NOT_FOUND",
   "That email was not found.",
 );
+
+/** A change answered with nothing the client reads; it refetches instead. */
+export const MailAcknowledgedResponseSchema = successResponse(
+  Schema.Struct({}),
+);
+
+/**
+ * `GET /v1/mailbox/conversations`: one folder (Inbox when none is named), a
+ * label, or a `+tag`, optionally searched, a page at a time. Fields go into
+ * the URL in this order.
+ */
+export const ListMailConversationsQuerySchema = Schema.Struct({
+  label: Schema.optional(Schema.String),
+  tag: Schema.optional(Schema.String),
+  folder: Schema.optional(MailFolderSchema),
+  q: Schema.optional(Schema.String),
+  /** The `nextCursor` of the page before. */
+  before: Schema.optional(Schema.String),
+});
+
+export const MailConversationParamsSchema = Schema.Struct({
+  key: Schema.String,
+});
+
+export const MailLabelParamsSchema = Schema.Struct({ id: MailLabelId });
+
+export const MailAttachmentParamsSchema = Schema.Struct({
+  id: MailId,
+  /** The attachment's `index` in its email, in decimal. */
+  index: Schema.String,
+});

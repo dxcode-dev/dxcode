@@ -13,6 +13,7 @@ import {
   WorkspaceSlug,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import { SettingsFieldErrorSchema } from "./field-error.js";
 
@@ -380,6 +381,71 @@ export const ModelRoutingErrorResponseSchema = Schema.Union([
   ModelConnectionNotFoundResponseSchema,
   ModelRoutingUnavailableResponseSchema,
 ]);
+
+// Endpoints the Thread page calls on first load ----------------------------
+
+export const modelRoutingRefusals = [
+  { status: 400, schema: ModelRoutingInvalidRequestResponseSchema },
+  { status: 403, schema: ModelRoutingForbiddenResponseSchema },
+  { status: 403, schema: ModelRoutingMutationForbiddenResponseSchema },
+  { status: 404, schema: ModelConnectionNotFoundResponseSchema },
+  { status: 503, schema: ModelRoutingUnavailableResponseSchema },
+];
+
+export const ModelRoutingPersonalPath = "/v1/settings/personal/model-routing";
+export const ModelRoutingWorkspacePath =
+  "/v1/settings/workspaces/:workspaceSlug/model-routing";
+
+export const GetPersonalModelRoutingGraphEndpoint = defineEndpoint({
+  id: "modelRouting.personal.graph",
+  method: "GET",
+  path: `${ModelRoutingPersonalPath}/graph`,
+  success: GraphResponseSchema,
+  refusals: modelRoutingRefusals,
+});
+
+export const GetWorkspaceModelRoutingGraphEndpoint = defineEndpoint({
+  id: "modelRouting.workspace.graph",
+  method: "GET",
+  path: `${ModelRoutingWorkspacePath}/graph`,
+  params: WorkspaceModelRoutingParamsSchema,
+  success: GraphResponseSchema,
+  refusals: modelRoutingRefusals,
+});
+
+export const GetPersonalModelRoutingChoicesEndpoint = defineEndpoint({
+  id: "modelRouting.personal.choices",
+  method: "GET",
+  path: `${ModelRoutingPersonalPath}/choices`,
+  success: ChoicesResponseSchema,
+  refusals: modelRoutingRefusals,
+});
+
+export const GetWorkspaceModelRoutingChoicesEndpoint = defineEndpoint({
+  id: "modelRouting.workspace.choices",
+  method: "GET",
+  path: `${ModelRoutingWorkspacePath}/choices`,
+  params: WorkspaceModelRoutingParamsSchema,
+  success: ChoicesResponseSchema,
+  refusals: modelRoutingRefusals,
+});
+
+export const GetPersonalModeProfileEndpoint = defineEndpoint({
+  id: "modelRouting.personal.profile",
+  method: "GET",
+  path: `${ModelRoutingPersonalPath}/profile`,
+  success: ProfileResponseSchema,
+  refusals: modelRoutingRefusals,
+});
+
+export const GetWorkspaceModeProfileEndpoint = defineEndpoint({
+  id: "modelRouting.workspace.profile",
+  method: "GET",
+  path: `${ModelRoutingWorkspacePath}/profile`,
+  params: WorkspaceModelRoutingParamsSchema,
+  success: ProfileResponseSchema,
+  refusals: modelRoutingRefusals,
+});
 
 // Type aliases the web layer consumes.
 export type ConnectionKindData = ConnectionKind;

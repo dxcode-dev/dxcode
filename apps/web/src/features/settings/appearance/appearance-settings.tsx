@@ -11,6 +11,7 @@ import {
   textSizeOptions,
   threadWidthOptions,
 } from "../../../shared/theme/theme-store.js";
+import { ThreadViewPicker } from "../../../shared/theme/thread-view-picker.js";
 import {
   SettingsCard,
   SettingsHeading,
@@ -90,6 +91,14 @@ export function AppearanceSettings(_props: SettingsSectionProps) {
           description="The colors dx uses. Daydream adds a faint green cast; Deadpan uses greys."
           options={paletteOptions}
         />
+      </SettingsCard>
+
+      <SettingsCard
+        title="Thread View"
+        description="How much of the agent's work a thread shows. Threads inside a Space follow it too."
+        className="appearance-thread-view"
+      >
+        <ThreadViewPicker />
       </SettingsCard>
 
       <SettingsCard title="Text & Layout">

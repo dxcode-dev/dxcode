@@ -18,6 +18,7 @@ import { Button } from "../../shared/ui/button.js";
 import { Card } from "../../shared/ui/card.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { GitHubIcon } from "../../shared/ui/github-icon.js";
+import { NEW_STEPS } from "./onboarding-steps.js";
 import "./onboarding.css";
 
 /**
@@ -194,7 +195,7 @@ function StatusLine({
 
 export function WelcomeStep({
   name,
-  steps = 3,
+  steps = NEW_STEPS.length,
   still,
 }: {
   readonly name: string;
@@ -505,6 +506,29 @@ export function CodeStep({
       <p className="onboarding-fine">
         Public repository? Paste its URL when you create the project.
       </p>
+    </>
+  );
+}
+
+// ─── Thread view ────────────────────────────────────────────────────────────
+
+/**
+ * Detailed or Simple threads, before the first one: someone who never reads
+ * commands picks Simple; Settings → Appearance changes it later.
+ */
+export function ThreadViewStep({
+  picker,
+}: {
+  /** The choice itself: `ThreadViewPicker`, which saves as it changes. */
+  readonly picker: React.ReactNode;
+}) {
+  return (
+    <>
+      <StepHeading
+        title="How much of the agent's work do you want to see?"
+        description="You can change this any time in Settings, under Appearance."
+      />
+      {picker}
     </>
   );
 }

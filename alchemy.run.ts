@@ -791,7 +791,10 @@ export default Alchemy.Stack(
     // Only dx sends as the mail domain: a strict DMARC policy makes receivers
     // reject mail that forges a dx address (wiki/agent-mail.md). The zone is
     // dx's alone, so a record already there (onboarding may add `p=none`) is
-    // taken over rather than failing the deploy.
+    // taken over rather than failing the deploy. Destroying the stage or
+    // turning mail off keeps it: `p=reject` stays correct for a zone nobody
+    // else sends from, and branch previews share one zone, which also serves
+    // Portals.
     if (mail !== undefined)
       yield* Cloudflare.DNS.Record("MailDmarc", {
         zoneId: mail.zoneId,
@@ -799,7 +802,7 @@ export default Alchemy.Stack(
         type: "TXT",
         content: '"v=DMARC1; p=reject; sp=reject; adkim=r; aspf=r"',
         comment: "dx Mailbox: only dx sends as this domain",
-      }).pipe(Alchemy.AdoptPolicy.adopt(true));
+      }).pipe(Alchemy.AdoptPolicy.adopt(true), Alchemy.RemovalPolicy.retain());
     const mailSend =
       mail === undefined
         ? undefined

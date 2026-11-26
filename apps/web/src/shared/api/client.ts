@@ -5,7 +5,6 @@ import {
   ArchiveThreadPersistenceUnavailableResponseSchema,
   ArchiveThreadProjectDeletedResponseSchema,
   BeginPersonalModelSubscriptionAuthorizationResponseSchema,
-  ChoicesResponseSchema,
   CreateProjectForbiddenResponseSchema,
   CreateProjectInvalidRequestResponseSchema,
   CreateProjectNameConflictResponseSchema,
@@ -38,7 +37,6 @@ import {
   DisconnectPersonalModelSubscriptionResponseSchema,
   FollowThreadEndpoint,
   GetSidebarLayoutEndpoint,
-  GetSpaceAgentModelResponseSchema,
   GetThreadDraftEndpoint,
   GetThreadEndpoint,
   GetThreadListItemEndpoint,
@@ -46,13 +44,11 @@ import {
   GetThreadPaneLayoutEndpoint,
   GetThreadReadinessEndpoint,
   GetWorkspaceDraftEndpoint,
-  GraphResponseSchema,
   IntegrationsErrorResponseSchema,
   ListPersonalModelSubscriptionsResponseSchema,
   ListSharedThreadsEndpoint,
   ListThreadsEndpoint,
   MarkThreadSeenEndpoint,
-  ModelRoutingErrorResponseSchema,
   PersonalAccountPersistenceUnavailableResponseSchema,
   PersonalModelSubscriptionBrowserSessionRequiredResponseSchema,
   PersonalModelSubscriptionInUseResponseSchema,
@@ -61,12 +57,10 @@ import {
   PinThreadEndpoint,
   PluginBundlesErrorResponseSchema,
   PollPersonalModelSubscriptionAuthorizationResponseSchema,
-  ProfileResponseSchema,
   type ProjectData,
   ProjectIconNotImageResponseSchema,
   ProjectIconTooLargeResponseSchema,
   ProjectOrbScriptsForbiddenResponseSchema,
-  type PutModeRequestSchema,
   RefreshPersonalModelSubscriptionResponseSchema,
   RetryInitialDispatchEndpoint,
   SearchThreadsEndpoint,
@@ -88,7 +82,6 @@ import {
   UnfollowThreadEndpoint,
   UpdateProjectNameConflictResponseSchema,
   UpdateSidebarLayoutEndpoint,
-  type UpdateSpaceAgentModelRequestSchema,
   UpdateThreadDraftEndpoint,
   UpdateThreadEndpoint,
   UpdateThreadPaneLayoutEndpoint,
@@ -241,7 +234,6 @@ export const request = async <
         PersonalAccountPersistenceUnavailableResponseSchema,
         // Skill routes send it too.
         WorkspacePolicyErrorResponseSchema,
-        ModelRoutingErrorResponseSchema,
         PersonalModelSubscriptionNotFoundResponseSchema,
         PersonalModelSubscriptionBrowserSessionRequiredResponseSchema,
         PersonalModelSubscriptionInUseResponseSchema,
@@ -614,131 +606,6 @@ export const getThreadReadiness = async (
 export type ModelRoutingTarget =
   | { readonly scope: "personal" }
   | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
-
-const modelRoutingBase = (target: ModelRoutingTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/model-routing"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/model-routing`;
-
-export const getModelRoutingGraph = async (
-  target: ModelRoutingTarget,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(`${modelRoutingBase(target)}/graph`, GraphResponseSchema, {
-      signal,
-    })
-  ).data;
-
-export const getModelRoutingChoices = async (signal?: AbortSignal) =>
-  (
-    await request(
-      "/v1/settings/personal/model-routing/choices",
-      ChoicesResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const getModeProfile = async (signal?: AbortSignal) =>
-  (
-    await request(
-      "/v1/settings/personal/model-routing/profile",
-      ProfileResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const putProfileMode = async (
-  mode: string,
-  config: typeof PutModeRequestSchema.Encoded,
-) =>
-  (
-    await request(
-      `/v1/settings/personal/model-routing/profile/modes/${encodeURIComponent(mode)}`,
-      ProfileResponseSchema,
-      { method: "PUT", body: JSON.stringify(config) },
-    )
-  ).data;
-
-export const resetProfileMode = async (mode: string) =>
-  (
-    await request(
-      `/v1/settings/personal/model-routing/profile/modes/${encodeURIComponent(mode)}`,
-      ProfileResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
-
-/** Settings → Models → Space: the model new Spaces run on, and its route. */
-export const getSpaceAgentModel = async (signal?: AbortSignal) =>
-  (
-    await request(
-      "/v1/settings/personal/space-agent-model",
-      GetSpaceAgentModelResponseSchema,
-      { signal },
-    )
-  ).data;
-
-/** `null` returns new Spaces to Auto (Claude Opus 5.5, medium). */
-export const putSpaceAgentModel = async (
-  pin: (typeof UpdateSpaceAgentModelRequestSchema.Encoded)["pin"],
-) =>
-  (
-    await request(
-      "/v1/settings/personal/space-agent-model",
-      GetSpaceAgentModelResponseSchema,
-      { method: "PUT", body: JSON.stringify({ pin }) },
-    )
-  ).data;
-
-export const getWorkspaceModelRoutingChoices = async (
-  workspaceSlug: WorkspaceSlug,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(
-      `${modelRoutingBase({ scope: "workspace", workspaceSlug })}/choices`,
-      ChoicesResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const getWorkspaceModeProfile = async (
-  workspaceSlug: WorkspaceSlug,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(
-      `${modelRoutingBase({ scope: "workspace", workspaceSlug })}/profile`,
-      ProfileResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const putWorkspaceProfileMode = async (
-  workspaceSlug: WorkspaceSlug,
-  mode: string,
-  config: typeof PutModeRequestSchema.Encoded,
-) =>
-  (
-    await request(
-      `${modelRoutingBase({ scope: "workspace", workspaceSlug })}/profile/modes/${encodeURIComponent(mode)}`,
-      ProfileResponseSchema,
-      { method: "PUT", body: JSON.stringify(config) },
-    )
-  ).data;
-
-export const resetWorkspaceProfileMode = async (
-  workspaceSlug: WorkspaceSlug,
-  mode: string,
-) =>
-  (
-    await request(
-      `${modelRoutingBase({ scope: "workspace", workspaceSlug })}/profile/modes/${encodeURIComponent(mode)}`,
-      ProfileResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
 
 const personalModelSubscriptionsBase =
   "/v1/settings/personal/model-routing/subscriptions";

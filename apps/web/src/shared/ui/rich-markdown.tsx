@@ -1,8 +1,9 @@
 import { Button } from "./button.js";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-700.css";
-import { splitMentions } from "@dx/api";
+import { GetPluginIconEndpoint, splitMentions } from "@dx/api";
 import type { VIEW_LANGUAGE as ViewLanguage } from "@dx/api/views/view-frame.mjs";
+import { endpointPath } from "@dx/client";
 import { Check, Code, Copy, Image, LoaderCircle, WrapText } from "lucide-react";
 import * as React from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
@@ -892,7 +893,9 @@ const markdownComponents = (
         {typeof pluginIcon === "string" && /^[0-9a-f]{64}$/.test(pluginIcon) ? (
           <img
             className="plugin-link-icon"
-            src={`/v1/plugins/icons/${pluginIcon}`}
+            src={endpointPath(GetPluginIconEndpoint, {
+              params: { sha256: pluginIcon },
+            })}
             alt=""
             decoding="async"
             loading="lazy"

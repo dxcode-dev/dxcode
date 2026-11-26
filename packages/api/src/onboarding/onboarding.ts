@@ -32,10 +32,17 @@ export const UpdateOnboardingRequestSchema = Schema.Struct({
 /** `GET` and `PUT /v1/onboarding`: the signed-in person's progress. */
 export const OnboardingResponseSchema = successResponse(OnboardingDataSchema);
 
+export const OnboardingInvalidRequestResponseSchema = errorResponse(
+  "INVALID_REQUEST",
+  "Request validation failed.",
+);
+
+export const OnboardingPersistenceUnavailableResponseSchema = errorResponse(
+  "PERSISTENCE_UNAVAILABLE",
+  "Persistence is temporarily unavailable.",
+);
+
 export const OnboardingErrorResponseSchema = Schema.Union([
-  errorResponse("INVALID_REQUEST", "Request validation failed."),
-  errorResponse(
-    "PERSISTENCE_UNAVAILABLE",
-    "Persistence is temporarily unavailable.",
-  ),
+  OnboardingInvalidRequestResponseSchema,
+  OnboardingPersistenceUnavailableResponseSchema,
 ]);

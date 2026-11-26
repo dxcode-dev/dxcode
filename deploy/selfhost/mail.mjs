@@ -26,7 +26,7 @@ export const mailDomainTradeoffs = ({ domain, appHostname }) => {
     `  - Only dx receives mail at @${domain}. Cloudflare Email Routing's catch-all sends every address there to dx, so any other mailbox or forwarding on it stops working, and people can pick usernames such as "sales" or "support".`,
     `  - Its reputation is shared. People send email from their Mail as @${domain}, so spam complaints or abuse lower this domain's standing with Gmail, Outlook and others, for every message sent from it${shared ? `, including the app's own sign-in email from ${app}` : ""}.`,
     `  - DMARC becomes strict. dx publishes "p=reject" for ${domain} and its subdomains, replacing any DMARC record there, so receivers reject mail from any other service that sends as these addresses without its own aligned DKIM signature.`,
-    "  - Turning mail off later removes Email Routing, Email Sending, and that DMARC record from the zone.",
+    "  - Turning mail off later removes Email Routing and Email Sending from the zone. It keeps the DMARC record: delete it yourself before another service sends as this domain.",
     "  A domain used for nothing else avoids all of this.",
   ];
 };

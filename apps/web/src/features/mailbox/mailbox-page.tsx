@@ -27,7 +27,6 @@ import { MailboxList, type MailListState } from "./mailbox-list.js";
 import {
   type EnabledMailbox,
   isMissingMail,
-  mailboxQueryOptions,
   mailConversationQueryOptions,
   mailConversationsQueryOptions,
   updateMailboxSettingsMutationOptions,
@@ -45,6 +44,7 @@ import {
   type MailboxNavigate,
   type MailboxSearch,
 } from "./mailbox-search.js";
+import { mailboxQueryOptions } from "./mailbox-summary-queries.js";
 import {
   ChangeUsernameDialog,
   MailboxUsernamePick,

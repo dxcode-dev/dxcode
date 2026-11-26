@@ -6,18 +6,11 @@ import {
 } from "@dx/client";
 import { ChevronRight } from "lucide-react";
 import * as React from "react";
+import type { ThreadView } from "../../shared/theme/theme-store.js";
+import { SimpleTranscriptTurn } from "./simple-view/simple-turn.js";
 import { TranscriptActivityList } from "./transcript-activities.js";
+import { formatDuration } from "./transcript-duration.js";
 import { useThreadPresentation } from "./use-thread-presentation.js";
-
-const formatDuration = (durationMs: number | undefined) => {
-  if (durationMs === undefined) return undefined;
-  if (durationMs < 30_000) {
-    const seconds = Math.max(1, Math.round(durationMs / 1_000));
-    return `${seconds} second${seconds === 1 ? "" : "s"}`;
-  }
-  const minutes = Math.max(1, Math.round(durationMs / 60_000));
-  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
-};
 
 interface TranscriptTurnProps {
   readonly turn: TranscriptTurnModel;
@@ -25,6 +18,8 @@ interface TranscriptTurnProps {
   readonly renderRow: (row: TranscriptRow) => React.ReactNode;
   readonly processing?: boolean;
   readonly defaultWorkExpanded?: boolean;
+  /** Simple shows only what the agent showed and its answer. */
+  readonly view?: ThreadView;
 }
 
 /**
@@ -33,14 +28,28 @@ interface TranscriptTurnProps {
  * derivation, so only the turn that actually changed re-renders.
  */
 export const TranscriptTurn = React.memo(
-  TranscriptTurnContent,
+  TranscriptTurnView,
   (previous: TranscriptTurnProps, next: TranscriptTurnProps) =>
     previous.renderRow === next.renderRow &&
     previous.processing === next.processing &&
     previous.defaultWorkExpanded === next.defaultWorkExpanded &&
+    previous.view === next.view &&
     sameTranscriptTurn(previous.turn, next.turn) &&
     sameTranscriptRows(previous.rows, next.rows),
 );
+
+function TranscriptTurnView({ view, ...props }: TranscriptTurnProps) {
+  return view === "simple" ? (
+    <SimpleTranscriptTurn
+      turn={props.turn}
+      rows={props.rows}
+      renderRow={props.renderRow}
+      processing={props.processing ?? props.turn.status === "active"}
+    />
+  ) : (
+    <TranscriptTurnContent {...props} />
+  );
+}
 
 function TranscriptTurnContent({
   turn,

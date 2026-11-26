@@ -2689,7 +2689,9 @@ const exactKeys = (value, keys) =>
 const assertCompletePropRepresentations = (node, operation, id) => {
   const requiresEvaluated =
     operation === "deploy" &&
-    (node.action === "create" || node.action === "update");
+    (node.action === "create" ||
+      node.action === "update" ||
+      node.action === "adopted");
   if (
     node.resource?.Props === undefined ||
     (requiresEvaluated && node.props === undefined) ||
@@ -3072,11 +3074,14 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   const id = node.resource?.LogicalId ?? node.state?.logicalId;
   const type = node.resource?.Type ?? node.state?.resourceType;
   const nodeFqn = node.resource?.FQN ?? node.state?.fqn;
+  // Alchemy keeps the DMARC record on the zone when the stage drops it
+  // (alchemy.run.ts retains it): it forgets the record, deleting nothing.
+  const dmarcOrphaned = id === "MailDmarc" && node.action === "orphaned";
   // Turning the Mail off deletes its resources, on a deploy or a destroy.
   const mailRemoval =
     selection.mail === undefined &&
     mailResourceTypes.has(id) &&
-    node.action === "delete";
+    (node.action === "delete" || dmarcOrphaned);
   // Removing an Orb provider on purpose deletes its resources on a deploy.
   const orbRemoval =
     operation === "deploy" &&
@@ -3108,10 +3113,20 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
       `Alchemy plan selected an unexpected provider mode for ${id}.`,
     );
 
+  // alchemy.run.ts adopts a DMARC record already on the mail zone: Alchemy
+  // takes it over, then writes the Mail's record (checked below).
   const allowedActions =
     operation === "deploy" && !mailRemoval && !orbRemoval
-      ? new Set(["create", "update", "noop"])
-      : new Set(["delete", "noop"]);
+      ? new Set(
+          id === "MailDmarc" && selection.mail !== undefined
+            ? ["create", "update", "noop", "adopted"]
+            : ["create", "update", "noop"],
+        )
+      : new Set(
+          id === "MailDmarc"
+            ? ["delete", "noop", "orphaned"]
+            : ["delete", "noop"],
+        );
   // A removed provider's resource is checked as a destroy checks it.
   const identityOperation = orbRemoval ? "destroy" : operation;
   if (!allowedActions.has(node.action))
@@ -3134,6 +3149,16 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
 
   if (mailResourceTypes.has(id))
     assertExactMailIdentity(node, operation, selection, id);
+  // The zone keeps its DMARC record when a stage is destroyed or turns mail
+  // off: branch previews share one mail zone, and `p=reject` stays right for
+  // a zone nobody else sends from.
+  if (
+    id === "MailDmarc" &&
+    operation === "deploy" &&
+    !mailRemoval &&
+    node.resource?.RemovalPolicy !== "retain"
+  )
+    throw new Error("MailDmarc must keep its record when the stage drops it.");
   if (id === "Worker") {
     assertExactWorkerIdentity(node, operation, selection);
     assertWorkerMailBindings(node, operation, selection);

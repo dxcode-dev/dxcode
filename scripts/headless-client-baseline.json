@@ -3,10 +3,7 @@
   "apps/web/src/features/huddle/huddle-join-mutations.ts": 1,
   "apps/web/src/features/huddle/huddle-link-queries.ts": 2,
   "apps/web/src/features/huddle/huddle-summary-queries.ts": 1,
-  "apps/web/src/features/mailbox/mailbox-queries.ts": 8,
-  "apps/web/src/features/onboarding/onboarding-queries.ts": 2,
   "apps/web/src/features/plugins/plugin-views-queries.ts": 1,
-  "apps/web/src/features/settings/deployment-admin-queries.ts": 1,
   "apps/web/src/features/settings/model-routing/provider-key-presentation.ts": 1,
   "apps/web/src/features/settings/plugins/plugin-bundle-details.tsx": 2,
   "apps/web/src/features/settings/plugins/plugin-bundle-queries.ts": 2,
@@ -21,8 +18,7 @@
   "apps/web/src/prototypes/workspace-demo/data.ts": 1,
   "apps/web/src/prototypes/workspace-demo/scene-backend.ts": 3,
   "apps/web/src/prototypes/workspace-demo/scene-data.ts": 1,
-  "apps/web/src/shared/api/client.ts": 9,
+  "apps/web/src/shared/api/client.ts": 1,
   "apps/web/src/shared/same-origin-fetch.ts": 5,
-  "apps/web/src/shared/ui/plugin-icon.tsx": 2,
-  "apps/web/src/shared/ui/rich-markdown.tsx": 1
+  "apps/web/src/shared/ui/plugin-icon.tsx": 2
 }

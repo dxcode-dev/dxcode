@@ -1,8 +1,8 @@
 export * from "./artifacts/library.js";
 export * from "./artifacts/library-endpoints.js";
 export * from "./artifacts/standalone-artifact-endpoints.js";
-export * from "./attachments/index.js";
 export * from "./attachments/attachments-endpoints.js";
+export * from "./attachments/index.js";
 export {
   type ForbiddenResponse,
   ForbiddenResponseSchema,
@@ -28,10 +28,13 @@ export {
 } from "./auth/unauthenticated-response.js";
 export * from "./bug-reports/bug-reports.js";
 export * from "./bug-reports/intake.js";
+export * from "./deployment-admin/refusals.js";
+export * from "./deployment-admin/status-endpoints.js";
+export * from "./deployment-admin/users-endpoints.js";
 export * from "./deployment-endpoints.js";
-export * from "./dictation/index.js";
 export * from "./dictation/dictation-endpoints.js";
 export * from "./dictation/dictation-stream-endpoints.js";
+export * from "./dictation/index.js";
 export * from "./dictation/vocabulary-endpoints.js";
 export { dxEndpoints } from "./endpoints.js";
 export {
@@ -50,6 +53,8 @@ export {
 } from "./http/not-found-response.js";
 export * from "./http/openapi.js";
 export * from "./mail/mail.js";
+export * from "./mail/mail-endpoints.js";
+export * from "./mail/mailbox-endpoint.js";
 export * from "./navigation/app-routes.js";
 export * from "./navigation/shell.js";
 export * from "./navigation/sidebar-layout.js";
@@ -57,6 +62,7 @@ export * from "./notifications/notification-endpoints.js";
 export * from "./notifications/notification-settings-endpoints.js";
 export * from "./notifications/notifications.js";
 export * from "./onboarding/onboarding.js";
+export * from "./onboarding/onboarding-endpoints.js";
 export * from "./projects/create-project.js";
 export * from "./projects/delete-project.js";
 export * from "./projects/feedback-widget.js";
@@ -134,10 +140,11 @@ export * from "./spaces/message-comments.js";
 export * from "./spaces/posts.js";
 export * from "./spaces/progress.js";
 export * from "./spaces/space-agent-model.js";
-export * from "./spaces/space-artifacts.js";
-export * from "./spaces/space-cards.js";
+export * from "./spaces/space-agent-model-endpoints.js";
 export * from "./spaces/space-coordinator-orb.js";
 export * from "./spaces/space-coordinator-orb-endpoints.js";
+export * from "./spaces/space-artifacts.js";
+export * from "./spaces/space-cards.js";
 export * from "./spaces/space-data.js";
 export * from "./spaces/space-endpoints.js";
 export * from "./thread-storage/index.js";
@@ -193,9 +200,9 @@ export * from "./threads/terminal.js";
 export * from "./threads/thread-access-refusals.js";
 export * from "./threads/thread-artifact-endpoints.js";
 export * from "./threads/thread-chat.js";
-export * from "./threads/thread-member-endpoints.js";
 export * from "./threads/thread-data.js";
 export * from "./threads/thread-draft.js";
+export * from "./threads/thread-member-endpoints.js";
 export {
   type ThreadNotFoundResponse,
   ThreadNotFoundResponseSchema,

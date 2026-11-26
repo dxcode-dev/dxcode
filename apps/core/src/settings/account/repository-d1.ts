@@ -24,6 +24,7 @@ const PersonalAccountRow = Schema.Struct({
   terminal_theme: Schema.String,
   text_size: Schema.String,
   thread_width: Schema.String,
+  thread_view: Schema.String,
   terminal_appearance: Schema.String,
   code_font_family: Schema.NullOr(Schema.String),
   code_font_size: Schema.NullOr(Schema.String),
@@ -70,6 +71,7 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
             profile.terminal_theme,
             profile.text_size,
             profile.thread_width,
+            profile.thread_view,
             profile.terminal_appearance,
             profile.code_font_family,
             profile.code_font_size,
@@ -120,6 +122,7 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
           terminalTheme: row.terminal_theme,
           textSize: row.text_size,
           threadWidth: row.thread_width,
+          threadView: row.thread_view,
           terminalAppearance: row.terminal_appearance,
           codeFontFamily: row.code_font_family,
           codeFontSize: row.code_font_size,
@@ -331,6 +334,7 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
             terminal_theme = COALESCE(${input.terminalTheme ?? null}, terminal_theme),
             text_size = COALESCE(${input.textSize ?? null}, text_size),
             thread_width = COALESCE(${input.threadWidth ?? null}, thread_width),
+            thread_view = COALESCE(${input.threadView ?? null}, thread_view),
             terminal_appearance = COALESCE(
               ${input.terminalAppearance ?? null},
               terminal_appearance

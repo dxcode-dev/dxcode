@@ -30,6 +30,12 @@ import {
   GetAttachmentFileEndpoint,
   GetNamedAttachmentFileEndpoint,
 } from "./attachments/attachments-endpoints.js";
+import { GetDeploymentAdminStatusEndpoint } from "./deployment-admin/status-endpoints.js";
+import {
+  LookupDeploymentAdminUserEndpoint,
+  ResetUsernameChangeEndpoint,
+  SetMailSendingEndpoint,
+} from "./deployment-admin/users-endpoints.js";
 import {
   CancelDictationEndpoint,
   CreateDictationEndpoint,
@@ -43,6 +49,18 @@ import {
   UpdateWorkspaceDictationVocabularyEndpoint,
 } from "./dictation/vocabulary-endpoints.js";
 import type { Endpoint } from "./http/endpoint.js";
+import {
+  CreateMailLabelEndpoint,
+  DeleteMailLabelEndpoint,
+  GetMailAttachmentEndpoint,
+  GetMailConversationEndpoint,
+  ListMailConversationsEndpoint,
+  SendMailEndpoint,
+  UpdateMailboxSettingsEndpoint,
+  UpdateMailConversationEndpoint,
+  UpdateMailLabelEndpoint,
+} from "./mail/mail-endpoints.js";
+import { GetMailboxEndpoint } from "./mail/mailbox-endpoint.js";
 import {
   GetSidebarLayoutEndpoint,
   UpdateSidebarLayoutEndpoint,
@@ -60,6 +78,10 @@ import {
   SendTestPushEndpoint,
   UpdateNotificationPreferenceEndpoint,
 } from "./notifications/notification-settings-endpoints.js";
+import {
+  GetOnboardingEndpoint,
+  UpdateOnboardingEndpoint,
+} from "./onboarding/onboarding-endpoints.js";
 import { GetPersonalFeedbackWidgetEmbedEndpoint } from "./projects/feedback-widget-embed-endpoints.js";
 import {
   AddFeedbackWidgetOriginEndpoint,
@@ -151,6 +173,14 @@ import {
   UpdateWorkspaceMcpServerEndpoint,
 } from "./settings/mcp-servers-endpoints.js";
 import {
+  GetPersonalModelRoutingChoicesEndpoint,
+  GetPersonalModelRoutingGraphEndpoint,
+  GetPersonalModeProfileEndpoint,
+  GetWorkspaceModelRoutingChoicesEndpoint,
+  GetWorkspaceModelRoutingGraphEndpoint,
+  GetWorkspaceModeProfileEndpoint,
+} from "./settings/model-routing.js";
+import {
   CheckPersonalModelConnectionAccessEndpoint,
   CheckWorkspaceModelConnectionAccessEndpoint,
   CreatePersonalModelConnectionEndpoint,
@@ -161,8 +191,12 @@ import {
   GetWorkspaceModelCatalogEndpoint,
   ListPersonalModelConnectionsEndpoint,
   ListWorkspaceModelConnectionsEndpoint,
+  PutPersonalProfileModeEndpoint,
+  PutWorkspaceProfileModeEndpoint,
   ReorderPersonalModelConnectionsEndpoint,
   ReorderWorkspaceModelConnectionsEndpoint,
+  ResetPersonalProfileModeEndpoint,
+  ResetWorkspaceProfileModeEndpoint,
   SetPersonalClaudePlanExtraUsageEndpoint,
   SetPersonalModelConnectionEnabledEndpoint,
   SetWorkspaceClaudePlanExtraUsageEndpoint,
@@ -285,6 +319,10 @@ import {
   DisconnectGitHubEndpoint,
   ListGitHubGrantsEndpoint,
 } from "./source-control/github-endpoints.js";
+import {
+  GetSpaceAgentModelEndpoint,
+  UpdateSpaceAgentModelEndpoint,
+} from "./spaces/space-agent-model-endpoints.js";
 import {
   GetPersonalSpaceCoordinatorOrbEndpoint,
   GetWorkspaceSpaceCoordinatorOrbEndpoint,
@@ -455,6 +493,10 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   DeleteAttachmentEndpoint,
   GetAttachmentFileEndpoint,
   GetNamedAttachmentFileEndpoint,
+  GetDeploymentAdminStatusEndpoint,
+  LookupDeploymentAdminUserEndpoint,
+  ResetUsernameChangeEndpoint,
+  SetMailSendingEndpoint,
   CancelDictationEndpoint,
   CreateDictationEndpoint,
   GetDictationEndpoint,
@@ -502,6 +544,16 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   BeginGitHubInstallationEndpoint,
   ListGitHubGrantsEndpoint,
   StartMailThreadEndpoint,
+  GetMailAttachmentEndpoint,
+  GetMailConversationEndpoint,
+  ListMailConversationsEndpoint,
+  UpdateMailConversationEndpoint,
+  GetMailboxEndpoint,
+  CreateMailLabelEndpoint,
+  DeleteMailLabelEndpoint,
+  UpdateMailLabelEndpoint,
+  SendMailEndpoint,
+  UpdateMailboxSettingsEndpoint,
   CreatePersonalMcpServerEndpoint,
   DeletePersonalMcpServerEndpoint,
   DiscoverPersonalMcpServerEndpoint,
@@ -524,19 +576,29 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   ListMessageCommentSummariesEndpoint,
   GetPersonalModelCatalogEndpoint,
   CheckPersonalModelConnectionAccessEndpoint,
+  GetPersonalModelRoutingChoicesEndpoint,
   CreatePersonalModelConnectionEndpoint,
   DeletePersonalModelConnectionEndpoint,
+  GetPersonalModelRoutingGraphEndpoint,
   ListPersonalModelConnectionsEndpoint,
+  GetPersonalModeProfileEndpoint,
+  PutPersonalProfileModeEndpoint,
   ReorderPersonalModelConnectionsEndpoint,
+  ResetPersonalProfileModeEndpoint,
   SetPersonalClaudePlanExtraUsageEndpoint,
   SetPersonalModelConnectionEnabledEndpoint,
   UpdatePersonalModelConnectionEndpoint,
   GetWorkspaceModelCatalogEndpoint,
   CheckWorkspaceModelConnectionAccessEndpoint,
+  GetWorkspaceModelRoutingChoicesEndpoint,
   CreateWorkspaceModelConnectionEndpoint,
   DeleteWorkspaceModelConnectionEndpoint,
+  GetWorkspaceModelRoutingGraphEndpoint,
   ListWorkspaceModelConnectionsEndpoint,
+  GetWorkspaceModeProfileEndpoint,
+  PutWorkspaceProfileModeEndpoint,
   ReorderWorkspaceModelConnectionsEndpoint,
+  ResetWorkspaceProfileModeEndpoint,
   SetWorkspaceClaudePlanExtraUsageEndpoint,
   SetWorkspaceModelConnectionEnabledEndpoint,
   UpdateWorkspaceModelConnectionEndpoint,
@@ -549,6 +611,8 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   RemovePushDeviceEndpoint,
   SendTestPushEndpoint,
   UpdateNotificationPreferenceEndpoint,
+  GetOnboardingEndpoint,
+  UpdateOnboardingEndpoint,
   DeletePersonalOrbProviderConnectionEndpoint,
   ListPersonalOrbProvidersEndpoint,
   RetryPersonalOrbProviderConnectionEndpoint,
@@ -657,6 +721,8 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   InspectWorkspacePrivateThreadEndpoint,
   GetSidebarLayoutEndpoint,
   UpdateSidebarLayoutEndpoint,
+  GetSpaceAgentModelEndpoint,
+  UpdateSpaceAgentModelEndpoint,
   GetPersonalSpaceCoordinatorOrbEndpoint,
   UpdatePersonalSpaceCoordinatorOrbEndpoint,
   GetWorkspaceSpaceCoordinatorOrbEndpoint,

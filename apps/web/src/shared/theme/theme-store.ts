@@ -4,6 +4,7 @@ import type {
   PersonalTerminalAppearance,
   PersonalTerminalTheme,
   PersonalTextSize,
+  PersonalThreadView,
   PersonalThreadWidth,
 } from "@dx/domain";
 import { codeFontSizePixels } from "@dx/domain";
@@ -15,6 +16,7 @@ export type Palette = PersonalPalette;
 export type TerminalTheme = PersonalTerminalTheme;
 export type TextSize = PersonalTextSize;
 export type ThreadWidth = PersonalThreadWidth;
+export type ThreadView = PersonalThreadView;
 export type TerminalAppearance = PersonalTerminalAppearance;
 
 export const appearanceOptions: ReadonlyArray<{
@@ -84,6 +86,7 @@ export interface AppearancePreferences {
   readonly terminalTheme: TerminalTheme;
   readonly textSize: TextSize;
   readonly threadWidth: ThreadWidth;
+  readonly threadView: ThreadView;
   readonly terminalAppearance: TerminalAppearance;
   /** `null` uses the default. */
   readonly codeFontFamily: string | null;
@@ -99,6 +102,7 @@ export const defaultAppearancePreferences: AppearancePreferences = {
   terminalTheme: "github",
   textSize: "default",
   threadWidth: "default",
+  threadView: "detailed",
   terminalAppearance: "match",
   codeFontFamily: null,
   codeFontSize: null,
@@ -117,6 +121,7 @@ export const appearancePreferencesOf = (
     given.terminalTheme ?? defaultAppearancePreferences.terminalTheme,
   textSize: given.textSize ?? defaultAppearancePreferences.textSize,
   threadWidth: given.threadWidth ?? defaultAppearancePreferences.threadWidth,
+  threadView: given.threadView ?? defaultAppearancePreferences.threadView,
   terminalAppearance:
     given.terminalAppearance ?? defaultAppearancePreferences.terminalAppearance,
   codeFontFamily: given.codeFontFamily ?? null,

@@ -81,16 +81,34 @@ describe("headless endpoint contract", () => {
     expect(openApiProblems(endpoints)).toEqual([]);
   });
 
-  it("publishes no private deployment path in OpenAPI", () => {
-    const paths = Object.keys(
-      toOpenApiDocument(dxEndpoints, { version: "test" }).paths,
-    );
+  it("publishes no private deployment endpoint in OpenAPI", () => {
     // Private endpoints belong in deploymentEndpoints, never dxEndpoints.
+    // Public Core serves a few deployment-admin routes (the admin status,
+    // user lookup), so the test names the private endpoints, not a prefix.
+    const publicRoutes = new Set(
+      dxEndpoints.map(({ method, path }) => `${method} ${path}`),
+    );
     expect(
-      paths.filter(
-        (path) =>
-          path.startsWith("/v1/deployment-admin") ||
-          path.startsWith("/v1/deployment/cloud"),
+      deploymentEndpoints
+        .filter(({ method, path }) => publicRoutes.has(`${method} ${path}`))
+        .map(({ id }) => id),
+    ).toEqual([]);
+    const { paths } = toOpenApiDocument(dxEndpoints, { version: "test" });
+    const operations = paths as Record<string, Record<string, unknown>>;
+    expect(
+      deploymentEndpoints
+        .filter(
+          ({ method, path }) =>
+            operations[path.replace(/:([A-Za-z0-9_]+)(\{[^}]*\})?/g, "{$1}")]?.[
+              method.toLowerCase()
+            ] !== undefined,
+        )
+        .map(({ id }) => id),
+    ).toEqual([]);
+    // The hosted offer's billing routes are private, whatever lists them.
+    expect(
+      Object.keys(paths).filter((path) =>
+        path.startsWith("/v1/deployment/cloud"),
       ),
     ).toEqual([]);
   });

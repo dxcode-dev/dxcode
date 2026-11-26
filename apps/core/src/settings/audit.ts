@@ -27,6 +27,7 @@ export interface SettingsAuditEvent {
     | "terminalTheme"
     | "textSize"
     | "threadWidth"
+    | "threadView"
     | "terminalAppearance"
     | "codeFontFamily"
     | "codeFontSize"

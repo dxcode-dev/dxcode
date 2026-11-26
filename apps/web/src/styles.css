@@ -3439,6 +3439,9 @@
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--divider);
 }
+.appearance-thread-view > .dx-choice-cards {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
 .code-font-settings .settings-form-actions {
   margin: 0;
   padding: var(--space-2-5) var(--space-4);

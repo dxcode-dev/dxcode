@@ -1,0 +1,51 @@
+/* Thread View's sketches of a turn (thread-view-picker.tsx). */
+.thread-view-sketch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  height: 112px;
+  padding: var(--space-3);
+}
+.thread-view-sketch > span {
+  display: block;
+  flex: 0 0 auto;
+  height: 6px;
+  border-radius: var(--radius-full);
+}
+.thread-view-sketch > .thread-view-sketch-prompt {
+  align-self: flex-end;
+  width: 45%;
+  height: 12px;
+  margin-bottom: var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--user-message-background);
+}
+.thread-view-sketch-step {
+  width: 70%;
+  background: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+}
+.thread-view-sketch-answer {
+  width: 90%;
+  background: color-mix(in srgb, var(--foreground) 55%, transparent);
+}
+.thread-view-sketch > [data-width="short"] {
+  width: 50%;
+}
+.thread-view-sketch > .thread-view-sketch-media {
+  display: flex;
+  gap: var(--space-1);
+  height: 22px;
+  margin-top: var(--space-0-5);
+  background: none;
+}
+.thread-view-sketch-tile {
+  width: 30px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--primary) 35%, transparent);
+}
+.thread-view-sketch > .thread-view-sketch-meta {
+  width: 25%;
+  height: 4px;
+  margin-top: auto;
+  background: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+}

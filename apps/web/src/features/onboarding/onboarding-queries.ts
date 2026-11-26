@@ -1,7 +1,8 @@
 import {
+  GetOnboardingEndpoint,
   type OnboardingData,
   type OnboardingMilestone,
-  OnboardingResponseSchema,
+  UpdateOnboardingEndpoint,
 } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import {
@@ -9,18 +10,13 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { request } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 
 const getOnboarding = async (signal?: AbortSignal) =>
-  (await request("/v1/onboarding", OnboardingResponseSchema, { signal })).data;
+  (await dxClient.call(GetOnboardingEndpoint, {}, { signal })).data;
 
 const putOnboarding = async (done: OnboardingMilestone) =>
-  (
-    await request("/v1/onboarding", OnboardingResponseSchema, {
-      method: "PUT",
-      body: JSON.stringify({ done }),
-    })
-  ).data;
+  (await dxClient.call(UpdateOnboardingEndpoint, { body: { done } })).data;
 
 export const onboardingKeys = {
   progress: (userId: UserId) => ["onboarding", userId] as const,

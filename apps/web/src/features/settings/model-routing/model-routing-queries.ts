@@ -1,12 +1,61 @@
+import {
+  GetPersonalModelRoutingChoicesEndpoint,
+  GetPersonalModelRoutingGraphEndpoint,
+  GetPersonalModeProfileEndpoint,
+  GetWorkspaceModelRoutingChoicesEndpoint,
+  GetWorkspaceModelRoutingGraphEndpoint,
+  GetWorkspaceModeProfileEndpoint,
+} from "@dx/api";
+import type { WorkspaceSlug } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
 import {
-  getModelRoutingChoices,
-  getModelRoutingGraph,
-  getModeProfile,
-  getWorkspaceModelRoutingChoices,
-  getWorkspaceModeProfile,
+  dxClient,
   type ModelRoutingTarget,
 } from "../../../shared/api/client.js";
+
+const getModelRoutingGraph = async (
+  target: ModelRoutingTarget,
+  signal?: AbortSignal,
+) =>
+  (target.scope === "personal"
+    ? await dxClient.call(GetPersonalModelRoutingGraphEndpoint, {}, { signal })
+    : await dxClient.call(
+        GetWorkspaceModelRoutingGraphEndpoint,
+        { params: { workspaceSlug: target.workspaceSlug } },
+        { signal },
+      )
+  ).data;
+
+const getModelRoutingChoices = async (signal?: AbortSignal) =>
+  (await dxClient.call(GetPersonalModelRoutingChoicesEndpoint, {}, { signal }))
+    .data;
+
+const getModeProfile = async (signal?: AbortSignal) =>
+  (await dxClient.call(GetPersonalModeProfileEndpoint, {}, { signal })).data;
+
+const getWorkspaceModelRoutingChoices = async (
+  workspaceSlug: WorkspaceSlug,
+  signal?: AbortSignal,
+) =>
+  (
+    await dxClient.call(
+      GetWorkspaceModelRoutingChoicesEndpoint,
+      { params: { workspaceSlug } },
+      { signal },
+    )
+  ).data;
+
+const getWorkspaceModeProfile = async (
+  workspaceSlug: WorkspaceSlug,
+  signal?: AbortSignal,
+) =>
+  (
+    await dxClient.call(
+      GetWorkspaceModeProfileEndpoint,
+      { params: { workspaceSlug } },
+      { signal },
+    )
+  ).data;
 
 export const modelRoutingKey = (target: ModelRoutingTarget) =>
   target.scope === "personal"

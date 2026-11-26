@@ -1,19 +1,23 @@
 import {
-  GetMailboxResponseSchema,
-  GetMailConversationResponseSchema,
-  ListMailConversationsResponseSchema,
+  CreateMailLabelEndpoint,
+  DeleteMailLabelEndpoint,
+  GetMailAttachmentEndpoint,
+  GetMailConversationEndpoint,
+  ListMailConversationsEndpoint,
   type MailboxData,
   type MailConversation,
   type MailConversationSummary,
-  MailErrorResponseSchema,
   type MailFolder,
   type MailItemLabelSchema,
-  MailLabelResponseSchema,
+  SendMailEndpoint,
   type SendMailRequest,
-  SendMailResponseSchema,
+  UpdateMailboxSettingsEndpoint,
   type UpdateMailboxSettingsRequestSchema,
+  UpdateMailConversationEndpoint,
   type UpdateMailConversationRequest,
+  UpdateMailLabelEndpoint,
 } from "@dx/api";
+import { endpointPath } from "@dx/client";
 import type { UserId } from "@dx/domain";
 import {
   type InfiniteData,
@@ -22,8 +26,7 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { Schema } from "effect";
-import { ApiError, request } from "../../shared/api/client.js";
+import { ApiError, dxClient } from "../../shared/api/client.js";
 import { updatePersonalAccountMutationOptions } from "../settings/account/personal-account-queries.js";
 import { type MailListView, mailboxKeys } from "./mailbox-cache-queries.js";
 
@@ -37,19 +40,6 @@ type ConversationPage = {
   readonly nextCursor?: string;
 };
 
-/** A change answered with no data the page reads; it refetches instead. */
-const AcknowledgedSchema = Schema.Struct({
-  status: Schema.Literal("success"),
-});
-
-const json = (method: string, body: unknown): RequestInit => ({
-  method,
-  body: JSON.stringify(body),
-});
-
-const conversationPath = (key: string) =>
-  `/v1/mailbox/conversations/${encodeURIComponent(key)}`;
-
 /** The error the API explained in words, or a fallback. */
 export const mailErrorMessage = (error: unknown, fallback: string) =>
   error instanceof ApiError && error.hasValidatedPayload
@@ -59,39 +49,15 @@ export const mailErrorMessage = (error: unknown, fallback: string) =>
 export const isMissingMail = (error: unknown) =>
   error instanceof ApiError && error.status === 404;
 
-/**
- * The person's Mail: their address, unread counts, labels, `+tag`
- * addresses, and limits; `enabled: false` where the deployment has no mail
- * domain. The sidebar's unread count reads it too.
- */
-export const mailboxQueryOptions = (userId: UserId) =>
-  queryOptions({
-    queryKey: mailboxKeys.summary(userId),
-    queryFn: async ({ signal }): Promise<MailboxData> =>
-      (
-        await request(
-          "/v1/mailbox",
-          GetMailboxResponseSchema,
-          { signal },
-          MailErrorResponseSchema,
-        )
-      ).data,
-    staleTime: 30_000,
-    // The realtime event refetches at once; this is the fallback while the
-    // socket is down.
-    refetchInterval: 120_000,
-    refetchOnWindowFocus: true,
-  });
-
-const listSearch = (view: MailListView, before: string | undefined) => {
-  const search = new URLSearchParams();
-  if (view.label !== undefined) search.set("label", view.label);
-  else if (view.tag !== undefined) search.set("tag", view.tag);
-  else search.set("folder", view.folder ?? "inbox");
-  if (view.q !== undefined && view.q !== "") search.set("q", view.q);
-  if (before !== undefined) search.set("before", before);
-  return search.toString();
-};
+const listQuery = (view: MailListView, before: string | undefined) => ({
+  ...(view.label !== undefined
+    ? { label: view.label }
+    : view.tag !== undefined
+      ? { tag: view.tag }
+      : { folder: view.folder ?? "inbox" }),
+  ...(view.q !== undefined && view.q !== "" ? { q: view.q } : {}),
+  ...(before === undefined ? {} : { before }),
+});
 
 /** One list of conversations, newest first, a page at a time. */
 export const mailConversationsQueryOptions = (
@@ -102,11 +68,10 @@ export const mailConversationsQueryOptions = (
     queryKey: mailboxKeys.list(userId, view),
     queryFn: async ({ signal, pageParam }): Promise<ConversationPage> =>
       (
-        await request(
-          `/v1/mailbox/conversations?${listSearch(view, pageParam)}`,
-          ListMailConversationsResponseSchema,
+        await dxClient.call(
+          ListMailConversationsEndpoint,
+          { query: listQuery(view, pageParam) },
           { signal },
-          MailErrorResponseSchema,
         )
       ).data,
     initialPageParam: undefined as string | undefined,
@@ -121,11 +86,10 @@ export const mailConversationQueryOptions = (userId: UserId, key: string) =>
     queryKey: mailboxKeys.conversation(userId, key),
     queryFn: async ({ signal }): Promise<MailConversation> =>
       (
-        await request(
-          conversationPath(key),
-          GetMailConversationResponseSchema,
+        await dxClient.call(
+          GetMailConversationEndpoint,
+          { params: { key } },
           { signal },
-          MailErrorResponseSchema,
         )
       ).data,
     staleTime: 30_000,
@@ -134,7 +98,9 @@ export const mailConversationQueryOptions = (userId: UserId, key: string) =>
 
 /** Where a downloaded attachment comes from. */
 export const mailAttachmentUrl = (mailId: string, index: number) =>
-  `/v1/mailbox/messages/${encodeURIComponent(mailId)}/attachments/${index}`;
+  endpointPath(GetMailAttachmentEndpoint, {
+    params: { id: mailId, index: String(index) },
+  });
 
 const labelNames = (client: QueryClient, userId: UserId) => {
   const mailbox = client.getQueryData<MailboxData>(mailboxKeys.summary(userId));
@@ -191,12 +157,10 @@ export const updateMailConversationMutationOptions = (
       readonly key: string;
       readonly change: UpdateMailConversationRequest;
     }) => {
-      await request(
-        conversationPath(key),
-        AcknowledgedSchema,
-        json("PATCH", change),
-        MailErrorResponseSchema,
-      );
+      await dxClient.call(UpdateMailConversationEndpoint, {
+        params: { key },
+        body: change,
+      });
     },
     onMutate: async ({ key, change }) => {
       await client.cancelQueries({ queryKey: mailboxKeys.lists(userId) });
@@ -287,29 +251,20 @@ export const mailLabelMutationOptions = (client: QueryClient, userId: UserId) =>
     ) => {
       if (change.kind === "create")
         return (
-          await request(
-            "/v1/mailbox/labels",
-            MailLabelResponseSchema,
-            json("POST", { name: change.name }),
-            MailErrorResponseSchema,
-          )
+          await dxClient.call(CreateMailLabelEndpoint, {
+            body: { name: change.name },
+          })
         ).data;
-      const path = `/v1/mailbox/labels/${encodeURIComponent(change.id)}`;
+      // Renaming and deleting answer with nothing; the Mail refetches.
       if (change.kind === "rename")
-        return (
-          await request(
-            path,
-            MailLabelResponseSchema,
-            json("PATCH", { name: change.name }),
-            MailErrorResponseSchema,
-          )
-        ).data;
-      await request(
-        path,
-        AcknowledgedSchema,
-        { method: "DELETE" },
-        MailErrorResponseSchema,
-      );
+        await dxClient.call(UpdateMailLabelEndpoint, {
+          params: { id: change.id },
+          body: { name: change.name },
+        });
+      else
+        await dxClient.call(DeleteMailLabelEndpoint, {
+          params: { id: change.id },
+        });
       return undefined;
     },
     onSettled: () =>
@@ -326,12 +281,7 @@ export const updateMailboxSettingsMutationOptions = (
     mutationFn: async (
       change: typeof UpdateMailboxSettingsRequestSchema.Type,
     ) => {
-      await request(
-        "/v1/mailbox/settings",
-        AcknowledgedSchema,
-        json("PATCH", change),
-        MailErrorResponseSchema,
-      );
+      await dxClient.call(UpdateMailboxSettingsEndpoint, { body: change });
     },
     onMutate: async (change) => {
       await client.cancelQueries({ queryKey: mailboxKeys.summary(userId) });
@@ -371,14 +321,7 @@ export const sendMailMutationOptions = (client: QueryClient, userId: UserId) =>
   mutationOptions({
     mutationKey: [...mailboxKeys.all(userId), "send"],
     mutationFn: async (mail: SendMailRequest) =>
-      (
-        await request(
-          "/v1/mailbox/send",
-          SendMailResponseSchema,
-          json("POST", mail),
-          MailErrorResponseSchema,
-        )
-      ).data,
+      (await dxClient.call(SendMailEndpoint, { body: mail })).data,
     onSuccess: () =>
       client.invalidateQueries({ queryKey: mailboxKeys.all(userId) }),
   });

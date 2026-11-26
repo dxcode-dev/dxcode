@@ -1090,8 +1090,8 @@ export const runDxDeploy = async ({
   }
   // The dx Mail: a new deployment chooses its mail domain (or keeps the
   // one DX_DEPLOYMENT_MAIL_DOMAIN named); `--mail` turns it on, moves it, or
-  // turns it off, which removes Email Routing, Email Sending, and the DMARC
-  // record from the zone; an existing deployment deployed with
+  // turns it off, which removes Email Routing and Email Sending from the zone
+  // and keeps its DMARC record; an existing deployment deployed with
   // DX_DEPLOYMENT_MAIL_DOMAIN saves that domain so later deploys keep it.
   if (existing === undefined || mailFlag) {
     const { mailDomain: _previous, ...rest } = config;
@@ -1103,7 +1103,7 @@ export const runDxDeploy = async ({
     if (mailDomain === undefined && currentMailDomain !== undefined) {
       environment.DX_DEPLOYMENT_MAIL_OFF = "1";
       stdout.write(
-        `The dx Mail turns off: this deploy removes Email Routing, Email Sending, and the DMARC record from ${currentMailDomain}. Stored mail is kept.\n`,
+        `The dx Mail turns off: this deploy removes Email Routing and Email Sending from ${currentMailDomain} and keeps its DMARC record. Stored mail is kept.\n`,
       );
     }
     config = validateSelfhostConfig({

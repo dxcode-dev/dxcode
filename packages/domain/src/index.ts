@@ -514,6 +514,7 @@ export {
   PersonalTerminalAppearance,
   PersonalTerminalTheme,
   PersonalTextSize,
+  PersonalThreadView,
   PersonalThreadWidth,
   personalAccountDisplayNameProblem,
   personalAccountUsernameChangeAvailable,

@@ -1,14 +1,11 @@
 # Core /v1 routes no dx client calls through an endpoint in @dx/api yet.
 # Move a route out of this list by defining its endpoint (wiki/headless-client.md).
 # Never add a line: a new route gets an endpoint, or goes in non-client-routes.txt.
-DELETE /v1/mailbox/labels/:id
-DELETE /v1/settings/personal/model-routing/profile/modes/:mode
 DELETE /v1/settings/personal/model-routing/subscriptions/connections/:connectionId
 DELETE /v1/settings/personal/plugin-bundles/:pluginId
 DELETE /v1/settings/personal/plugin-bundles/:pluginId/share
 DELETE /v1/settings/personal/plugin-catalogs/:catalogId
 DELETE /v1/settings/personal/skills/:skillId
-DELETE /v1/settings/workspaces/:workspaceSlug/model-routing/profile/modes/:mode
 DELETE /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId
 DELETE /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/share
 DELETE /v1/settings/workspaces/:workspaceSlug/plugin-catalogs/:catalogId
@@ -21,22 +18,12 @@ GET /v1/bug-reports/:id
 GET /v1/bug-reports/:id/files/:name
 GET /v1/bug-reports/access
 GET /v1/bug-reports/all
-GET /v1/deployment-admin
-GET /v1/deployment-admin/users/lookup
 GET /v1/huddle-links/:workspace/:code
-GET /v1/mailbox
-GET /v1/mailbox/conversations
-GET /v1/mailbox/conversations/:key
-GET /v1/mailbox/messages/:id/attachments/:index
-GET /v1/onboarding
 GET /v1/plugin-streams/producer
 GET /v1/plugins/icons/lucide/:name
 GET /v1/plugins/views
 GET /v1/plugins/views/:plugin/pages/:page
 GET /v1/realtime
-GET /v1/settings/personal/model-routing/choices
-GET /v1/settings/personal/model-routing/graph
-GET /v1/settings/personal/model-routing/profile
 GET /v1/settings/personal/model-routing/subscriptions
 GET /v1/settings/personal/plugin-bundles
 GET /v1/settings/personal/plugin-bundles/:pluginId/export
@@ -49,10 +36,6 @@ GET /v1/settings/personal/skills
 GET /v1/settings/personal/skills/:skillId/export
 GET /v1/settings/personal/skills/:skillId/files
 GET /v1/settings/personal/skills/discover
-GET /v1/settings/personal/space-agent-model
-GET /v1/settings/workspaces/:workspaceSlug/model-routing/choices
-GET /v1/settings/workspaces/:workspaceSlug/model-routing/graph
-GET /v1/settings/workspaces/:workspaceSlug/model-routing/profile
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/export
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/host-usage
@@ -75,9 +58,6 @@ GET /v1/threads/:threadId/storage/:fileId/:name
 GET /v1/threads/:threadId/terminal
 HEAD /v1/threads/:threadId/storage/:fileId
 HEAD /v1/threads/:threadId/storage/:fileId/:name
-PATCH /v1/mailbox/conversations/:key
-PATCH /v1/mailbox/labels/:id
-PATCH /v1/mailbox/settings
 PATCH /v1/settings/personal/plugin-bundles/:pluginId
 PATCH /v1/settings/personal/skills/:skillId
 PATCH /v1/settings/personal/skills/policy
@@ -87,9 +67,6 @@ PATCH /v1/settings/workspaces/:workspaceSlug/skills/policy
 POST /v1/agents/dx/:id
 POST /v1/bug-reports
 POST /v1/bug-reports/:id/investigation
-POST /v1/deployment-admin/users/:userId/username-change/reset
-POST /v1/mailbox/labels
-POST /v1/mailbox/send
 POST /v1/plugins/views/:plugin/pages/:page/messages
 POST /v1/settings/personal/model-routing/subscriptions/:provider/authorize
 POST /v1/settings/personal/model-routing/subscriptions/authorization/:authorizationId/poll
@@ -140,14 +117,9 @@ POST /v1/threads/:threadId/huddle/link
 POST /v1/threads/:threadId/orb/fault
 POST /v1/threads/:threadId/terminal/close
 POST /v1/threads/:threadId/terminal/warm
-PUT /v1/deployment-admin/users/:userId/mail-sending
-PUT /v1/onboarding
-PUT /v1/settings/personal/model-routing/profile/modes/:mode
 PUT /v1/settings/personal/plugin-bundles/:pluginId/dev
 PUT /v1/settings/personal/plugin-bundles/:pluginId/settings
 PUT /v1/settings/personal/plugin-bundles/policy
-PUT /v1/settings/personal/space-agent-model
-PUT /v1/settings/workspaces/:workspaceSlug/model-routing/profile/modes/:mode
 PUT /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/dev
 PUT /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/settings
 PUT /v1/settings/workspaces/:workspaceSlug/plugin-bundles/policy

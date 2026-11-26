@@ -881,7 +881,7 @@ if (mail !== undefined) {
 } else
   console.log(
     process.env.DX_DEPLOYMENT_MAIL_OFF === "1"
-      ? "dx Mail: turning off (removes Email Routing, Email Sending, and the DMARC record from its zone)"
+      ? "dx Mail: turning off (removes Email Routing and Email Sending from its zone, and keeps its DMARC record)"
       : "dx Mail: off",
   );
 

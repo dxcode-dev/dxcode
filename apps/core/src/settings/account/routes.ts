@@ -27,6 +27,7 @@ import {
   type PersonalTerminalAppearance,
   type PersonalTerminalTheme,
   type PersonalTextSize,
+  type PersonalThreadView,
   type PersonalThreadWidth,
   personalAccountDisplayNameProblem,
   personalAccountUsernameChangeAvailable,
@@ -106,6 +107,7 @@ const responseData = (account: {
   readonly terminalTheme: PersonalTerminalTheme;
   readonly textSize: PersonalTextSize;
   readonly threadWidth: PersonalThreadWidth;
+  readonly threadView: PersonalThreadView;
   readonly terminalAppearance: PersonalTerminalAppearance;
   readonly codeFontFamily: string | null;
   readonly codeFontSize: string | null;
@@ -125,6 +127,7 @@ const responseData = (account: {
   terminalTheme: account.terminalTheme,
   textSize: account.textSize,
   threadWidth: account.threadWidth,
+  threadView: account.threadView,
   terminalAppearance: account.terminalAppearance,
   codeFontFamily: account.codeFontFamily,
   codeFontSize: account.codeFontSize,

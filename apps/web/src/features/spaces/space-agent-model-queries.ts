@@ -1,5 +1,10 @@
+import { GetSpaceAgentModelEndpoint } from "@dx/api";
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
-import { getSpaceAgentModel } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
+
+/** Settings → Models → Space: the model new Spaces run on, and its route. */
+const getSpaceAgentModel = async (signal?: AbortSignal) =>
+  (await dxClient.call(GetSpaceAgentModelEndpoint, {}, { signal })).data;
 
 /** Models → Space: the model new Spaces run on, and where they'd run. */
 export const spaceAgentModelQueryOptions = (identity: string) =>

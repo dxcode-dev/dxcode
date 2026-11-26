@@ -23,6 +23,7 @@ import {
   OnboardingFrame,
   ProjectsStep,
   type ProviderStatus,
+  ThreadViewStep,
   WelcomeStep,
 } from "./features/onboarding/onboarding.js";
 import { markOnboardingMutationOptions } from "./features/onboarding/onboarding-queries.js";
@@ -52,6 +53,7 @@ import { useAuthenticatedIdentity } from "./shared/auth/auth-context.js";
 import { useEventSubscription } from "./shared/hooks/use-event-subscription.js";
 import { AppFrame } from "./shared/layout/app-frame.js";
 import { settingsNavigationState } from "./shared/navigation/settings-return.js";
+import { ThreadViewPicker } from "./shared/theme/thread-view-picker.js";
 import { Button } from "./shared/ui/button.js";
 // The connect dialogs' styles load with the Models & Routing page.
 import "./features/settings/model-routing/model-routing.css";
@@ -74,7 +76,7 @@ const NewProject = lazyRouteComponent(
 /** Where `/welcome?step=` opens; the home checklist links to model and code. */
 export type WelcomeStepName = "model" | "code";
 
-type Step = "intro" | "model" | "code" | "thread";
+type Step = "intro" | "model" | "code" | "view" | "thread";
 
 const repositoryIcon = (
   provider: React.ComponentProps<typeof ProjectRepositoryIcon>["provider"],
@@ -286,6 +288,7 @@ export function WelcomePage() {
     intro: workspace === undefined ? undefined : "Workspace",
     model: "Model",
     code: workspace === undefined ? "Code" : "Project",
+    view: "View",
     thread: "First thread",
   };
 
@@ -431,11 +434,11 @@ export function WelcomePage() {
       ? chosen !== undefined
       : ownProject !== undefined;
     footer = actions(
-      <Button disabled={!ready} onClick={() => setStep("thread")}>
+      <Button disabled={!ready} onClick={() => setStep("view")}>
         Continue
       </Button>,
       <>
-        <Button variant="ghost" onClick={() => setStep("thread")}>
+        <Button variant="ghost" onClick={() => setStep("view")}>
           Skip for now
         </Button>
         <Button variant="outline" onClick={() => setDialog("project")}>
@@ -443,8 +446,14 @@ export function WelcomePage() {
         </Button>
       </>,
     );
-  } else {
+  } else if (step === "view") {
     onBack = back("code");
+    content = <ThreadViewStep picker={<ThreadViewPicker size="lg" />} />;
+    footer = actions(
+      <Button onClick={() => setStep("thread")}>Continue</Button>,
+    );
+  } else {
+    onBack = back("view");
     content = (
       <FirstThreadStep
         project={projectChosen?.name}

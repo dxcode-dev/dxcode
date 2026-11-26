@@ -18,6 +18,8 @@ import {
 import { ArrowDown } from "lucide-react";
 import * as React from "react";
 import { lazyComponent } from "../../shared/stale-chunk.js";
+import { useTheme } from "../../shared/theme/theme-provider.js";
+import type { ThreadView } from "../../shared/theme/theme-store.js";
 import { Button } from "../../shared/ui/button.js";
 import { MessageActions } from "./message-actions.js";
 import { MessageImageTiles } from "./message-attachments-ui.js";
@@ -720,6 +722,11 @@ function useTranscriptViewport({
 }: {
   readonly active?: boolean;
   readonly defaultWorkExpanded?: boolean;
+  /**
+   * Detailed shows every step; Simple only what the agent showed and its
+   * answer. Defaults to the person's Appearance → Thread View.
+   */
+  readonly threadView?: ThreadView;
   readonly model: TranscriptViewModel;
   readonly header?: React.ReactNode;
   readonly pinnedContent?: React.ReactNode;
@@ -1181,6 +1188,7 @@ export function TranscriptViewport(
     pinnedContent,
     footer,
     defaultWorkExpanded = false,
+    threadView: requestedThreadView,
     showProcessingIndicator = true,
     loadingOlder = false,
     loadOlder,
@@ -1214,6 +1222,8 @@ export function TranscriptViewport(
     endAfterWindowRef,
     newerSentinelRef,
   } = useTranscriptViewport(props);
+  const theme = useTheme();
+  const threadView = requestedThreadView ?? theme.threadView;
   // A prompt picked from the outline that the transcript had not loaded:
   // history opens at it, then the transcript scrolls to it like a link.
   const [outlineTarget, setOutlineTarget] = React.useState<{
@@ -1344,6 +1354,7 @@ export function TranscriptViewport(
                   <div ref={measureTurn} data-index={item.index}>
                     <TranscriptTurn
                       defaultWorkExpanded={defaultWorkExpanded}
+                      view={threadView}
                       turn={turn}
                       rows={rows}
                       processing={

@@ -751,16 +751,23 @@ describe("D1 migration", () => {
 
     await expect(
       env.DB.prepare(
-        "SELECT text_size, thread_width FROM personal_account WHERE user_id = ?",
+        "SELECT text_size, thread_width, thread_view FROM personal_account WHERE user_id = ?",
       )
         .bind("migration-profile-user")
         .first(),
-    ).resolves.toEqual({ text_size: "default", thread_width: "default" });
+    ).resolves.toEqual({
+      text_size: "default",
+      thread_width: "default",
+      // A new account starts on Simple.
+      thread_view: "simple",
+    });
     for (const [column, value] of [
       ["text_size", "small"],
       ["text_size", "larger"],
       ["thread_width", "narrow"],
       ["thread_width", "full"],
+      ["thread_view", "simple"],
+      ["thread_view", "detailed"],
     ] as const) {
       await expect(
         env.DB.prepare(
@@ -818,7 +825,7 @@ describe("D1 migration", () => {
           .bind(value, "migration-profile-user")
           .run(),
       ).rejects.toBeDefined();
-    for (const column of ["text_size", "thread_width"]) {
+    for (const column of ["text_size", "thread_width", "thread_view"]) {
       await expect(
         env.DB.prepare(
           `UPDATE personal_account SET ${column} = ? WHERE user_id = ?`,
