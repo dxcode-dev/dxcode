@@ -22,7 +22,7 @@ export function ClaudePlanLimitCard({
   const { title, message } = claudePlanLimitCopy(limit, subject);
   return (
     <div className="thread-error-row">
-      <aside className="thread-error-card" role="alert" data-kind="claude-plan">
+      <div className="thread-error-card" role="alert" data-kind="claude-plan">
         <ClaudeIcon />
         <div className="thread-error-copy">
           <strong>{title}</strong>
@@ -48,7 +48,7 @@ export function ClaudePlanLimitCard({
         >
           <X />
         </Button>
-      </aside>
+      </div>
     </div>
   );
 }

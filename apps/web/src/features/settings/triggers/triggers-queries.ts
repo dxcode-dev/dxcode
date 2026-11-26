@@ -3,9 +3,13 @@ import type {
   PluginTriggerData,
   TriggerPluginCapabilityData,
 } from "@dx/api";
+import { ListPluginTriggersEndpoint } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import { listPluginTriggers } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
+
+export const listPluginTriggers = async (signal?: AbortSignal) =>
+  (await dxClient.call(ListPluginTriggersEndpoint, {}, { signal })).data;
 
 export type {
   EnvironmentVariableData,

@@ -34,7 +34,9 @@ import {
   Timestamp,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { ThreadConversationModeSchema } from "./thread-chat.js";
+import { ThreadNotFoundResponseSchema } from "./thread-not-found-response.js";
 import {
   ThreadParticipantDataSchema,
   ThreadSharingDataSchema,
@@ -264,6 +266,15 @@ export const RetryInitialDispatchResponseSchema = Schema.Struct({
       failureCode: ThreadInitialDispatchFailureCodeSchema,
     }),
   ]),
+});
+
+export const RetryInitialDispatchEndpoint = defineEndpoint({
+  id: "threads.retryInitialDispatch",
+  method: "POST",
+  path: "/v1/threads/:threadId/initial-dispatch/retry",
+  params: Schema.Struct({ threadId: ThreadIdSchema }),
+  success: RetryInitialDispatchResponseSchema,
+  refusals: [{ status: 404, schema: ThreadNotFoundResponseSchema }],
 });
 
 export const ThreadPluginAgentDataSchema = Schema.Struct({

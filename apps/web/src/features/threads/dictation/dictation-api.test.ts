@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runDictation } from "./dictation-api.js";
 
-vi.mock("../../../shared/same-origin-fetch.js", () => ({
-  sameOriginFetch: vi.fn(),
-}));
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("dictation error responses", () => {
   it.each([
@@ -29,7 +28,8 @@ describe("dictation error responses", () => {
   ])(
     "preserves typed errors and hides malformed responses",
     async (response, expected) => {
-      vi.mocked(sameOriginFetch).mockResolvedValueOnce(response);
+      const fetch = vi.fn().mockResolvedValueOnce(response);
+      vi.stubGlobal("fetch", fetch);
       await expect(
         runDictation({
           audio: new Blob(),
@@ -37,6 +37,13 @@ describe("dictation error responses", () => {
           signal: new AbortController().signal,
         }),
       ).rejects.toThrow(expected);
+      expect(fetch).toHaveBeenCalledWith(
+        "/v1/dictation/test-job",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({ "content-type": "audio/wav" }),
+        }),
+      );
     },
   );
 });

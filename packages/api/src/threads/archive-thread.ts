@@ -1,7 +1,9 @@
 import { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import { ThreadDataSchema } from "./thread-data.js";
+import { ThreadNotFoundResponseSchema } from "./thread-not-found-response.js";
 
 export const ArchiveThreadParamsSchema = Schema.Struct({ threadId: ThreadId });
 export const ArchiveThreadRequestSchema = Schema.Struct({
@@ -67,3 +69,21 @@ export type ArchiveThreadNotFoundResponse =
 export type ArchiveThreadPersistenceUnavailableResponse =
   typeof ArchiveThreadPersistenceUnavailableResponseSchema.Type;
 export type ThreadArchivedResponse = typeof ThreadArchivedResponseSchema.Type;
+
+export const ArchiveThreadEndpoint = defineEndpoint({
+  id: "threads.archive",
+  method: "PATCH",
+  path: "/v1/threads/:threadId/archive",
+  params: ArchiveThreadParamsSchema,
+  body: ArchiveThreadRequestSchema,
+  success: ArchiveThreadResponseSchema,
+  refusals: [
+    { status: 400, schema: ArchiveThreadInvalidRequestResponseSchema },
+    { status: 404, schema: ArchiveThreadNotFoundResponseSchema },
+    { status: 409, schema: ArchiveThreadOrbRemovedResponseSchema },
+    { status: 503, schema: ArchiveThreadPersistenceUnavailableResponseSchema },
+    { status: 409, schema: ArchiveThreadProjectDeletedResponseSchema },
+    // A Space's Thread while Spaces are off (hideSpaceThreads).
+    { status: 404, schema: ThreadNotFoundResponseSchema },
+  ],
+});

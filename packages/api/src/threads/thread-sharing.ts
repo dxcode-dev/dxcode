@@ -1,5 +1,6 @@
 import { ThreadId, Timestamp, UserId } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { successResponse } from "../http/response.js";
 
 /** What the owner granted the workspace. */
@@ -114,4 +115,17 @@ export const ThreadSharingErrorResponseSchema = Schema.Struct({
     message: Schema.String,
     requestId: Schema.String,
   }),
+});
+
+export const UpdateThreadSharingEndpoint = defineEndpoint({
+  id: "threads.updateSharing",
+  method: "PUT",
+  path: "/v1/threads/:threadId/sharing",
+  params: UpdateThreadSharingParamsSchema,
+  body: UpdateThreadSharingRequestSchema,
+  success: UpdateThreadSharingResponseSchema,
+  refusals: [400, 403, 404, 409, 503].map((status) => ({
+    status,
+    schema: ThreadSharingErrorResponseSchema,
+  })),
 });

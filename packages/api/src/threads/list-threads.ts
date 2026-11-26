@@ -1,9 +1,11 @@
 import { ModeId, ModelId, PageCursor, ProjectId, ThreadId } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { PageLimitQuerySchema } from "../http/page-limit-query.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import { ThreadChangesSummarySchema } from "./changes.js";
 import { ThreadDataSchema } from "./thread-data.js";
+import { ThreadSharingErrorResponseSchema } from "./thread-sharing.js";
 
 export const ThreadChildActivitySchema = Schema.Struct({
   working: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -38,11 +40,13 @@ export const ThreadListItemSchema = Schema.Struct({
 
 export type ThreadListItem = typeof ThreadListItemSchema.Type;
 
+/**
+ * Fields in the order a client writes them into the URL, so the shell's
+ * `threads` part (`SHELL_PARTS`) matches the web's first list read.
+ */
 export const ListThreadsQuerySchema = Schema.Struct({
-  projectId: Schema.optional(ProjectId),
-  lifecycleState: Schema.optional(Schema.Literals(["active", "archived"])),
-  cursor: Schema.optional(PageCursor),
   limit: Schema.optional(PageLimitQuerySchema),
+  lifecycleState: Schema.optional(Schema.Literals(["active", "archived"])),
   /**
    * `true` lists only Threads not listed under a parent, each with its
    * `childCount`, and the response's `children` lists their children. Not
@@ -51,6 +55,8 @@ export const ListThreadsQuerySchema = Schema.Struct({
   roots: Schema.optional(Schema.Literal("true")),
   /** Lists the child Threads listed directly under one root. */
   parentThreadId: Schema.optional(ThreadId),
+  projectId: Schema.optional(ProjectId),
+  cursor: Schema.optional(PageCursor),
 }).check(
   Schema.makeFilter((query) =>
     query.roots !== undefined && query.parentThreadId !== undefined
@@ -93,3 +99,23 @@ export type ListThreadsPersistenceUnavailableResponse =
 export const ListSharedThreadsResponseSchema = successResponse(
   Schema.Struct({ items: Schema.Array(ThreadListItemSchema) }),
 );
+
+export const ListThreadsEndpoint = defineEndpoint({
+  id: "threads.list",
+  method: "GET",
+  path: "/v1/threads",
+  query: ListThreadsQuerySchema,
+  success: ListThreadsResponseSchema,
+  refusals: [
+    { status: 400, schema: ListThreadsInvalidRequestResponseSchema },
+    { status: 503, schema: ListThreadsPersistenceUnavailableResponseSchema },
+  ],
+});
+
+export const ListSharedThreadsEndpoint = defineEndpoint({
+  id: "threads.listShared",
+  method: "GET",
+  path: "/v1/shared-threads",
+  success: ListSharedThreadsResponseSchema,
+  refusals: [{ status: 503, schema: ThreadSharingErrorResponseSchema }],
+});

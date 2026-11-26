@@ -6,12 +6,9 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
-  createPluginTrigger: vi.fn(),
-  listPluginTriggers: vi.fn(),
   listSkills: vi.fn(),
   previewSkill: vi.fn(),
   removeSkill: vi.fn(),
-  revokePluginTrigger: vi.fn(),
 }));
 
 vi.mock("../../../shared/api/client.js", async (importOriginal) => ({
@@ -109,6 +106,36 @@ const historyEvent = (id: string) => ({
   requestId: `request-${id}`,
   occurredAt: "2026-08-25T10:00:00.000Z",
 });
+
+const triggerId = "trg_00000000-0000-4000-8000-000000000000";
+
+const pluginTrigger = {
+  id: triggerId,
+  pluginId: "plg_00000000-0000-4000-8000-000000000000",
+  pluginName: "deploys",
+  pluginDisplayName: "Deploys",
+  pluginVersion: "1.0.0",
+  source: "webhook",
+  sourceLabel: "Webhook",
+  capabilityName: "deploy",
+  event: "deploy.finished",
+  action: "deploy",
+  permission: "trigger-delivery",
+  idempotent: true,
+  status: "active",
+  hmacConfigured: false,
+  createdAt: "2026-08-25T10:00:00.000Z",
+  updatedAt: "2026-08-25T10:00:00.000Z",
+  rotatedAt: "2026-08-25T10:00:00.000Z",
+  deliverySummary: {
+    pending: 0,
+    inFlight: 0,
+    succeeded: 0,
+    deadLetter: 0,
+    cancelled: 0,
+  },
+  deliveries: [],
+};
 
 const userId = "usr_test" as never;
 const personal = { scope: "personal" } as const;
@@ -242,10 +269,13 @@ describe("runtime settings data ownership", () => {
       .getMutationCache()
       .build(client, skillsMutationOptions(client, userId, personal))
       .execute({ type: "remove", skillId: "skl_test" as never });
+    answer("DELETE", `/v1/settings/personal/triggers/${triggerId}`, {
+      revokedTriggerId: triggerId,
+    });
     await client
       .getMutationCache()
       .build(client, triggersMutationOptions(client, userId))
-      .execute({ type: "revoke", triggerId: "trg_test" as never });
+      .execute({ type: "revoke", triggerId: triggerId as never });
 
     for (const key of [
       environmentKey,
@@ -304,10 +334,12 @@ describe("runtime settings data ownership", () => {
   it("removes environment secret inputs and trigger capabilities after delivery", async () => {
     const client = new QueryClient();
     const secret = "environment-secret-input";
-    const capability = "one-time-trigger-capability";
+    const capability = `dxt_${"a".repeat(43)}`;
     answer("POST", environmentPath, environmentVariable("TOKEN"));
-    api.createPluginTrigger.mockResolvedValueOnce({
-      capability: { secret: capability },
+    const capabilityUrl = `https://dx.example/api/triggers/${triggerId}/${capability}`;
+    answer("POST", "/v1/settings/personal/triggers", {
+      trigger: pluginTrigger,
+      capability: { capabilityUrl, token: capability },
     });
 
     const environmentObserver = new MutationObserver(
@@ -329,10 +361,17 @@ describe("runtime settings data ownership", () => {
     );
     const triggerAction: TriggerCapabilityAction = {
       type: "create",
-      input: {} as never,
+      input: {
+        pluginId: pluginTrigger.pluginId,
+        pluginVersion: pluginTrigger.pluginVersion,
+        capabilityName: pluginTrigger.capabilityName,
+      } as never,
     };
     const deliveredTrigger = await triggerObserver.mutate(triggerAction);
-    expect(deliveredTrigger).toEqual({ capability: { secret: capability } });
+    expect(deliveredTrigger.capability).toEqual({
+      capabilityUrl,
+      token: capability,
+    });
     triggerObserver.reset();
 
     await vi.waitFor(() => expect(mutationData(client)).toEqual([]));

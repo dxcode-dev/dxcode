@@ -1,19 +1,13 @@
 import {
-  AcceptWorkspaceInviteResponseSchema,
+  ArchiveThreadEndpoint,
   ArchiveThreadInvalidRequestResponseSchema,
   ArchiveThreadNotFoundResponseSchema,
   ArchiveThreadPersistenceUnavailableResponseSchema,
   ArchiveThreadProjectDeletedResponseSchema,
-  ArchiveThreadResponseSchema,
   BeginPersonalModelSubscriptionAuthorizationResponseSchema,
-  CatalogResponseSchema,
   ChoicesResponseSchema,
-  type ConnectionData,
-  ConnectionResponseSchema,
-  type CreateConnectionRequestSchema,
   type CreateExternalApiApplicationRequest,
   CreateExternalApiApplicationResponseSchema,
-  CreatePluginTriggerResponseSchema,
   CreateProjectForbiddenResponseSchema,
   CreateProjectInvalidRequestResponseSchema,
   CreateProjectNameConflictResponseSchema,
@@ -35,43 +29,35 @@ import {
   CreateThreadProjectlessForbiddenResponseSchema,
   CreateThreadProjectNotFoundResponseSchema,
   CreateThreadRunnerUnavailableResponseSchema,
-  type CreateWorkspaceInviteLinkRequest,
-  DeleteConnectionResponseSchema,
   DeleteProjectInvalidRequestResponseSchema,
   DeleteProjectNameMismatchResponseSchema,
   DeleteProjectNotFoundResponseSchema,
   DeleteProjectPersistenceUnavailableResponseSchema,
+  DeleteThreadEndpoint,
   DeleteThreadInvalidRequestResponseSchema,
   DeleteThreadNotFoundResponseSchema,
   DeleteThreadPersistenceUnavailableResponseSchema,
-  DeleteThreadResponseSchema,
-  type DeleteWorkspaceRequest,
-  DeleteWorkspaceResponseSchema,
   DisconnectPersonalModelSubscriptionResponseSchema,
   type ExternalApiApplicationAuditEventData,
   type ExternalApiApplicationData,
   ExternalApiApplicationsErrorResponseSchema,
+  FollowThreadEndpoint,
   GetSidebarLayoutEndpoint,
   GetSpaceAgentModelResponseSchema,
   GetThreadDraftEndpoint,
-  GetThreadListItemResponseSchema,
-  GetThreadMembersResponseSchema,
+  GetThreadEndpoint,
+  GetThreadListItemEndpoint,
+  GetThreadMembersEndpoint,
   GetThreadPaneLayoutEndpoint,
-  GetThreadReadinessResponseSchema,
-  GetThreadResponseSchema,
+  GetThreadReadinessEndpoint,
   GetWorkspaceDraftEndpoint,
   GraphResponseSchema,
   IntegrationsErrorResponseSchema,
-  LeaveWorkspaceResponseSchema,
-  ListConnectionsResponseSchema,
   ListExternalApiApplicationAuditResponseSchema,
   ListExternalApiApplicationsResponseSchema,
   ListPersonalModelSubscriptionsResponseSchema,
-  ListPluginTriggersResponseSchema,
-  ListSharedThreadsResponseSchema,
-  ListThreadsResponseSchema,
-  ListWorkspaceInviteLinksResponseSchema,
-  ListWorkspaceMembersResponseSchema,
+  ListSharedThreadsEndpoint,
+  ListThreadsEndpoint,
   MarkThreadSeenEndpoint,
   ModelRoutingErrorResponseSchema,
   PersonalAccountPersistenceUnavailableResponseSchema,
@@ -81,7 +67,6 @@ import {
   PersonalModelSubscriptionUnavailableResponseSchema,
   PinThreadEndpoint,
   PluginBundlesErrorResponseSchema,
-  PluginTriggersErrorResponseSchema,
   PollPersonalModelSubscriptionAuthorizationResponseSchema,
   ProfileResponseSchema,
   type ProjectData,
@@ -90,20 +75,11 @@ import {
   ProjectOrbScriptsForbiddenResponseSchema,
   type PutModeRequestSchema,
   RefreshPersonalModelSubscriptionResponseSchema,
-  RemoveWorkspaceMemberResponseSchema,
-  type ReorderConnectionsRequestSchema,
-  ReorderConnectionsResponseSchema,
-  RetryInitialDispatchResponseSchema,
-  RetryPluginTriggerDeliveryResponseSchema,
+  RetryInitialDispatchEndpoint,
   RevokeExternalApiApplicationResponseSchema,
-  RevokePluginTriggerResponseSchema,
-  RevokeWorkspaceInviteLinkResponseSchema,
   RotateExternalApiApplicationResponseSchema,
-  RotatePluginTriggerResponseSchema,
   SearchThreadsEndpoint,
   type SearchThreadsItem,
-  type SetClaudePlanRequestSchema,
-  type SetConnectionEnabledRequestSchema,
   SetExternalApiApplicationStatusResponseSchema,
   type SidebarLayoutChoice,
   SkillsErrorResponseSchema,
@@ -115,42 +91,32 @@ import {
   ThreadDeletedResponseSchema,
   type ThreadDetailData,
   type ThreadDraftSlot,
-  ThreadFollowResponseSchema,
   ThreadIdUnavailableResponseSchema,
   type ThreadListItem,
   type ThreadPaneLayout,
   ThreadSharingErrorResponseSchema,
-  type UpdateConnectionRequestSchema,
+  UnfollowThreadEndpoint,
   type UpdateExternalApiApplicationRequest,
   UpdateExternalApiApplicationResponseSchema,
-  UpdatePluginTriggerStateResponseSchema,
   UpdateProjectNameConflictResponseSchema,
   UpdateSidebarLayoutEndpoint,
   type UpdateSpaceAgentModelRequestSchema,
   UpdateThreadDraftEndpoint,
+  UpdateThreadEndpoint,
   UpdateThreadPaneLayoutEndpoint,
   type UpdateThreadRequest,
-  UpdateThreadResponseSchema,
+  UpdateThreadSharingEndpoint,
   type UpdateThreadSharingRequest,
-  UpdateThreadSharingResponseSchema,
   UpdateWorkspaceDraftEndpoint,
   type WorkspaceDraftSlot,
-  WorkspaceInviteLinkResponseSchema,
-  WorkspaceInvitePreviewResponseSchema,
-  WorkspaceMemberResponseSchema,
-  WorkspaceMembersErrorResponseSchema,
   WorkspacePolicyErrorResponseSchema,
 } from "@dx/api";
-import { ApiError, createDxClient } from "@dx/client";
+import { ApiError, createDxClient, endpointPath } from "@dx/client";
 import type {
   EnvironmentVariableConfigReference,
   ExternalApiApplicationId,
   ExternalApiApplicationRotationOverlapSeconds,
   PageCursor,
-  PluginId,
-  PluginTriggerDeliveryId,
-  PluginTriggerId,
-  PluginVersion,
   ProjectId,
   ThreadId,
   WorkspacePermission,
@@ -161,7 +127,13 @@ import { noticeUnauthenticated } from "../auth/session-ended.js";
 import { observeRequest } from "../diagnostics/client-diagnostics.js";
 import { takeBootRead } from "../same-origin-fetch.js";
 
-export { ApiError };
+/**
+ * `endpointPath` for a WebSocket URL or `src`, and `createDxClient` for a
+ * feature with its own fetch. Feature code takes them from here, not from
+ * `@dx/client`, so `@dx/client` stays in this module's chunk instead of a
+ * chunk of its own on the Thread page's first load.
+ */
+export { ApiError, createDxClient, endpointPath };
 
 /**
  * The web's dx client: same-origin cookies, the boot's prefetched reads, and
@@ -282,7 +254,6 @@ export const request = async <
       Schema.Union([
         // Deployment admin's username reset sends it.
         PersonalAccountPersistenceUnavailableResponseSchema,
-        WorkspaceMembersErrorResponseSchema,
         // Skill routes send it too.
         WorkspacePolicyErrorResponseSchema,
         ExternalApiApplicationsErrorResponseSchema,
@@ -294,7 +265,6 @@ export const request = async <
         SkillsErrorResponseSchema,
         PluginBundlesErrorResponseSchema,
         IntegrationsErrorResponseSchema,
-        PluginTriggersErrorResponseSchema,
         CreateProjectInvalidRequestResponseSchema,
         CreateProjectNameConflictResponseSchema,
         CreateProjectPersistenceUnavailableResponseSchema,
@@ -406,70 +376,6 @@ export type PluginsTarget =
   | { readonly scope: "personal" }
   | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
 
-const pluginTriggersBase = "/v1/settings/personal/triggers";
-
-export const listPluginTriggers = async (signal?: AbortSignal) =>
-  (
-    await request(pluginTriggersBase, ListPluginTriggersResponseSchema, {
-      signal,
-    })
-  ).data;
-
-export const createPluginTrigger = async (input: {
-  readonly pluginId: PluginId;
-  readonly pluginVersion: PluginVersion;
-  readonly capabilityName: string;
-  readonly hmacSecretReference?: EnvironmentVariableConfigReference;
-}) =>
-  (
-    await request(pluginTriggersBase, CreatePluginTriggerResponseSchema, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
-  ).data;
-
-export const updatePluginTriggerState = async (
-  triggerId: PluginTriggerId,
-  status: "active" | "paused",
-) =>
-  (
-    await request(
-      `${pluginTriggersBase}/${encodeURIComponent(triggerId)}`,
-      UpdatePluginTriggerStateResponseSchema,
-      { method: "PATCH", body: JSON.stringify({ status }) },
-    )
-  ).data;
-
-export const rotatePluginTrigger = async (triggerId: PluginTriggerId) =>
-  (
-    await request(
-      `${pluginTriggersBase}/${encodeURIComponent(triggerId)}/rotate`,
-      RotatePluginTriggerResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-  ).data;
-
-export const revokePluginTrigger = async (triggerId: PluginTriggerId) =>
-  (
-    await request(
-      `${pluginTriggersBase}/${encodeURIComponent(triggerId)}`,
-      RevokePluginTriggerResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data.revokedTriggerId;
-
-export const retryPluginTriggerDelivery = async (
-  triggerId: PluginTriggerId,
-  deliveryId: PluginTriggerDeliveryId,
-) =>
-  (
-    await request(
-      `${pluginTriggersBase}/${encodeURIComponent(triggerId)}/deliveries/${encodeURIComponent(deliveryId)}/retry`,
-      RetryPluginTriggerDeliveryResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
-  ).data;
-
 export interface McpServerInput {
   readonly name: string;
   readonly endpoint: string;
@@ -508,14 +414,24 @@ export const listThreads = async (
   lifecycleState?: "active" | "archived",
   tree?: ThreadListTree,
 ): Promise<ThreadPage> => {
-  const query = new URLSearchParams({ limit: "100" });
-  if (lifecycleState !== undefined) query.set("lifecycleState", lifecycleState);
-  if (tree === "roots") query.set("roots", "true");
-  else if (tree !== undefined) query.set("parentThreadId", tree);
-  if (projectId !== undefined) query.set("projectId", projectId);
-  if (cursor !== undefined) query.set("cursor", cursor);
   return (
-    await request(`/v1/threads?${query}`, ListThreadsResponseSchema, { signal })
+    await dxClient.call(
+      ListThreadsEndpoint,
+      {
+        query: {
+          limit: 100,
+          ...(lifecycleState === undefined ? {} : { lifecycleState }),
+          ...(tree === "roots"
+            ? { roots: "true" as const }
+            : tree === undefined
+              ? {}
+              : { parentThreadId: tree }),
+          ...(projectId === undefined ? {} : { projectId }),
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+      },
+      { signal },
+    )
   ).data;
 };
 
@@ -562,13 +478,8 @@ export const markThreadSeen = async (threadId: ThreadId): Promise<void> => {
 
 /** Hands a new Thread's first message that failed to start to its agent again. */
 export const retryInitialDispatch = async (threadId: ThreadId) =>
-  (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/initial-dispatch/retry`,
-      RetryInitialDispatchResponseSchema,
-      { method: "POST" },
-    )
-  ).data;
+  (await dxClient.call(RetryInitialDispatchEndpoint, { params: { threadId } }))
+    .data;
 
 /** Snoozes the Thread until `snoozedUntil`, or wakes it when null. */
 export const setThreadSnoozed = async (
@@ -590,32 +501,26 @@ export const updateThread = async (
   update: UpdateThreadRequest,
 ): Promise<ThreadData> =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}`,
-      UpdateThreadResponseSchema,
-      { method: "PATCH", body: JSON.stringify(update) },
-    )
+    await dxClient.call(UpdateThreadEndpoint, {
+      params: { threadId },
+      body: update,
+    })
   ).data;
 
 export const listSharedThreads = async (
   signal?: AbortSignal,
 ): Promise<ReadonlyArray<ThreadListClientItem>> =>
-  (
-    await request("/v1/shared-threads", ListSharedThreadsResponseSchema, {
-      signal,
-    })
-  ).data.items;
+  (await dxClient.call(ListSharedThreadsEndpoint, {}, { signal })).data.items;
 
 export const updateThreadSharing = async (
   threadId: ThreadId,
   input: UpdateThreadSharingRequest,
 ) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/sharing`,
-      UpdateThreadSharingResponseSchema,
-      { method: "PUT", body: JSON.stringify(input) },
-    )
+    await dxClient.call(UpdateThreadSharingEndpoint, {
+      params: { threadId },
+      body: input,
+    })
   ).data;
 
 export const getThreadMembers = async (
@@ -623,9 +528,9 @@ export const getThreadMembers = async (
   signal?: AbortSignal,
 ) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/members`,
-      GetThreadMembersResponseSchema,
+    await dxClient.call(
+      GetThreadMembersEndpoint,
+      { params: { threadId } },
       { signal },
     )
   ).data.members;
@@ -635,10 +540,9 @@ export const setThreadFollowing = async (
   following: boolean,
 ) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/follow`,
-      ThreadFollowResponseSchema,
-      { method: following ? "PUT" : "DELETE" },
+    await dxClient.call(
+      following ? FollowThreadEndpoint : UnfollowThreadEndpoint,
+      { params: { threadId } },
     )
   ).data;
 
@@ -661,23 +565,19 @@ export const setThreadArchived = async (
   children?: true | ReadonlyArray<ThreadId>,
   reason?: "ship",
 ): Promise<ArchivedThread> => {
-  const response = await request(
-    `/v1/threads/${encodeURIComponent(threadId)}/archive`,
-    ArchiveThreadResponseSchema,
-    {
-      method: "PATCH",
-      body: JSON.stringify({
-        archived,
-        ...(children === undefined
-          ? {}
-          : {
-              includeChildren: true,
-              ...(children === true ? {} : { childThreadIds: children }),
-            }),
-        ...(reason === undefined ? {} : { reason }),
-      }),
+  const response = await dxClient.call(ArchiveThreadEndpoint, {
+    params: { threadId },
+    body: {
+      archived,
+      ...(children === undefined
+        ? {}
+        : {
+            includeChildren: true,
+            ...(children === true ? {} : { childThreadIds: children }),
+          }),
+      ...(reason === undefined ? {} : { reason }),
     },
-  );
+  });
   return {
     thread: response.data,
     ...(response.changedChildThreadIds === undefined
@@ -696,13 +596,10 @@ export const deleteThread = async (
   includeChildren = false,
 ) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}${
-        includeChildren ? "?includeChildren=true" : ""
-      }`,
-      DeleteThreadResponseSchema,
-      { method: "DELETE" },
-    )
+    await dxClient.call(DeleteThreadEndpoint, {
+      params: { threadId },
+      query: includeChildren ? { includeChildren: "true" } : {},
+    })
   ).data;
 
 /** One Thread's sidebar row, exactly as the requester's lists hold it. */
@@ -711,9 +608,9 @@ export const getThreadListItem = async (
   signal?: AbortSignal,
 ): Promise<ThreadListClientItem> =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/list-item`,
-      GetThreadListItemResponseSchema,
+    await dxClient.call(
+      GetThreadListItemEndpoint,
+      { params: { threadId } },
       { signal },
     )
   ).data;
@@ -723,9 +620,9 @@ export const getThreadReadiness = async (
   signal?: AbortSignal,
 ) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/readiness`,
-      GetThreadReadinessResponseSchema,
+    await dxClient.call(
+      GetThreadReadinessEndpoint,
+      { params: { threadId } },
       { signal },
     )
   ).data;
@@ -738,30 +635,6 @@ const modelRoutingBase = (target: ModelRoutingTarget) =>
   target.scope === "personal"
     ? "/v1/settings/personal/model-routing"
     : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/model-routing`;
-
-export const getModelCatalog = async (
-  target: ModelRoutingTarget,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(
-      `${modelRoutingBase(target)}/catalog`,
-      CatalogResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const listModelConnections = async (
-  target: ModelRoutingTarget,
-  signal?: AbortSignal,
-): Promise<ReadonlyArray<ConnectionData>> =>
-  (
-    await request(
-      `${modelRoutingBase(target)}/connections`,
-      ListConnectionsResponseSchema,
-      { signal },
-    )
-  ).data.connections;
 
 export const getModelRoutingGraph = async (
   target: ModelRoutingTarget,
@@ -883,133 +756,6 @@ export const resetWorkspaceProfileMode = async (
     )
   ).data;
 
-const workspaceSettingsBase = (workspaceSlug: WorkspaceSlug) =>
-  `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}`;
-
-export const listWorkspaceMembers = async (
-  workspaceSlug: WorkspaceSlug,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(
-      `${workspaceSettingsBase(workspaceSlug)}/members`,
-      ListWorkspaceMembersResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const updateWorkspaceMemberRole = async (
-  workspaceSlug: WorkspaceSlug,
-  userId: string,
-  role: "admin" | "member",
-) =>
-  (
-    await request(
-      `${workspaceSettingsBase(workspaceSlug)}/members/${encodeURIComponent(userId)}`,
-      WorkspaceMemberResponseSchema,
-      { method: "PATCH", body: JSON.stringify({ role }) },
-    )
-  ).data;
-
-export const removeWorkspaceMember = async (
-  workspaceSlug: WorkspaceSlug,
-  userId: string,
-) =>
-  (
-    await request(
-      `${workspaceSettingsBase(workspaceSlug)}/members/${encodeURIComponent(userId)}`,
-      RemoveWorkspaceMemberResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
-
-export const transferWorkspaceOwnership = async (
-  workspaceSlug: WorkspaceSlug,
-  userId: string,
-) =>
-  (
-    await request(
-      `${workspaceSettingsBase(workspaceSlug)}/members/${encodeURIComponent(userId)}/transfer-ownership`,
-      WorkspaceMemberResponseSchema,
-      { method: "POST" },
-    )
-  ).data;
-
-export const deleteWorkspace = async (
-  workspaceSlug: WorkspaceSlug,
-  input: DeleteWorkspaceRequest,
-) =>
-  (
-    await request(
-      `${workspaceSettingsBase(workspaceSlug)}/delete`,
-      DeleteWorkspaceResponseSchema,
-      { method: "POST", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const leaveWorkspace = async (workspaceSlug: WorkspaceSlug) =>
-  (
-    await request(
-      `${workspaceSettingsBase(workspaceSlug)}/leave`,
-      LeaveWorkspaceResponseSchema,
-      { method: "POST" },
-    )
-  ).data;
-
-export const listWorkspaceInviteLinks = async (
-  workspaceSlug: WorkspaceSlug,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(
-      `${workspaceSettingsBase(workspaceSlug)}/invite-links`,
-      ListWorkspaceInviteLinksResponseSchema,
-      { signal },
-    )
-  ).data.links;
-
-export const createWorkspaceInviteLink = async (
-  workspaceSlug: WorkspaceSlug,
-  input: CreateWorkspaceInviteLinkRequest,
-) =>
-  (
-    await request(
-      `${workspaceSettingsBase(workspaceSlug)}/invite-links`,
-      WorkspaceInviteLinkResponseSchema,
-      { method: "POST", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const revokeWorkspaceInviteLink = async (
-  workspaceSlug: WorkspaceSlug,
-  linkId: string,
-) =>
-  (
-    await request(
-      `${workspaceSettingsBase(workspaceSlug)}/invite-links/${encodeURIComponent(linkId)}`,
-      RevokeWorkspaceInviteLinkResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
-
-export const getWorkspaceInvite = async (token: string, signal?: AbortSignal) =>
-  (
-    await request(
-      `/api/invites/${encodeURIComponent(token)}`,
-      WorkspaceInvitePreviewResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const acceptWorkspaceInvite = async (token: string) =>
-  (
-    await request(
-      `/v1/invites/${encodeURIComponent(token)}/accept`,
-      AcceptWorkspaceInviteResponseSchema,
-      { method: "POST" },
-    )
-  ).data;
-
 const personalModelSubscriptionsBase =
   "/v1/settings/personal/model-routing/subscriptions";
 
@@ -1062,119 +808,15 @@ export const disconnectPersonalModelSubscription = async (
     )
   ).data;
 
-export const createModelConnection = async (
-  target: ModelRoutingTarget,
-  input: typeof CreateConnectionRequestSchema.Encoded,
-) =>
-  (
-    await request(
-      `${modelRoutingBase(target)}/connections`,
-      ConnectionResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify(input),
-      },
-    )
-  ).data;
-
-export const updateModelConnection = async (
-  target: ModelRoutingTarget,
-  connectionId: string,
-  input: typeof UpdateConnectionRequestSchema.Encoded,
-) =>
-  (
-    await request(
-      `${modelRoutingBase(target)}/connections/${encodeURIComponent(connectionId)}`,
-      ConnectionResponseSchema,
-      { method: "PATCH", body: JSON.stringify(input) },
-    )
-  ).data;
-
-export const setModelConnectionEnabled = async (
-  target: ModelRoutingTarget,
-  connectionId: string,
-  enabled: boolean,
-) =>
-  (
-    await request(
-      `${modelRoutingBase(target)}/connections/${encodeURIComponent(connectionId)}/enabled`,
-      ConnectionResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          enabled,
-        } satisfies typeof SetConnectionEnabledRequestSchema.Encoded),
-      },
-    )
-  ).data;
-
-export const setClaudePlanExtraUsage = async (
-  target: ModelRoutingTarget,
-  connectionId: string,
-  allowExtraUsage: boolean,
-) =>
-  (
-    await request(
-      `${modelRoutingBase(target)}/connections/${encodeURIComponent(connectionId)}/claude-plan`,
-      ConnectionResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          allowExtraUsage,
-        } satisfies typeof SetClaudePlanRequestSchema.Encoded),
-      },
-    )
-  ).data;
-
-export const checkModelConnectionAccess = async (
-  target: ModelRoutingTarget,
-  connectionId: string,
-) =>
-  (
-    await request(
-      `${modelRoutingBase(target)}/connections/${encodeURIComponent(connectionId)}/check-access`,
-      ConnectionResponseSchema,
-      { method: "POST" },
-    )
-  ).data;
-
-export const deleteModelConnection = async (
-  target: ModelRoutingTarget,
-  connectionId: string,
-) =>
-  (
-    await request(
-      `${modelRoutingBase(target)}/connections/${encodeURIComponent(connectionId)}`,
-      DeleteConnectionResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
-
-export const reorderModelConnections = async (
-  target: ModelRoutingTarget,
-  orderedIds: ReadonlyArray<string>,
-) =>
-  (
-    await request(
-      `${modelRoutingBase(target)}/connections/reorder`,
-      ReorderConnectionsResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          orderedIds,
-        } satisfies typeof ReorderConnectionsRequestSchema.Encoded),
-      },
-    )
-  ).data;
-
 export const getThread = async (
   threadId: string,
   signal?: AbortSignal,
 ): Promise<ThreadDetailData> =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}`,
-      GetThreadResponseSchema,
+    await dxClient.call(
+      GetThreadEndpoint,
+      // Callers pass a ThreadId; Core answers any other value as invalid.
+      { params: { threadId: threadId as ThreadId } },
       { signal },
     )
   ).data;

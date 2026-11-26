@@ -736,7 +736,7 @@ function ThreadErrorCard({
   const retryAction = onRetry !== undefined;
   return (
     <div className="thread-error-row">
-      <aside
+      <div
         className="thread-error-card"
         role="alert"
         data-kind={error.claudePlan ? "claude-plan" : undefined}
@@ -800,7 +800,7 @@ function ThreadErrorCard({
         >
           <X />
         </Button>
-      </aside>
+      </div>
     </div>
   );
 }

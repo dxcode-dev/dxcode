@@ -1,19 +1,33 @@
 import type { SettingsContextData, WorkspaceProfileData } from "@dx/api";
 import {
   CreateWorkspaceEndpoint,
+  DeleteWorkspaceEndpoint,
+  type DeleteWorkspaceRequest,
+  LeaveWorkspaceEndpoint,
   RemoveWorkspaceAvatarEndpoint,
   SetWorkspaceAvatarEndpoint,
   UpdateWorkspaceProfileEndpoint,
 } from "@dx/api";
 import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
-import {
-  deleteWorkspace,
-  dxClient,
-  leaveWorkspace,
-} from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { settingsKeys } from "../settings-context-queries.js";
 import { workspaceKeys } from "./workspace-queries.js";
+
+const deleteWorkspace = async (
+  workspaceSlug: WorkspaceSlug,
+  input: DeleteWorkspaceRequest,
+) =>
+  (
+    await dxClient.call(DeleteWorkspaceEndpoint, {
+      params: { workspaceSlug },
+      body: input,
+    })
+  ).data;
+
+const leaveWorkspace = async (workspaceSlug: WorkspaceSlug) =>
+  (await dxClient.call(LeaveWorkspaceEndpoint, { params: { workspaceSlug } }))
+    .data;
 
 const createWorkspace = async (input: {
   readonly displayName: string;

@@ -1,5 +1,6 @@
 import { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import { ThreadListItemSchema } from "./list-threads.js";
 
@@ -34,3 +35,19 @@ export const GetThreadListItemPersistenceUnavailableResponseSchema =
 
 export type GetThreadListItemResponse =
   typeof GetThreadListItemResponseSchema.Encoded;
+
+export const GetThreadListItemEndpoint = defineEndpoint({
+  id: "threads.getListItem",
+  method: "GET",
+  path: "/v1/threads/:threadId/list-item",
+  params: GetThreadListItemParamsSchema,
+  success: GetThreadListItemResponseSchema,
+  refusals: [
+    { status: 400, schema: GetThreadListItemInvalidRequestResponseSchema },
+    { status: 404, schema: GetThreadListItemNotFoundResponseSchema },
+    {
+      status: 503,
+      schema: GetThreadListItemPersistenceUnavailableResponseSchema,
+    },
+  ],
+});

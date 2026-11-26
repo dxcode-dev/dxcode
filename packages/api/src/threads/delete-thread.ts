@@ -1,6 +1,8 @@
 import { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
+import { ThreadNotFoundResponseSchema } from "./thread-not-found-response.js";
 
 export const DeleteThreadParamsSchema = Schema.Struct({ threadId: ThreadId });
 export const DeleteThreadQuerySchema = Schema.Struct({
@@ -57,3 +59,19 @@ export type DeleteThreadResponse = typeof DeleteThreadResponseSchema.Encoded;
 export type ThreadDeletedResponse = typeof ThreadDeletedResponseSchema.Type;
 export type ThreadIdUnavailableResponse =
   typeof ThreadIdUnavailableResponseSchema.Type;
+
+export const DeleteThreadEndpoint = defineEndpoint({
+  id: "threads.delete",
+  method: "DELETE",
+  path: "/v1/threads/:threadId",
+  params: DeleteThreadParamsSchema,
+  query: DeleteThreadQuerySchema,
+  success: DeleteThreadResponseSchema,
+  refusals: [
+    { status: 400, schema: DeleteThreadInvalidRequestResponseSchema },
+    { status: 404, schema: DeleteThreadNotFoundResponseSchema },
+    { status: 503, schema: DeleteThreadPersistenceUnavailableResponseSchema },
+    // A Space's Thread while Spaces are off (hideSpaceThreads).
+    { status: 404, schema: ThreadNotFoundResponseSchema },
+  ],
+});

@@ -1,30 +1,5 @@
-import {
-  type DictationJob,
-  DictationJobSchema,
-  ErrorAnswerMessageSchema,
-} from "@dx/api";
-import { Option, Schema } from "effect";
 import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
 import type { LiveDictation } from "./dictation-stream.js";
-
-const decodeJob = Schema.decodeUnknownPromise(DictationJobSchema);
-
-const readJob = async (response: Response): Promise<DictationJob> => {
-  if (!response.ok) {
-    const failure = Schema.decodeUnknownOption(ErrorAnswerMessageSchema)(
-      await response.json().catch(() => undefined),
-    );
-    throw new Error(
-      Option.isSome(failure)
-        ? failure.value.data.message
-        : "Dictation could not be completed.",
-    );
-  }
-  const body: unknown = await response.json().catch(() => undefined);
-  return decodeJob(body).catch(() => {
-    throw new Error("Dictation returned an invalid response.");
-  });
-};
 
 /**
  * The live session's transcript when it has one; otherwise the recording is
@@ -49,14 +24,8 @@ export const runDictation = async ({
   }
   const deadline = AbortSignal.timeout(59 * 60 * 1_000);
   const combined = AbortSignal.any([signal, deadline]);
-  let job = await readJob(
-    await sameOriginFetch(`/v1/dictation/${encodeURIComponent(id)}`, {
-      method: "POST",
-      body: audio,
-      headers: { "content-type": "audio/wav", accept: "application/json" },
-      signal: combined,
-    }),
-  );
+  const requests = await import("./dictation-mutations.js");
+  let job = await requests.createDictation(id, audio, combined);
   while (job.state === "processing") {
     await new Promise<void>((resolve, reject) => {
       combined.throwIfAborted();
@@ -70,18 +39,15 @@ export const runDictation = async ({
       };
       combined.addEventListener("abort", abort, { once: true });
     });
-    job = await readJob(
-      await sameOriginFetch(`/v1/dictation/${encodeURIComponent(id)}`, {
-        headers: { accept: "application/json" },
-        signal: combined,
-      }),
-    );
+    job = await requests.readDictation(id, combined);
   }
   if (job.state === "failed") throw new Error(job.error);
   if (!job.text.trim()) throw new Error("Dictation returned no speech.");
   return job.text;
 };
 
+// Answers 204 without a body, which `dxClient.call` cannot read yet; the
+// route stays legacy until it can.
 export const cancelDictationJob = (id: string) =>
   sameOriginFetch(`/v1/dictation/${encodeURIComponent(id)}`, {
     method: "DELETE",

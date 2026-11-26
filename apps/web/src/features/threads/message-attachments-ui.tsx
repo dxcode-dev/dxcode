@@ -1,4 +1,4 @@
-import type { MessageAttachment } from "@dx/api";
+import { isAttachmentFilePath, type MessageAttachment } from "@dx/api";
 import { Download, Paperclip } from "lucide-react";
 import * as React from "react";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
@@ -21,7 +21,7 @@ import {
 const attachmentHref = (url: string) => {
   try {
     const { pathname } = new URL(url, window.location.href);
-    return pathname.startsWith("/v1/attachments/att_") ? pathname : undefined;
+    return isAttachmentFilePath(pathname) ? pathname : undefined;
   } catch {
     return undefined;
   }

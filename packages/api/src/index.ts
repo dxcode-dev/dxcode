@@ -2,6 +2,7 @@ export * from "./artifacts/library.js";
 export * from "./artifacts/library-endpoints.js";
 export * from "./artifacts/standalone-artifact-endpoints.js";
 export * from "./attachments/index.js";
+export * from "./attachments/attachments-endpoints.js";
 export {
   type ForbiddenResponse,
   ForbiddenResponseSchema,
@@ -29,6 +30,8 @@ export * from "./bug-reports/bug-reports.js";
 export * from "./bug-reports/intake.js";
 export * from "./deployment-endpoints.js";
 export * from "./dictation/index.js";
+export * from "./dictation/dictation-endpoints.js";
+export * from "./dictation/dictation-stream-endpoints.js";
 export * from "./dictation/vocabulary-endpoints.js";
 export { dxEndpoints } from "./endpoints.js";
 export {
@@ -92,6 +95,7 @@ export * from "./settings/integrations.js";
 export * from "./settings/mcp-servers.js";
 export * from "./settings/mcp-servers-endpoints.js";
 export * from "./settings/model-routing.js";
+export * from "./settings/model-routing-endpoints.js";
 export * from "./settings/model-subscriptions.js";
 export * from "./settings/orb-providers.js";
 export * from "./settings/orb-providers-endpoints.js";
@@ -107,6 +111,7 @@ export * from "./settings/plugin-icons.js";
 export * from "./settings/plugin-icons-endpoints.js";
 export * from "./settings/plugin-jobs.js";
 export * from "./settings/plugin-triggers.js";
+export * from "./settings/plugin-triggers-endpoints.js";
 // Plugin views.
 export * from "./settings/plugin-views.js";
 export * from "./settings/project-defaults.js";
@@ -143,12 +148,16 @@ export * from "./threads/automation-change-endpoints.js";
 export * from "./threads/automations.js";
 export * from "./threads/automations-endpoints.js";
 export * from "./threads/changes.js";
+export * from "./threads/changes-endpoints.js";
+export * from "./threads/changes-events-endpoints.js";
 export * from "./threads/create-thread.js";
 export * from "./threads/delete-thread.js";
 export * from "./threads/desktop.js";
 export * from "./threads/edit-message.js";
 export * from "./threads/edit-message-endpoints.js";
 export * from "./threads/files.js";
+export * from "./threads/files-endpoints.js";
+export * from "./threads/files-sandbox-endpoints.js";
 export * from "./threads/get-thread.js";
 export * from "./threads/get-thread-list-item.js";
 export * from "./threads/get-thread-readiness.js";
@@ -184,6 +193,7 @@ export * from "./threads/terminal.js";
 export * from "./threads/thread-access-refusals.js";
 export * from "./threads/thread-artifact-endpoints.js";
 export * from "./threads/thread-chat.js";
+export * from "./threads/thread-member-endpoints.js";
 export * from "./threads/thread-data.js";
 export * from "./threads/thread-draft.js";
 export {

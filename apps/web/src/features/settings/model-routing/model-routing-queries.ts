@@ -1,14 +1,10 @@
-import type { ConnectionData } from "@dx/api";
-import { type QueryClient, queryOptions } from "@tanstack/react-query";
+import { queryOptions } from "@tanstack/react-query";
 import {
-  checkModelConnectionAccess,
-  getModelCatalog,
   getModelRoutingChoices,
   getModelRoutingGraph,
   getModeProfile,
   getWorkspaceModelRoutingChoices,
   getWorkspaceModeProfile,
-  listModelConnections,
   type ModelRoutingTarget,
 } from "../../../shared/api/client.js";
 
@@ -16,24 +12,6 @@ export const modelRoutingKey = (target: ModelRoutingTarget) =>
   target.scope === "personal"
     ? (["model-routing", "personal"] as const)
     : (["model-routing", "workspace", target.workspaceSlug] as const);
-
-export const modelConnectionsQueryOptions = (
-  target: ModelRoutingTarget,
-  identity: string,
-) =>
-  queryOptions({
-    queryKey: [...modelRoutingKey(target), "connections", identity],
-    queryFn: ({ signal }) => listModelConnections(target, signal),
-  });
-
-export const modelCatalogQueryOptions = (
-  target: ModelRoutingTarget,
-  identity: string,
-) =>
-  queryOptions({
-    queryKey: [...modelRoutingKey(target), "catalog", identity],
-    queryFn: ({ signal }) => getModelCatalog(target, signal),
-  });
 
 export const modelRoutingGraphQueryOptions = (
   target: ModelRoutingTarget,
@@ -66,34 +44,4 @@ export const modeProfileQueryOptions = (
       target.scope === "personal"
         ? getModeProfile(signal)
         : getWorkspaceModeProfile(target.workspaceSlug, signal),
-  });
-
-/**
- * A Claude Pro/Max plan's limits, read from Anthropic by the connection's
- * access check each time its panel opens or the owner refreshes it. The
- * connections list then shows the reading. The key sits outside
- * `modelRoutingKey`, so saving a setting does not read the plan again.
- */
-export const claudePlanRefreshQueryOptions = (
-  queryClient: QueryClient,
-  target: ModelRoutingTarget,
-  connectionId: string,
-) =>
-  queryOptions({
-    queryKey: ["claude-plan-refresh", target, connectionId],
-    queryFn: async () => {
-      const connection = await checkModelConnectionAccess(target, connectionId);
-      queryClient.setQueriesData<ReadonlyArray<ConnectionData>>(
-        { queryKey: [...modelRoutingKey(target), "connections"] },
-        (connections) =>
-          connections?.map((current) =>
-            current.id === connection.id ? connection : current,
-          ),
-      );
-      return connection;
-    },
-    gcTime: 0,
-    retry: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
   });

@@ -36,16 +36,16 @@ import type { ConnectionDialogSubmit } from "./connection-dialog.js";
 import { ConnectionRow } from "./connection-row.js";
 import { CopilotConnectDialog } from "./copilot-connect-dialog.js";
 import {
+  modelCatalogQueryOptions,
+  modelConnectionsQueryOptions,
+} from "./model-connection-queries.js";
+import {
   apiMessage,
   connectionMutationOptions,
   fieldErrorsOf,
   invalidateAllModelRouting,
 } from "./model-routing-mutations.js";
-import {
-  modelCatalogQueryOptions,
-  modelConnectionsQueryOptions,
-  modelRoutingChoicesQueryOptions,
-} from "./model-routing-queries.js";
+import { modelRoutingChoicesQueryOptions } from "./model-routing-queries.js";
 
 const message = apiMessage;
 

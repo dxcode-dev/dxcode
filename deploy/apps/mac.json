@@ -1,0 +1,14 @@
+{
+  "version": "0.1.0",
+  "tag": "dx-mac-v0.1.0",
+  "assets": {
+    "macos-aarch64-dmg": {
+      "asset": "dx-mac-arm64.dmg",
+      "sha256": "7d60a6a61c9e9b3dfeb8868c0127f347f9a207238bf98fea2934f9d78637588b"
+    },
+    "macos-aarch64-zip": {
+      "asset": "dx-mac-arm64.zip",
+      "sha256": "98544fec78ce8179e1371438a930eee90628f5e0a120ec95777fccd9e1a6640d"
+    }
+  }
+}

@@ -4,8 +4,10 @@ import {
   WorkspaceShortName,
 } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { successResponse } from "../http/response.js";
 import { SettingsFieldErrorSchema } from "./field-error.js";
+import { WorkspaceSettingsParamsSchema } from "./workspace-params.js";
 
 export const WorkspaceMemberRoleSchema = Schema.Literals([
   "owner",
@@ -187,4 +189,117 @@ export const WorkspaceMembersErrorResponseSchema = Schema.Struct({
       }),
     ),
   }),
+});
+
+/**
+ * Every member, invite link, and invite route refuses with this one schema,
+ * its `code` naming the reason, at these statuses.
+ */
+const workspaceMembersRefusals = [400, 403, 404, 409, 503].map((status) => ({
+  status,
+  schema: WorkspaceMembersErrorResponseSchema,
+}));
+
+const WorkspaceMemberParamsSchema = Schema.Struct({
+  workspaceSlug: WorkspaceSettingsParamsSchema.fields.workspaceSlug,
+  userId: Schema.String,
+});
+
+const WorkspaceInviteLinkParamsSchema = Schema.Struct({
+  workspaceSlug: WorkspaceSettingsParamsSchema.fields.workspaceSlug,
+  linkId: Schema.String,
+});
+
+export const ListWorkspaceMembersEndpoint = defineEndpoint({
+  id: "settings.workspaceMembers.list",
+  method: "GET",
+  path: "/v1/settings/workspaces/:workspaceSlug/members",
+  params: WorkspaceSettingsParamsSchema,
+  success: ListWorkspaceMembersResponseSchema,
+  refusals: workspaceMembersRefusals,
+});
+
+export const UpdateWorkspaceMemberRoleEndpoint = defineEndpoint({
+  id: "settings.workspaceMembers.updateRole",
+  method: "PATCH",
+  path: "/v1/settings/workspaces/:workspaceSlug/members/:userId",
+  params: WorkspaceMemberParamsSchema,
+  body: UpdateWorkspaceMemberRoleRequestSchema,
+  success: WorkspaceMemberResponseSchema,
+  refusals: workspaceMembersRefusals,
+});
+
+export const RemoveWorkspaceMemberEndpoint = defineEndpoint({
+  id: "settings.workspaceMembers.remove",
+  method: "DELETE",
+  path: "/v1/settings/workspaces/:workspaceSlug/members/:userId",
+  params: WorkspaceMemberParamsSchema,
+  success: RemoveWorkspaceMemberResponseSchema,
+  refusals: workspaceMembersRefusals,
+});
+
+export const TransferWorkspaceOwnershipEndpoint = defineEndpoint({
+  id: "settings.workspaceMembers.transferOwnership",
+  method: "POST",
+  path: "/v1/settings/workspaces/:workspaceSlug/members/:userId/transfer-ownership",
+  params: WorkspaceMemberParamsSchema,
+  success: WorkspaceMemberResponseSchema,
+  refusals: workspaceMembersRefusals,
+});
+
+export const DeleteWorkspaceEndpoint = defineEndpoint({
+  id: "settings.workspaceMembers.deleteWorkspace",
+  method: "POST",
+  path: "/v1/settings/workspaces/:workspaceSlug/delete",
+  params: WorkspaceSettingsParamsSchema,
+  body: DeleteWorkspaceRequestSchema,
+  success: DeleteWorkspaceResponseSchema,
+  refusals: workspaceMembersRefusals,
+});
+
+export const LeaveWorkspaceEndpoint = defineEndpoint({
+  id: "settings.workspaceMembers.leave",
+  method: "POST",
+  path: "/v1/settings/workspaces/:workspaceSlug/leave",
+  params: WorkspaceSettingsParamsSchema,
+  success: LeaveWorkspaceResponseSchema,
+  refusals: workspaceMembersRefusals,
+});
+
+export const ListWorkspaceInviteLinksEndpoint = defineEndpoint({
+  id: "settings.workspaceInviteLinks.list",
+  method: "GET",
+  path: "/v1/settings/workspaces/:workspaceSlug/invite-links",
+  params: WorkspaceSettingsParamsSchema,
+  success: ListWorkspaceInviteLinksResponseSchema,
+  refusals: workspaceMembersRefusals,
+});
+
+export const CreateWorkspaceInviteLinkEndpoint = defineEndpoint({
+  id: "settings.workspaceInviteLinks.create",
+  method: "POST",
+  path: "/v1/settings/workspaces/:workspaceSlug/invite-links",
+  params: WorkspaceSettingsParamsSchema,
+  body: CreateWorkspaceInviteLinkRequestSchema,
+  success: WorkspaceInviteLinkResponseSchema,
+  successStatus: 201,
+  refusals: workspaceMembersRefusals,
+});
+
+export const RevokeWorkspaceInviteLinkEndpoint = defineEndpoint({
+  id: "settings.workspaceInviteLinks.revoke",
+  method: "DELETE",
+  path: "/v1/settings/workspaces/:workspaceSlug/invite-links/:linkId",
+  params: WorkspaceInviteLinkParamsSchema,
+  success: RevokeWorkspaceInviteLinkResponseSchema,
+  refusals: workspaceMembersRefusals,
+});
+
+export const AcceptWorkspaceInviteEndpoint = defineEndpoint({
+  id: "settings.workspaceInvites.accept",
+  method: "POST",
+  path: "/v1/invites/:token/accept",
+  params: Schema.Struct({ token: Schema.String }),
+  success: AcceptWorkspaceInviteResponseSchema,
+  refusals: workspaceMembersRefusals,
 });

@@ -1,28 +1,21 @@
 import {
-  GetThreadFileResponseSchema,
-  GetThreadFileTreeResponseSchema,
-  SaveThreadFileResponseSchema,
+  GetThreadFileEndpoint,
+  GetThreadFileTreeEndpoint,
+  SaveThreadFileEndpoint,
   type ThreadFileData,
   type ThreadFilesCursor,
   type ThreadFilesPath,
   type ThreadFilesWorktreeId,
   type ThreadFileTreeData,
   type ThreadFileVersion,
+  UploadThreadFileEndpoint,
+  WriteThreadFilesEndpoint,
   type WriteThreadFilesRequest,
-  WriteThreadFilesResponseSchema,
 } from "@dx/api";
+import { ApiError, createDxClient } from "@dx/client";
 import type { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
 import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
-
-const ErrorResponseSchema = Schema.Struct({
-  status: Schema.Literal("error"),
-  data: Schema.Struct({
-    code: Schema.String,
-    message: Schema.String,
-    requestId: Schema.String,
-  }),
-});
 
 export class ThreadFilesApiError extends Error {
   constructor(
@@ -38,46 +31,30 @@ export class ThreadFilesApiError extends Error {
 
 type Fetcher = typeof sameOriginFetch;
 
-const baseUrl = (threadId: ThreadId) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/files`;
-
-const request = async <S extends Schema.ConstraintDecoder<unknown>>(
-  fetcher: Fetcher,
-  url: string,
-  schema: S,
-  init: RequestInit = {},
-): Promise<S["Type"]> => {
-  const response = await fetcher(url, {
-    credentials: "same-origin",
-    ...init,
-    headers: {
-      accept: "application/json",
-      ...(init.body === undefined
-        ? {}
-        : { "content-type": "application/json" }),
-      ...init.headers,
-    },
-  });
-  const body: unknown = await response.json().catch(() => undefined);
-  if (!response.ok) {
-    const error = await Schema.decodeUnknownPromise(ErrorResponseSchema)(
-      body,
-    ).catch(() => undefined);
-    throw new ThreadFilesApiError(
-      response.status,
-      error?.data.code ?? "THREAD_FILES_UNAVAILABLE",
-      error?.data.message ?? "Files request failed.",
-      error?.data.requestId,
-    );
-  }
+/**
+ * Runs one Files call as a ThreadFilesApiError: the route's own code and
+ * message for an error it sends on purpose, else a generic one.
+ */
+const filesCall = async <A>(run: () => Promise<A>): Promise<A> => {
   try {
-    return await Schema.decodeUnknownPromise(schema)(body);
-  } catch {
-    throw new ThreadFilesApiError(
-      response.status,
-      "THREAD_FILES_INVALID_RESPONSE",
-      "Files returned an invalid response.",
-    );
+    return await run();
+  } catch (cause) {
+    if (cause instanceof ApiError) {
+      const requestId = cause.data?.requestId;
+      throw new ThreadFilesApiError(
+        cause.status,
+        cause.code ?? "THREAD_FILES_UNAVAILABLE",
+        cause.hasValidatedPayload ? cause.message : "Files request failed.",
+        typeof requestId === "string" ? requestId : undefined,
+      );
+    }
+    if (Schema.isSchemaError(cause))
+      throw new ThreadFilesApiError(
+        200,
+        "THREAD_FILES_INVALID_RESPONSE",
+        "Files returned an invalid response.",
+      );
+    throw cause;
   }
 };
 
@@ -127,74 +104,83 @@ export interface ThreadFilesApi {
   ) => Promise<{ readonly kind: "changed" }>;
 }
 
-const worktreeQuery = (worktree: ThreadFilesWorktreeId | undefined) =>
-  worktree === undefined ? "" : `?${new URLSearchParams({ worktree })}`;
-
 export const createThreadFilesApi = (
   fetcher: Fetcher = sameOriginFetch,
-): ThreadFilesApi => ({
-  list: async (threadId, path, cursor, worktree, signal, allowSnapshot) => {
-    const query = new URLSearchParams();
-    if (worktree !== undefined) query.set("worktree", worktree);
-    if (path !== undefined) query.set("path", path);
-    if (cursor !== undefined) query.set("cursor", cursor);
-    if (allowSnapshot === true) query.set("snapshot", "allow");
-    const response = await request(
-      fetcher,
-      `${baseUrl(threadId)}${query.size === 0 ? "" : `?${query}`}`,
-      GetThreadFileTreeResponseSchema,
-      signal === undefined ? {} : { signal },
-    );
-    return response.data;
-  },
-  read: async (threadId, path, worktree, signal) => {
-    const query = new URLSearchParams();
-    if (worktree !== undefined) query.set("worktree", worktree);
-    const response = await request(
-      fetcher,
-      `${baseUrl(threadId)}/${encodeURIComponent(path)}${query.size === 0 ? "" : `?${query}`}`,
-      GetThreadFileResponseSchema,
-      signal === undefined ? {} : { signal },
-    );
-    return response.data;
-  },
-  save: async (threadId, path, input) => {
-    const query = new URLSearchParams();
-    if (input.worktree !== undefined) query.set("worktree", input.worktree);
-    const response = await request(
-      fetcher,
-      `${baseUrl(threadId)}/${encodeURIComponent(path)}${query.size === 0 ? "" : `?${query}`}`,
-      SaveThreadFileResponseSchema,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          content: input.content,
-          expectedVersion: input.expectedVersion,
+): ThreadFilesApi => {
+  const client = createDxClient({
+    fetch: (path, init) =>
+      fetcher(path, { ...init, credentials: "same-origin" }),
+  });
+  return {
+    list: async (threadId, path, cursor, worktree, signal, allowSnapshot) => {
+      const response = await filesCall(() =>
+        client.call(
+          GetThreadFileTreeEndpoint,
+          {
+            params: { threadId },
+            query: {
+              ...(worktree === undefined ? {} : { worktree }),
+              ...(path === undefined ? {} : { path }),
+              ...(cursor === undefined ? {} : { cursor }),
+              ...(allowSnapshot === true ? { snapshot: "allow" as const } : {}),
+            },
+          },
+          signal === undefined ? {} : { signal },
+        ),
+      );
+      return response.data;
+    },
+    read: async (threadId, path, worktree, signal) => {
+      const response = await filesCall(() =>
+        client.call(
+          GetThreadFileEndpoint,
+          {
+            params: { threadId, path },
+            query: worktree === undefined ? {} : { worktree },
+          },
+          signal === undefined ? {} : { signal },
+        ),
+      );
+      return response.data;
+    },
+    save: async (threadId, path, input) => {
+      const response = await filesCall(() =>
+        client.call(SaveThreadFileEndpoint, {
+          params: { threadId, path },
+          query:
+            input.worktree === undefined ? {} : { worktree: input.worktree },
+          body: {
+            content: input.content,
+            expectedVersion: input.expectedVersion,
+          },
         }),
-      },
-    );
-    return response.data;
-  },
-  write: async (threadId, body, worktree) => {
-    const response = await request(
-      fetcher,
-      `${baseUrl(threadId)}${worktreeQuery(worktree)}`,
-      WriteThreadFilesResponseSchema,
-      { method: "POST", body: JSON.stringify(body) },
-    );
-    return response.data;
-  },
-  upload: async (threadId, path, file, worktree) => {
-    const response = await request(
-      fetcher,
-      `${baseUrl(threadId)}/${encodeURIComponent(path)}${worktreeQuery(worktree)}`,
-      WriteThreadFilesResponseSchema,
-      {
-        method: "PUT",
-        headers: { "content-type": "application/octet-stream" },
-        body: file,
-      },
-    );
-    return response.data;
-  },
-});
+      );
+      return response.data;
+    },
+    write: async (threadId, body, worktree) => {
+      const response = await filesCall(() =>
+        client.call(WriteThreadFilesEndpoint, {
+          params: { threadId },
+          query: worktree === undefined ? {} : { worktree },
+          body,
+        }),
+      );
+      return response.data;
+    },
+    upload: async (threadId, path, file, worktree) => {
+      const response = await filesCall(() =>
+        client.call(
+          UploadThreadFileEndpoint,
+          {
+            params: { threadId, path },
+            query: worktree === undefined ? {} : { worktree },
+            body: file,
+          },
+          // The bytes as they are, whatever the file's own type.
+          { headers: { "content-type": "application/octet-stream" } },
+        ),
+      );
+      return response.data;
+    },
+  };
+};

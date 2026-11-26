@@ -1,19 +1,21 @@
 import {
-  GetThreadChangesDiffResponseSchema,
-  GetThreadChangesResponseSchema,
-  GetThreadShipPlanResponseSchema,
+  GetThreadChangesDiffEndpoint,
+  GetThreadChangesEndpoint,
+  GetThreadShipPlanEndpoint,
+  PushThreadChangesEndpoint,
   type PushThreadChangesResponse,
-  PushThreadChangesResponseSchema,
   type ThreadChangesCaptureId,
   type ThreadChangesData,
   type ThreadChangesDiffData,
+  ThreadChangesEventsEndpoint,
   type ThreadChangesPath,
   type ThreadChangesRange,
   type ThreadChangesWorktreeId,
   type ThreadShipPlan,
 } from "@dx/api";
+import { ApiError, createDxClient, endpointPath } from "@dx/client";
 import type { ThreadId } from "@dx/domain";
-import { Effect, Schema } from "effect";
+import { Schema } from "effect";
 import {
   isSessionEndedClose,
   reportSessionEnded,
@@ -73,9 +75,6 @@ export interface ChangesTransport {
 export const serializeChangesRange = (range: ThreadChangesRange) =>
   range.kind === "commit" ? `commit:${range.sha}` : range.kind;
 
-const endpoint = (threadId: ThreadId) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/changes`;
-
 export interface ChangesEventSocket {
   addEventListener(
     type: "open" | "message" | "close",
@@ -109,7 +108,9 @@ export const subscribeToChanges = (
     if (disposed) return;
     const base = new URL(factories.origin ?? window.location.href);
     base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
-    base.pathname = `${endpoint(threadId)}/events`;
+    base.pathname = endpointPath(ThreadChangesEventsEndpoint, {
+      params: { threadId },
+    });
     base.search = "";
     base.hash = "";
     socket = factories.createSocket(base.toString(), "dx-changes-v1");
@@ -153,129 +154,131 @@ export const subscribeToChanges = (
   };
 };
 
-const request = async <S extends Schema.ConstraintDecoder<unknown>>(
-  fetchImpl: typeof fetch,
-  path: string,
-  schema: S,
-  init?: RequestInit,
-): Promise<S["Type"]> => {
-  const response = await fetchImpl(path, {
-    ...init,
-    credentials: "same-origin",
-    headers: {
-      accept: "application/json",
-      ...(init?.body === undefined
-        ? {}
-        : { "content-type": "application/json" }),
-      ...init?.headers,
-    },
-  });
-  const body: unknown = await response.json().catch(() => undefined);
-  if (!response.ok) {
-    const message =
-      typeof body === "object" &&
-      body !== null &&
-      "data" in body &&
-      typeof body.data === "object" &&
-      body.data !== null &&
-      "message" in body.data &&
-      typeof body.data.message === "string"
-        ? body.data.message
-        : "Changes request failed.";
-    throw new ChangesApiError(response.status, message);
-  }
+/**
+ * Runs one Changes call as a ChangesApiError: the route's own message for
+ * an error it sends on purpose, else a generic one.
+ */
+const changesCall = async <A>(
+  run: () => Promise<A>,
+  signal?: AbortSignal,
+): Promise<A> => {
   try {
-    init?.signal?.throwIfAborted();
-    return await Effect.runPromise(Schema.decodeUnknownEffect(schema)(body), {
-      signal: init?.signal ?? undefined,
-    });
+    const answer = await run();
+    signal?.throwIfAborted();
+    return answer;
   } catch (cause) {
-    if (init?.signal?.aborted) throw init.signal.reason ?? cause;
-    throw new ChangesApiError(response.status, "Changes response was invalid.");
+    if (signal?.aborted) throw signal.reason ?? cause;
+    if (cause instanceof ApiError)
+      throw new ChangesApiError(
+        cause.status,
+        cause.hasValidatedPayload ? cause.message : "Changes request failed.",
+      );
+    if (Schema.isSchemaError(cause))
+      throw new ChangesApiError(200, "Changes response was invalid.");
+    throw cause;
   }
 };
 
 export const createChangesTransport = (
   fetchImpl: typeof fetch = sameOriginFetch,
   subscriptionFactories?: ChangesSubscriptionFactories,
-): ChangesTransport => ({
-  getChanges: (threadId, range, signal) => {
-    const query = new URLSearchParams({
-      range: serializeChangesRange(range),
-    });
-    return request(
-      fetchImpl,
-      `${endpoint(threadId)}?${query}`,
-      GetThreadChangesResponseSchema,
-      { signal },
-    ).then((response) => response.data);
-  },
-  getDiff: (threadId, path, range, captureId, signal, worktree) => {
-    const query = new URLSearchParams({
-      path,
-      range: serializeChangesRange(range),
-      captureId,
-      worktree: worktree ?? "primary",
-    });
-    return request(
-      fetchImpl,
-      `${endpoint(threadId)}/diff?${query}`,
-      GetThreadChangesDiffResponseSchema,
-      { signal },
-    ).then((response) => response.data);
-  },
-  push: (threadId, input, signal) =>
-    request(
-      fetchImpl,
-      `${endpoint(threadId)}/push`,
-      PushThreadChangesResponseSchema,
-      {
-        method: "POST",
+): ChangesTransport => {
+  const client = createDxClient({
+    fetch: (path, init) =>
+      fetchImpl(path, { ...init, credentials: "same-origin" }),
+  });
+  const options = (signal: AbortSignal | undefined) =>
+    signal === undefined ? {} : { signal };
+  return {
+    getChanges: (threadId, range, signal) =>
+      changesCall(
+        () =>
+          client.call(
+            GetThreadChangesEndpoint,
+            {
+              params: { threadId },
+              query: { range: serializeChangesRange(range) },
+            },
+            options(signal),
+          ),
         signal,
-        body: JSON.stringify({ ...input, confirmation: "push" }),
-      },
-    ).then((response) => response.data),
-  getShipPlan: (threadId, signal) =>
-    request(
-      fetchImpl,
-      `${endpoint(threadId)}/ship`,
-      GetThreadShipPlanResponseSchema,
-      { signal },
-    ).then((response) => response.data),
-  // The same message the composer sends, so it runs as a typed one would.
-  ship: async (threadId, { prompt, idempotencyKey }) => {
-    const response = await fetchImpl(
-      `/v1/agents/dx/${encodeURIComponent(threadId)}`,
-      {
-        method: "POST",
-        credentials: "same-origin",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
+      ).then((response) => response.data),
+    getDiff: (threadId, path, range, captureId, signal, worktree) =>
+      changesCall(
+        () =>
+          client.call(
+            GetThreadChangesDiffEndpoint,
+            {
+              params: { threadId },
+              query: {
+                path,
+                range: serializeChangesRange(range),
+                captureId,
+                worktree: worktree ?? ("primary" as ThreadChangesWorktreeId),
+              },
+            },
+            options(signal),
+          ),
+        signal,
+      ).then((response) => response.data),
+    push: (threadId, input, signal) =>
+      changesCall(
+        () =>
+          client.call(
+            PushThreadChangesEndpoint,
+            {
+              params: { threadId },
+              body: { ...input, confirmation: "push" },
+            },
+            options(signal),
+          ),
+        signal,
+      ).then((response) => response.data),
+    getShipPlan: (threadId, signal) =>
+      changesCall(
+        () =>
+          client.call(
+            GetThreadShipPlanEndpoint,
+            { params: { threadId } },
+            options(signal),
+          ),
+        signal,
+      ).then((response) => response.data),
+    // The same message the composer sends, so it runs as a typed one would.
+    ship: async (threadId, { prompt, idempotencyKey }) => {
+      const response = await fetchImpl(
+        `/v1/agents/dx/${encodeURIComponent(threadId)}`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ idempotencyKey, kind: "user", body: prompt }),
         },
-        body: JSON.stringify({ idempotencyKey, kind: "user", body: prompt }),
-      },
-    );
-    if (response.ok) return;
-    const body = (await response.json().catch(() => undefined)) as
-      | { data?: { message?: unknown }; error?: { message?: unknown } }
-      | undefined;
-    const message = body?.data?.message ?? body?.error?.message;
-    throw new ChangesApiError(
-      response.status,
-      typeof message === "string" && message !== ""
-        ? message
-        : "The Ship message was not sent.",
-    );
-  },
-  subscribe: (threadId, onChangesUpdated) =>
-    subscribeToChanges(
-      threadId,
-      onChangesUpdated,
-      subscriptionFactories ?? {
-        createSocket: (url, protocol) => new WebSocket(url, protocol),
-      },
-    ),
-});
+      );
+      if (response.ok) return;
+      const body = (await response.json().catch(() => undefined)) as
+        | { data?: { message?: unknown }; error?: { message?: unknown } }
+        | undefined;
+      const message = body?.data?.message ?? body?.error?.message;
+      throw new ChangesApiError(
+        response.status,
+        typeof message === "string" && message !== ""
+          ? message
+          : "The Ship message was not sent.",
+      );
+    },
+    subscribe: (threadId, onChangesUpdated) =>
+      subscribeToChanges(
+        threadId,
+        onChangesUpdated,
+        subscriptionFactories ?? {
+          createSocket: (url, protocol) => new WebSocket(url, protocol),
+        },
+      ),
+  };
+};
 
 export const defaultChangesTransport = createChangesTransport();

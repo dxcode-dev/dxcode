@@ -24,7 +24,8 @@ const decodeResult = Schema.decodeUnknownOption(
  * fails resolves `undefined` so the composer uploads the recording instead.
  */
 export class LiveDictation {
-  private readonly socket: WebSocket;
+  /** Absent until the socket's URL has loaded; messages queue meanwhile. */
+  private socket?: WebSocket;
   private readonly queued: Array<ArrayBuffer | string> = [];
   private frame = new Int16Array(FRAME_SAMPLES);
   private filled = 0;
@@ -32,20 +33,25 @@ export class LiveDictation {
   private result?: (result: DictationStreamResult | undefined) => void;
 
   constructor(id: string) {
-    const url = new URL(
-      `/v1/dictation/${encodeURIComponent(id)}/stream`,
-      window.location.href,
+    void import("./dictation-stream-url.js").then(
+      ({ dictationStreamUrl }) => this.open(dictationStreamUrl(id)),
+      () => this.settle(undefined),
     );
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    this.socket = new WebSocket(url, DICTATION_STREAM_SUBPROTOCOL);
-    this.socket.binaryType = "arraybuffer";
-    this.socket.addEventListener("open", () => {
+  }
+
+  private open(url: URL) {
+    // Settled before the URL loaded: nothing to stream to.
+    if (this.broken) return;
+    const socket = new WebSocket(url, DICTATION_STREAM_SUBPROTOCOL);
+    this.socket = socket;
+    socket.binaryType = "arraybuffer";
+    socket.addEventListener("open", () => {
       for (const message of this.queued.splice(0)) this.deliver(message);
     });
-    this.socket.addEventListener("message", ({ data }) => {
+    socket.addEventListener("message", ({ data }) => {
       this.settle(Option.getOrUndefined(decodeResult(data)));
     });
-    this.socket.addEventListener("close", ({ code }) => {
+    socket.addEventListener("close", ({ code }) => {
       this.settle(undefined);
       if (isSessionEndedClose(code)) reportSessionEnded();
     });
@@ -93,7 +99,9 @@ export class LiveDictation {
 
   private deliver(message: ArrayBuffer | string) {
     if (this.broken) return;
-    if (this.socket.readyState === WebSocket.OPEN) this.socket.send(message);
+    if (this.socket === undefined) this.queued.push(message);
+    else if (this.socket.readyState === WebSocket.OPEN)
+      this.socket.send(message);
     else if (this.socket.readyState === WebSocket.CONNECTING)
       this.queued.push(message);
     else this.broken = true;
@@ -104,7 +112,8 @@ export class LiveDictation {
     this.queued.length = 0;
     const waiting = this.result;
     this.result = undefined;
-    if (this.socket.readyState <= WebSocket.OPEN) this.socket.close(1000);
+    if (this.socket !== undefined && this.socket.readyState <= WebSocket.OPEN)
+      this.socket.close(1000);
     waiting?.(result);
   }
 }

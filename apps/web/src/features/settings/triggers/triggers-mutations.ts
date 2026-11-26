@@ -1,13 +1,63 @@
-import type { UserId } from "@dx/domain";
-import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
-  createPluginTrigger,
-  retryPluginTriggerDelivery,
-  revokePluginTrigger,
-  rotatePluginTrigger,
-  updatePluginTriggerState,
-} from "../../../shared/api/client.js";
+  CreatePluginTriggerEndpoint,
+  RetryPluginTriggerDeliveryEndpoint,
+  RevokePluginTriggerEndpoint,
+  RotatePluginTriggerEndpoint,
+  UpdatePluginTriggerStateEndpoint,
+} from "@dx/api";
+import type {
+  EnvironmentVariableConfigReference,
+  PluginCapabilityName,
+  PluginId,
+  PluginTriggerDeliveryId,
+  PluginTriggerId,
+  PluginVersion,
+  UserId,
+} from "@dx/domain";
+import { mutationOptions, type QueryClient } from "@tanstack/react-query";
+import { dxClient } from "../../../shared/api/client.js";
 import { triggerKeys } from "./triggers-queries.js";
+
+const createPluginTrigger = async (input: {
+  readonly pluginId: PluginId;
+  readonly pluginVersion: PluginVersion;
+  readonly capabilityName: PluginCapabilityName;
+  readonly hmacSecretReference?: EnvironmentVariableConfigReference;
+}) => (await dxClient.call(CreatePluginTriggerEndpoint, { body: input })).data;
+
+const updatePluginTriggerState = async (
+  triggerId: PluginTriggerId,
+  status: "active" | "paused",
+) =>
+  (
+    await dxClient.call(UpdatePluginTriggerStateEndpoint, {
+      params: { triggerId },
+      body: { status },
+    })
+  ).data;
+
+const rotatePluginTrigger = async (triggerId: PluginTriggerId) =>
+  (
+    await dxClient.call(RotatePluginTriggerEndpoint, {
+      params: { triggerId },
+      body: {},
+    })
+  ).data;
+
+const revokePluginTrigger = async (triggerId: PluginTriggerId) =>
+  (await dxClient.call(RevokePluginTriggerEndpoint, { params: { triggerId } }))
+    .data.revokedTriggerId;
+
+const retryPluginTriggerDelivery = async (
+  triggerId: PluginTriggerId,
+  deliveryId: PluginTriggerDeliveryId,
+) =>
+  (
+    await dxClient.call(RetryPluginTriggerDeliveryEndpoint, {
+      params: { triggerId, deliveryId },
+      body: {},
+    })
+  ).data;
 
 export type TriggersMutationAction =
   | {

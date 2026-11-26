@@ -16,7 +16,7 @@ import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
-import { modelConnectionsQueryOptions } from "../model-routing/model-routing-queries.js";
+import { modelConnectionsQueryOptions } from "../model-routing/model-connection-queries.js";
 import {
   environmentVariableHistoryQueryOptions,
   environmentVariablesQueryOptions,

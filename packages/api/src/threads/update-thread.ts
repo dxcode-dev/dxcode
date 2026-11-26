@@ -1,7 +1,9 @@
 import { ThreadColor, ThreadId, ThreadModelPin, ThreadTitle } from "@dx/domain";
 import { Schema } from "effect";
+import { defineEndpoint } from "../http/endpoint.js";
 import { errorResponse, successResponse } from "../http/response.js";
 import { ThreadDataSchema } from "./thread-data.js";
+import { ThreadNotFoundResponseSchema } from "./thread-not-found-response.js";
 
 export const UpdateThreadParamsSchema = Schema.Struct({ threadId: ThreadId });
 /**
@@ -38,3 +40,21 @@ export const UpdateThreadPersistenceUnavailableResponseSchema = errorResponse(
   "PERSISTENCE_UNAVAILABLE",
   "Persistence is temporarily unavailable.",
 );
+
+export const UpdateThreadEndpoint = defineEndpoint({
+  id: "threads.update",
+  method: "PATCH",
+  path: "/v1/threads/:threadId",
+  params: UpdateThreadParamsSchema,
+  body: UpdateThreadRequestSchema,
+  success: UpdateThreadResponseSchema,
+  refusals: [
+    { status: 400, schema: UpdateThreadInvalidRequestResponseSchema },
+    { status: 409, schema: UpdateThreadModelLockedResponseSchema },
+    { status: 422, schema: UpdateThreadModelNotServedResponseSchema },
+    { status: 404, schema: UpdateThreadNotFoundResponseSchema },
+    { status: 503, schema: UpdateThreadPersistenceUnavailableResponseSchema },
+    // A Space's Thread while Spaces are off (hideSpaceThreads).
+    { status: 404, schema: ThreadNotFoundResponseSchema },
+  ],
+});

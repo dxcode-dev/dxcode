@@ -14,11 +14,11 @@ import { Button } from "../../../shared/ui/button.js";
 import { Radio } from "../../../shared/ui/checkbox.js";
 import { claudePlanWhen } from "../../../shared/ui/claude-plan-when.js";
 import { ClaudePlanWindows } from "../../../shared/ui/claude-plan-windows.js";
+import { claudePlanRefreshQueryOptions } from "./model-connection-queries.js";
 import {
   apiMessage,
   connectionMutationOptions,
 } from "./model-routing-mutations.js";
-import { claudePlanRefreshQueryOptions } from "./model-routing-queries.js";
 
 const EXTRA_USAGE_OPTIONS = [
   {

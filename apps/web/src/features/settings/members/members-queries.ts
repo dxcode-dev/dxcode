@@ -1,19 +1,116 @@
+import {
+  AcceptWorkspaceInviteEndpoint,
+  CreateWorkspaceInviteLinkEndpoint,
+  type CreateWorkspaceInviteLinkRequest,
+  ListWorkspaceInviteLinksEndpoint,
+  ListWorkspaceMembersEndpoint,
+  RemoveWorkspaceMemberEndpoint,
+  RevokeWorkspaceInviteLinkEndpoint,
+  TransferWorkspaceOwnershipEndpoint,
+  UpdateWorkspaceMemberRoleEndpoint,
+  WorkspaceInvitePreviewResponseSchema,
+  WorkspaceMembersErrorResponseSchema,
+} from "@dx/api";
 import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
-import {
-  ApiError,
-  acceptWorkspaceInvite,
-  createWorkspaceInviteLink,
-  getWorkspaceInvite,
-  listWorkspaceInviteLinks,
-  listWorkspaceMembers,
-  removeWorkspaceMember,
-  revokeWorkspaceInviteLink,
-  transferWorkspaceOwnership,
-  updateWorkspaceMemberRole,
-} from "../../../shared/api/client.js";
+import { ApiError, dxClient, request } from "../../../shared/api/client.js";
 import { settingsKeys } from "../settings-context-queries.js";
 import { workspaceKeys } from "../workspace/workspace-queries.js";
+
+const listWorkspaceMembers = async (
+  workspaceSlug: WorkspaceSlug,
+  signal?: AbortSignal,
+) =>
+  (
+    await dxClient.call(
+      ListWorkspaceMembersEndpoint,
+      { params: { workspaceSlug } },
+      { signal },
+    )
+  ).data;
+
+const updateWorkspaceMemberRole = async (
+  workspaceSlug: WorkspaceSlug,
+  userId: string,
+  role: "admin" | "member",
+) =>
+  (
+    await dxClient.call(UpdateWorkspaceMemberRoleEndpoint, {
+      params: { workspaceSlug, userId },
+      body: { role },
+    })
+  ).data;
+
+const removeWorkspaceMember = async (
+  workspaceSlug: WorkspaceSlug,
+  userId: string,
+) =>
+  (
+    await dxClient.call(RemoveWorkspaceMemberEndpoint, {
+      params: { workspaceSlug, userId },
+    })
+  ).data;
+
+const transferWorkspaceOwnership = async (
+  workspaceSlug: WorkspaceSlug,
+  userId: string,
+) =>
+  (
+    await dxClient.call(TransferWorkspaceOwnershipEndpoint, {
+      params: { workspaceSlug, userId },
+    })
+  ).data;
+
+const listWorkspaceInviteLinks = async (
+  workspaceSlug: WorkspaceSlug,
+  signal?: AbortSignal,
+) =>
+  (
+    await dxClient.call(
+      ListWorkspaceInviteLinksEndpoint,
+      { params: { workspaceSlug } },
+      { signal },
+    )
+  ).data.links;
+
+const createWorkspaceInviteLink = async (
+  workspaceSlug: WorkspaceSlug,
+  input: CreateWorkspaceInviteLinkRequest,
+) =>
+  (
+    await dxClient.call(CreateWorkspaceInviteLinkEndpoint, {
+      params: { workspaceSlug },
+      body: input,
+    })
+  ).data;
+
+const revokeWorkspaceInviteLink = async (
+  workspaceSlug: WorkspaceSlug,
+  linkId: string,
+) =>
+  (
+    await dxClient.call(RevokeWorkspaceInviteLinkEndpoint, {
+      params: { workspaceSlug, linkId },
+    })
+  ).data;
+
+/**
+ * The public invite preview, served at `/api/invites` outside the `/v1`
+ * contract so a signed-out person can open it.
+ */
+const getWorkspaceInvite = async (token: string, signal?: AbortSignal) =>
+  (
+    await request(
+      `/api/invites/${encodeURIComponent(token)}`,
+      WorkspaceInvitePreviewResponseSchema,
+      { signal },
+      WorkspaceMembersErrorResponseSchema,
+    )
+  ).data;
+
+const acceptWorkspaceInvite = async (token: string) =>
+  (await dxClient.call(AcceptWorkspaceInviteEndpoint, { params: { token } }))
+    .data;
 
 export const memberKeys = {
   all: (userId: UserId, workspaceSlug: WorkspaceSlug) =>

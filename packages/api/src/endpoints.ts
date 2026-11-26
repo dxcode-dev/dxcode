@@ -24,6 +24,17 @@ import {
   UploadStandaloneArtifactImageEndpoint,
 } from "./artifacts/standalone-artifact-endpoints.js";
 import {
+  CompleteAttachmentEndpoint,
+  CreateAttachmentEndpoint,
+  GetAttachmentFileEndpoint,
+  GetNamedAttachmentFileEndpoint,
+} from "./attachments/attachments-endpoints.js";
+import {
+  CreateDictationEndpoint,
+  GetDictationEndpoint,
+} from "./dictation/dictation-endpoints.js";
+import { DictationStreamEndpoint } from "./dictation/dictation-stream-endpoints.js";
+import {
   GetPersonalDictationVocabularyEndpoint,
   GetWorkspaceDictationVocabularyEndpoint,
   UpdatePersonalDictationVocabularyEndpoint,
@@ -128,6 +139,26 @@ import {
   UpdateWorkspaceMcpServerEndpoint,
 } from "./settings/mcp-servers-endpoints.js";
 import {
+  CheckPersonalModelConnectionAccessEndpoint,
+  CheckWorkspaceModelConnectionAccessEndpoint,
+  CreatePersonalModelConnectionEndpoint,
+  CreateWorkspaceModelConnectionEndpoint,
+  DeletePersonalModelConnectionEndpoint,
+  DeleteWorkspaceModelConnectionEndpoint,
+  GetPersonalModelCatalogEndpoint,
+  GetWorkspaceModelCatalogEndpoint,
+  ListPersonalModelConnectionsEndpoint,
+  ListWorkspaceModelConnectionsEndpoint,
+  ReorderPersonalModelConnectionsEndpoint,
+  ReorderWorkspaceModelConnectionsEndpoint,
+  SetPersonalClaudePlanExtraUsageEndpoint,
+  SetPersonalModelConnectionEnabledEndpoint,
+  SetWorkspaceClaudePlanExtraUsageEndpoint,
+  SetWorkspaceModelConnectionEnabledEndpoint,
+  UpdatePersonalModelConnectionEndpoint,
+  UpdateWorkspaceModelConnectionEndpoint,
+} from "./settings/model-routing-endpoints.js";
+import {
   DeletePersonalOrbProviderConnectionEndpoint,
   DeleteWorkspaceOrbProviderConnectionEndpoint,
   ListPersonalOrbProvidersEndpoint,
@@ -169,6 +200,14 @@ import {
 } from "./settings/personal-usage.js";
 import { GetPluginIconEndpoint } from "./settings/plugin-icons-endpoints.js";
 import {
+  CreatePluginTriggerEndpoint,
+  ListPluginTriggersEndpoint,
+  RetryPluginTriggerDeliveryEndpoint,
+  RevokePluginTriggerEndpoint,
+  RotatePluginTriggerEndpoint,
+  UpdatePluginTriggerStateEndpoint,
+} from "./settings/plugin-triggers-endpoints.js";
+import {
   GetPersonalProjectDefaultsEndpoint,
   GetWorkspaceProjectDefaultsEndpoint,
   UpdatePersonalProjectDefaultsEndpoint,
@@ -191,6 +230,18 @@ import {
   GetWorkspaceAgentInstructionsEndpoint,
   UpdateWorkspaceAgentInstructionsEndpoint,
 } from "./settings/workspace-agent-instructions.js";
+import {
+  AcceptWorkspaceInviteEndpoint,
+  CreateWorkspaceInviteLinkEndpoint,
+  DeleteWorkspaceEndpoint,
+  LeaveWorkspaceEndpoint,
+  ListWorkspaceInviteLinksEndpoint,
+  ListWorkspaceMembersEndpoint,
+  RemoveWorkspaceMemberEndpoint,
+  RevokeWorkspaceInviteLinkEndpoint,
+  TransferWorkspaceOwnershipEndpoint,
+  UpdateWorkspaceMemberRoleEndpoint,
+} from "./settings/workspace-members.js";
 import {
   GetWorkspacePolicyEndpoint,
   UpdateWorkspacePolicyEndpoint,
@@ -252,6 +303,7 @@ import {
   RemoveSpacePostReactionEndpoint,
   UpdateSpaceEndpoint,
 } from "./spaces/space-endpoints.js";
+import { ArchiveThreadEndpoint } from "./threads/archive-thread.js";
 import {
   DeleteThreadGitHubSubscriptionEndpoint,
   DeleteThreadScheduleEndpoint,
@@ -261,10 +313,33 @@ import {
 import { UpdateTimeZoneEndpoint } from "./threads/automations.js";
 import { GetThreadAutomationsEndpoint } from "./threads/automations-endpoints.js";
 import {
+  GetThreadChangesDiffEndpoint,
+  GetThreadChangesEndpoint,
+  GetThreadShipPlanEndpoint,
+  PushThreadChangesEndpoint,
+} from "./threads/changes-endpoints.js";
+import { ThreadChangesEventsEndpoint } from "./threads/changes-events-endpoints.js";
+import {
   CreateThreadEndpoint,
   StartMailThreadEndpoint,
 } from "./threads/create-thread.js";
+import { DeleteThreadEndpoint } from "./threads/delete-thread.js";
 import { EditThreadMessageEndpoint } from "./threads/edit-message-endpoints.js";
+import {
+  GetThreadFileEndpoint,
+  GetThreadFileTreeEndpoint,
+  SaveThreadFileEndpoint,
+  UploadThreadFileEndpoint,
+  WriteThreadFilesEndpoint,
+} from "./threads/files-endpoints.js";
+import { GetThreadSandboxFileEndpoint } from "./threads/files-sandbox-endpoints.js";
+import { GetThreadEndpoint } from "./threads/get-thread.js";
+import { GetThreadListItemEndpoint } from "./threads/get-thread-list-item.js";
+import { GetThreadReadinessEndpoint } from "./threads/get-thread-readiness.js";
+import {
+  ListSharedThreadsEndpoint,
+  ListThreadsEndpoint,
+} from "./threads/list-threads.js";
 import { MarkThreadSeenEndpoint } from "./threads/mark-thread-seen.js";
 import { GetMcpAppViewsEndpoint } from "./threads/mcp-apps-endpoints.js";
 import {
@@ -324,6 +399,7 @@ import {
   SaveThreadArtifactEndpoint,
   UploadThreadArtifactImageEndpoint,
 } from "./threads/thread-artifact-endpoints.js";
+import { RetryInitialDispatchEndpoint } from "./threads/thread-data.js";
 import {
   GetThreadDraftEndpoint,
   GetWorkspaceDraftEndpoint,
@@ -331,12 +407,19 @@ import {
   UpdateWorkspaceDraftEndpoint,
 } from "./threads/thread-draft.js";
 import {
+  FollowThreadEndpoint,
+  GetThreadMembersEndpoint,
+  UnfollowThreadEndpoint,
+} from "./threads/thread-member-endpoints.js";
+import { UpdateThreadSharingEndpoint } from "./threads/thread-sharing.js";
+import {
   GetThreadClaudePlanEndpoint,
   GetThreadOrbMetricsEndpoint,
   GetThreadOrbSessionsEndpoint,
   GetThreadUsageEndpoint,
   GetThreadUsageRequestsEndpoint,
 } from "./threads/thread-usage-endpoints.js";
+import { UpdateThreadEndpoint } from "./threads/update-thread.js";
 
 /**
  * Every endpoint a dx client calls. Core's contract test checks each one is
@@ -355,6 +438,13 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   PinArtifactEndpoint,
   UpdateArtifactSharingEndpoint,
   UnpinArtifactEndpoint,
+  CompleteAttachmentEndpoint,
+  CreateAttachmentEndpoint,
+  GetAttachmentFileEndpoint,
+  GetNamedAttachmentFileEndpoint,
+  CreateDictationEndpoint,
+  GetDictationEndpoint,
+  DictationStreamEndpoint,
   GetPersonalDictationVocabularyEndpoint,
   UpdatePersonalDictationVocabularyEndpoint,
   GetWorkspaceDictationVocabularyEndpoint,
@@ -418,6 +508,24 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   CreateMessageCommentEndpoint,
   ListMessageCommentsEndpoint,
   ListMessageCommentSummariesEndpoint,
+  GetPersonalModelCatalogEndpoint,
+  CheckPersonalModelConnectionAccessEndpoint,
+  CreatePersonalModelConnectionEndpoint,
+  DeletePersonalModelConnectionEndpoint,
+  ListPersonalModelConnectionsEndpoint,
+  ReorderPersonalModelConnectionsEndpoint,
+  SetPersonalClaudePlanExtraUsageEndpoint,
+  SetPersonalModelConnectionEnabledEndpoint,
+  UpdatePersonalModelConnectionEndpoint,
+  GetWorkspaceModelCatalogEndpoint,
+  CheckWorkspaceModelConnectionAccessEndpoint,
+  CreateWorkspaceModelConnectionEndpoint,
+  DeleteWorkspaceModelConnectionEndpoint,
+  ListWorkspaceModelConnectionsEndpoint,
+  ReorderWorkspaceModelConnectionsEndpoint,
+  SetWorkspaceClaudePlanExtraUsageEndpoint,
+  SetWorkspaceModelConnectionEnabledEndpoint,
+  UpdateWorkspaceModelConnectionEndpoint,
   GetNotificationPreferencesEndpoint,
   GetPushStateEndpoint,
   ListNotificationsEndpoint,
@@ -437,6 +545,12 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   SetWorkspaceOrbProviderConnectionEndpoint,
   SetWorkspaceOrbProviderPolicyEndpoint,
   ListPluginAgentModesEndpoint,
+  CreatePluginTriggerEndpoint,
+  ListPluginTriggersEndpoint,
+  RetryPluginTriggerDeliveryEndpoint,
+  RevokePluginTriggerEndpoint,
+  RotatePluginTriggerEndpoint,
+  UpdatePluginTriggerStateEndpoint,
   GetPluginIconEndpoint,
   CreateProjectEndpoint,
   DeleteProjectEndpoint,
@@ -497,6 +611,16 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   UpdateTimeZoneEndpoint,
   GetWorkspaceAgentInstructionsEndpoint,
   UpdateWorkspaceAgentInstructionsEndpoint,
+  CreateWorkspaceInviteLinkEndpoint,
+  ListWorkspaceInviteLinksEndpoint,
+  RevokeWorkspaceInviteLinkEndpoint,
+  AcceptWorkspaceInviteEndpoint,
+  DeleteWorkspaceEndpoint,
+  LeaveWorkspaceEndpoint,
+  ListWorkspaceMembersEndpoint,
+  RemoveWorkspaceMemberEndpoint,
+  TransferWorkspaceOwnershipEndpoint,
+  UpdateWorkspaceMemberRoleEndpoint,
   GetWorkspacePolicyEndpoint,
   UpdateWorkspacePolicyEndpoint,
   RemoveWorkspaceAvatarEndpoint,
@@ -556,15 +680,35 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   GetThreadArtifactRevisionEndpoint,
   SaveThreadArtifactEndpoint,
   UploadThreadArtifactImageEndpoint,
+  ArchiveThreadEndpoint,
   DeleteThreadGitHubSubscriptionEndpoint,
   DeleteThreadScheduleEndpoint,
   GetThreadAutomationsEndpoint,
   UpdateThreadGitHubSubscriptionEndpoint,
   UpdateThreadScheduleEndpoint,
+  GetThreadChangesDiffEndpoint,
+  ThreadChangesEventsEndpoint,
+  GetThreadChangesEndpoint,
+  PushThreadChangesEndpoint,
+  GetThreadShipPlanEndpoint,
   CreateThreadEndpoint,
+  DeleteThreadEndpoint,
+  GetThreadFileTreeEndpoint,
+  GetThreadFileEndpoint,
+  GetThreadSandboxFileEndpoint,
+  SaveThreadFileEndpoint,
+  UploadThreadFileEndpoint,
+  WriteThreadFilesEndpoint,
+  FollowThreadEndpoint,
+  GetThreadEndpoint,
+  GetThreadListItemEndpoint,
   GetThreadPaneLayoutEndpoint,
+  GetThreadReadinessEndpoint,
+  ListThreadsEndpoint,
+  ListSharedThreadsEndpoint,
   MarkThreadSeenEndpoint,
   GetMcpAppViewsEndpoint,
+  GetThreadMembersEndpoint,
   AddMessageReactionEndpoint,
   ListMessageReactionsEndpoint,
   RemoveMessageReactionEndpoint,
@@ -591,9 +735,13 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   RevokeThreadPortalEndpoint,
   WakeThreadPortalsEndpoint,
   GetThreadQuickActionsEndpoint,
+  RetryInitialDispatchEndpoint,
   SearchThreadsEndpoint,
   SnoozeThreadEndpoint,
+  UnfollowThreadEndpoint,
+  UpdateThreadEndpoint,
   UpdateThreadPaneLayoutEndpoint,
+  UpdateThreadSharingEndpoint,
   GetThreadClaudePlanEndpoint,
   GetThreadUsageEndpoint,
   GetThreadOrbMetricsEndpoint,

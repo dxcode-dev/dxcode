@@ -72,7 +72,11 @@ import { alchemyStage } from "./alchemy-stage.mjs";
 import { operatorR2Credentials } from "./attachment-deployment.mjs";
 import { buildTarget, GUEST_TARGET } from "./build-dxd.mjs";
 import { loadMigrationManifest } from "./migration-manifest.mjs";
-import { fetchPinnedDesktop, fetchPinnedVoxl } from "./runner-voxl.mjs";
+import {
+  fetchPinnedDesktop,
+  fetchPinnedMacApp,
+  fetchPinnedVoxl,
+} from "./runner-voxl.mjs";
 
 const workspaceRoot = resolve(import.meta.dirname, "..");
 const operation = process.argv[2];
@@ -681,6 +685,21 @@ if (operation === "deploy") {
     ])
       console.log(`runner: ${asset} ${sha256}`);
   }
+  // The dx Mac app for dxcode.dev/apps (deploy/apps/mac.json at this
+  // revision, built by mac-app-build.yml), beside every /runner: a release
+  // records only the runner's own assets, so each deploy downloads the
+  // pinned DMG and zip from their prerelease and checks each SHA-256.
+  // Optional: without the pin, a token, or the prerelease (a self-host's
+  // own repository has none), /apps says the download is coming.
+  if (runnerBinaries !== undefined)
+    for (const { asset, sha256 } of await fetchPinnedMacApp({
+      directory: runnerBinaries,
+      token:
+        process.env.DX_DXD_GITHUB_TOKEN?.trim() ||
+        process.env.GH_TOKEN?.trim() ||
+        process.env.GITHUB_TOKEN?.trim(),
+    }))
+      console.log(`runner: ${asset} ${sha256}`);
 }
 
 const authEmailFrom =

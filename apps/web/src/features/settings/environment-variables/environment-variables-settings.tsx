@@ -21,7 +21,7 @@ import { DateTime } from "effect";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settle } from "../../../shared/settle.js";
-import { modelConnectionsQueryOptions } from "../model-routing/model-routing-queries.js";
+import { modelConnectionsQueryOptions } from "../model-routing/model-connection-queries.js";
 import { SettingsCard, SettingsHeading } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import {

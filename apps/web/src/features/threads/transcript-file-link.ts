@@ -1,9 +1,12 @@
 import {
+  GetThreadSandboxFileEndpoint,
   THREAD_SANDBOX_WORKSPACE_ROOT,
   ThreadFilesPath,
   type ThreadFilesWorktreeId,
   ThreadSandboxFilePath,
 } from "@dx/api";
+import { endpointPath } from "@dx/client";
+import type { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import type { MarkdownMediaSource } from "../../shared/ui/markdown-file-link-context.js";
 import { fileMediaKind } from "../../shared/ui/media-kind.js";
@@ -172,9 +175,10 @@ export const sandboxFileUrl = (
   path: ThreadSandboxFilePath,
   download = false,
 ) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/files-sandbox?${new URLSearchParams(
-    download ? { path, download: "1" } : { path },
-  )}`;
+  endpointPath(GetThreadSandboxFileEndpoint, {
+    params: { threadId: threadId as ThreadId },
+    query: download ? { path, download: "1" } : { path },
+  });
 
 /**
  * A Markdown image in a transcript, `![alt](/path/in/the/orb.mp4)`: an

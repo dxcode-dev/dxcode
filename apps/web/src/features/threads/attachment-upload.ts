@@ -1,11 +1,4 @@
-import {
-  type AttachmentData,
-  AttachmentDataSchema,
-  type AttachmentPartResponse,
-  CreateAttachmentResponseSchema,
-  ErrorAnswerMessageSchema,
-} from "@dx/api";
-import { Option, Schema } from "effect";
+import type { AttachmentData, AttachmentPartResponse } from "@dx/api";
 import { sameOriginFetch } from "../../shared/same-origin-fetch.js";
 
 /** Parts sent at once. Each part is one request of at most 10 MiB. */
@@ -27,26 +20,6 @@ export interface AttachmentUpload {
   /** Stop the upload and delete whatever Core stored; unsent files only. */
   readonly cancel: () => void;
 }
-
-const failure = async (response: Response, fallback: string) => {
-  const body = Schema.decodeUnknownOption(ErrorAnswerMessageSchema)(
-    await response.json().catch(() => undefined),
-  );
-  return new Error(Option.isSome(body) ? body.value.data.message : fallback);
-};
-
-const decode = async <A>(
-  response: Response,
-  schema: Schema.Codec<A, unknown>,
-  fallback: string,
-) => {
-  if (!response.ok) throw await failure(response, fallback);
-  return Schema.decodeUnknownPromise(schema)(await response.json()).catch(
-    () => {
-      throw new Error(fallback);
-    },
-  );
-};
 
 /**
  * PUT one part with upload progress, which fetch cannot report. The URL is a
@@ -87,23 +60,8 @@ const upload = async (
   onCreated: (id: string) => void,
   onProgress: (loaded: number) => void,
 ): Promise<AttachmentData> => {
-  const created = await decode(
-    await sameOriginFetch("/v1/attachments", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify({
-        filename: file.name || "file",
-        mimeType: file.type || "application/octet-stream",
-        size: file.size,
-      }),
-      signal,
-    }),
-    CreateAttachmentResponseSchema,
-    "The file could not be uploaded.",
-  );
+  const requests = await import("./attachment-upload-mutations.js");
+  const created = await requests.createAttachment(file, signal);
   onCreated(created.id);
   const loaded = new Array<number>(created.partCount).fill(0);
   const report = () => onProgress(loaded.reduce((sum, value) => sum + value));
@@ -140,20 +98,10 @@ const upload = async (
       () => worker(),
     ),
   );
-  return decode(
-    await sameOriginFetch(`/v1/attachments/${created.id}/complete`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-      },
-      body: JSON.stringify({
-        parts: parts.sort((left, right) => left.partNumber - right.partNumber),
-      }),
-      signal,
-    }),
-    AttachmentDataSchema,
-    "The file could not be uploaded.",
+  return requests.completeAttachment(
+    created.id,
+    parts.sort((left, right) => left.partNumber - right.partNumber),
+    signal,
   );
 };
 
@@ -205,8 +153,11 @@ export const startAttachmentUpload = (file: File): AttachmentUpload => {
     settled,
     cancel: () => {
       controller.abort();
-      if (createdId !== undefined)
-        void sameOriginFetch(`/v1/attachments/${createdId}`, {
+      const id = createdId;
+      if (id !== undefined)
+        // Answers 204 without a body, which `dxClient.call` cannot read
+        // yet; the route stays legacy until it can.
+        void sameOriginFetch(`/v1/attachments/${id}`, {
           method: "DELETE",
         }).catch(() => undefined);
     },

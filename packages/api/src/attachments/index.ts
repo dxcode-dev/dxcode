@@ -129,4 +129,8 @@ export const sanitizeAttachmentFilename = (name: string) => {
 export const attachmentPath = (id: string, filename: string) =>
   `/v1/attachments/${id}/${encodeURIComponent(filename)}`;
 
+/** Whether a same-origin path is one of dx's attachment routes. */
+export const isAttachmentFilePath = (pathname: string) =>
+  pathname.startsWith("/v1/attachments/att_");
+
 export * from "./message-attachments.js";
