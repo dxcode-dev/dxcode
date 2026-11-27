@@ -654,7 +654,16 @@ const servePublic = async (
     for (const cookie of refresh) notice.headers.append("set-cookie", cookie);
     return notice;
   }
-  return relay(request, bindings, configuration, match, refresh, undefined);
+  return relay(
+    request,
+    bindings,
+    configuration,
+    match,
+    refresh,
+    undefined,
+    undefined,
+    link,
+  );
 };
 
 /**
@@ -754,6 +763,7 @@ const relay = async (
   refresh: ReadonlyArray<string>,
   identity: PortalIdentity | undefined,
   session?: PortalSession,
+  publicLink?: PublicLink,
 ) => {
   const namespace = bindings.THREAD_EXECUTION;
   if (namespace === undefined) return unavailable(request, configuration);
@@ -794,6 +804,7 @@ const relay = async (
                 userId: session.userId,
                 expiresAt: 0,
               },
+          publicLink,
         )
       : await relayHttp(outgoing, target, identity);
   } catch {

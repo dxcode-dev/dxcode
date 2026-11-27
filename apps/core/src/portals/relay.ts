@@ -10,8 +10,11 @@
 // with x-dx-thread-id, x-dx-proxy-port, x-dx-proxy-target (path and query),
 // x-dx-proxy-host (the Host the guest sees), and x-dx-proxy-wake ("1" may
 // wake a paused workspace), and x-dx-proxy-anonymous ("1" for a visitor of a
-// public Portal, who gets a smaller share of the Thread's streams). The
-// object drops every other x-dx-* header and
+// public Portal, who gets a smaller share of the Thread's streams). An
+// anonymous WebSocket also carries x-dx-proxy-public-link and
+// x-dx-proxy-public-expires, the public link's id and expiry, so the object
+// closes it when the link expires or POST /proxy/public-revoked revokes it.
+// The object drops every other x-dx-* header and
 // forwards the rest. Failures carry x-dx-proxy-error (see
 // threads/resident-proxy-relay.ts for the full list and statuses).
 
@@ -172,6 +175,21 @@ const pathAndQuery = (url: URL) => `${url.pathname}${url.search}`;
 const stub = (target: PortalRelayTarget) =>
   target.namespace.get(target.namespace.idFromName(target.threadId));
 
+const PUBLIC_LINK_HEADER = "x-dx-proxy-public-link";
+const PUBLIC_EXPIRES_HEADER = "x-dx-proxy-public-expires";
+
+/** The public link an anonymous WebSocket came through, as the relay sent it. */
+export const proxyPublicLink = (headers: Headers, port: number) => {
+  const id = headers.get(PUBLIC_LINK_HEADER);
+  const expiresAt = Number(headers.get(PUBLIC_EXPIRES_HEADER));
+  return id === null ||
+    id.length === 0 ||
+    id.length > 256 ||
+    !Number.isSafeInteger(expiresAt)
+    ? undefined
+    : { port, id, expiresAt };
+};
+
 const relayHeaders = (
   headers: Headers,
   target: PortalRelayTarget,
@@ -221,22 +239,48 @@ export const relayWebSocket = (
   target: PortalRelayTarget,
   identity: PortalIdentity | undefined,
   session: BrowserSessionBinding | undefined,
-) =>
-  stub(target).fetch(
+  publicLink?: { readonly id: string; readonly expiresAt: number },
+) => {
+  const headers = setBrowserSessionHeaders(
+    relayHeaders(
+      guestRequestHeaders(request, target, identity, true),
+      target,
+      pathAndQuery(new URL(request.url)),
+      false,
+      identity,
+    ),
+    session,
+  );
+  if (identity === undefined && publicLink !== undefined) {
+    headers.set(PUBLIC_LINK_HEADER, publicLink.id);
+    headers.set(PUBLIC_EXPIRES_HEADER, String(publicLink.expiresAt));
+  }
+  return stub(target).fetch(
     new Request("https://thread-execution/proxy/websocket", {
       method: "GET",
-      headers: setBrowserSessionHeaders(
-        relayHeaders(
-          guestRequestHeaders(request, target, identity, true),
-          target,
-          pathAndQuery(new URL(request.url)),
-          false,
-          identity,
-        ),
-        session,
-      ),
+      headers,
     }),
   );
+};
+
+/**
+ * The owner made `port` private: the Thread execution object closes every
+ * anonymous visitor's WebSocket that came through its public link.
+ */
+export const closePublicPortalSockets = async (
+  namespace: DurableObjectNamespace,
+  threadId: ThreadId,
+  port: number,
+) => {
+  const response = await namespace.get(namespace.idFromName(threadId)).fetch(
+    new Request("https://thread-execution/proxy/public-revoked", {
+      method: "POST",
+      headers: { "x-dx-thread-id": threadId, "x-dx-proxy-port": String(port) },
+    }),
+  );
+  await response.body?.cancel();
+  return response.ok;
+};
 
 export interface GuestPort {
   readonly port: number;

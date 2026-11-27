@@ -2,9 +2,11 @@ import { sweepClaudePlanWaits } from "../claude-code/plan-wait.js";
 import type { Bindings } from "../http/types.js";
 import { automationLogger } from "../logging.js";
 import { spacesEnabled } from "../spaces/availability.js";
+import { creatorAccessEnded } from "./creator.js";
 import {
   claimFiring,
   dueSchedules,
+  pauseSchedule,
   recordFiring,
   type ScheduleRow,
 } from "./schedules.js";
@@ -96,6 +98,26 @@ const fireSchedule = async (
       status: "skipped",
       detail: thread?.paused ?? "The Thread is gone.",
     });
+    return;
+  }
+  // A member's schedule never outlives their Contribute access: it pauses
+  // until the owner resumes it.
+  const ended = await creatorAccessEnded(
+    db,
+    row.thread_id,
+    row.created_by_user_id,
+    now,
+  );
+  if (ended !== undefined) {
+    await pauseSchedule(db, row.thread_id, now);
+    await recordFiring(db, row.thread_id, { status: "skipped", detail: ended });
+    automationLogger.info(
+      "A member's schedule paused after their access ended.",
+      {
+        event: "schedule_creator_access_ended",
+        threadId: row.thread_id,
+      },
+    );
     return;
   }
   const target: WakeTarget = {

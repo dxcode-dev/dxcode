@@ -8,6 +8,7 @@ import {
   type CallingThread,
   readCallingThread,
 } from "../threads/calling-thread.js";
+import { automationCreator } from "./creator.js";
 import { catchUpCi } from "./deliver.js";
 import {
   appHearsRepository,
@@ -76,13 +77,20 @@ const threadInput = v.optional(
  * subscriptions, and push notifications to the owner. Every call acts as
  * the calling Thread's owner and reaches only that owner's Threads (only
  * the shared family, while the calling Thread is shared). The sweep in
- * `sweep.ts` carries them out.
+ * `sweep.ts` carries them out. A schedule or subscription a Contribute
+ * member's message sets up records that member, and pauses once their
+ * access ends (creator.ts).
  */
 export const createAutomationTools = (
   callingThreadId: string,
   getContext: () => ThreadToolsContext,
   submissionId?: string,
+  /** The person whose message this turn answers, if one did. */
+  requesterUserId?: UserId,
 ): ToolDefinition[] => {
+  const creator = (owner: CallingThread) =>
+    automationCreator(owner.ownerUserId, requesterUserId);
+
   const withOwner = async <T>(
     use: (context: ThreadToolsContext, owner: CallingThread) => Promise<T>,
   ) => {
@@ -551,14 +559,21 @@ export const createAutomationTools = (
           checkAgentMode(owner, data.agent_mode);
           const threadId = await targetThread(context, owner, data.thread);
           const row = await recurrence(() =>
-            writeSchedule(context.db, threadId, owner.ownerUserId, {
-              title: data.title,
-              prompt: data.prompt,
-              schedule: data.schedule,
-              label: data.schedule_label,
-              runMode: data.run_mode ?? "existing",
-              agentMode: data.agent_mode ?? null,
-            }),
+            writeSchedule(
+              context.db,
+              threadId,
+              owner.ownerUserId,
+              {
+                title: data.title,
+                prompt: data.prompt,
+                schedule: data.schedule,
+                label: data.schedule_label,
+                runMode: data.run_mode ?? "existing",
+                agentMode: data.agent_mode ?? null,
+              },
+              new Date(),
+              creator(owner),
+            ),
           );
           return { output: row === null ? null : scheduleView(row) };
         }),
@@ -613,23 +628,31 @@ export const createAutomationTools = (
           )
             throw new Error('agent_mode is only for run_mode "fresh".');
           const row = await recurrence(() =>
-            patchSchedule(context.db, current, {
-              ...(data.title === undefined ? {} : { title: data.title }),
-              ...(data.prompt === undefined ? {} : { prompt: data.prompt }),
-              ...(data.schedule === undefined
-                ? {}
-                : { schedule: data.schedule }),
-              ...(data.schedule_label === undefined
-                ? {}
-                : { label: data.schedule_label }),
-              ...(data.run_mode === undefined
-                ? {}
-                : { runMode: data.run_mode }),
-              ...(data.agent_mode === undefined
-                ? {}
-                : { agentMode: data.agent_mode }),
-              ...(data.enabled === undefined ? {} : { enabled: data.enabled }),
-            }),
+            patchSchedule(
+              context.db,
+              current,
+              {
+                ...(data.title === undefined ? {} : { title: data.title }),
+                ...(data.prompt === undefined ? {} : { prompt: data.prompt }),
+                ...(data.schedule === undefined
+                  ? {}
+                  : { schedule: data.schedule }),
+                ...(data.schedule_label === undefined
+                  ? {}
+                  : { label: data.schedule_label }),
+                ...(data.run_mode === undefined
+                  ? {}
+                  : { runMode: data.run_mode }),
+                ...(data.agent_mode === undefined
+                  ? {}
+                  : { agentMode: data.agent_mode }),
+                ...(data.enabled === undefined
+                  ? {}
+                  : { enabled: data.enabled }),
+              },
+              new Date(),
+              creator(owner),
+            ),
           );
           return { output: row === null ? null : scheduleView(row) };
         }),
@@ -676,6 +699,8 @@ export const createAutomationTools = (
             context.db,
             owner.ownerUserId,
             input,
+            new Date(),
+            creator(owner),
           );
           if (
             !existed &&
@@ -796,6 +821,8 @@ export const createAutomationTools = (
                     context.db,
                     current.id,
                     data.enabled,
+                    new Date(),
+                    creator(owner),
                   );
             return { output: subscriptionView(row as SubscriptionRow) };
           }
@@ -824,6 +851,8 @@ export const createAutomationTools = (
             current,
             input,
             data.enabled ?? current.enabled === 1,
+            new Date(),
+            creator(owner),
           );
           await catchUpCi(context.bindings, row as SubscriptionRow);
           return { output: subscriptionView(row as SubscriptionRow) };

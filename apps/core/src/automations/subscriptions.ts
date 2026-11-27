@@ -33,12 +33,14 @@ export interface SubscriptionRow {
   readonly equivalence_key: string;
   readonly created_at: string;
   readonly updated_at: string;
+  /** The member who set it up, when not the owner (creator.ts). */
+  readonly created_by_user_id: string | null;
 }
 
 const COLUMNS = `id, owner_user_id, thread_id, title, repository, filter_kind,
   filter_json, destination, project_id, agent_mode, instructions, automatic,
   enabled, state, state_detail, expires_at, equivalence_key, created_at,
-  updated_at`;
+  updated_at, created_by_user_id`;
 
 /** CI and comment subscriptions end after this unless given an expiry. */
 export const DEFAULT_LIFETIME_MS = 30 * 24 * 60 * 60_000;
@@ -189,12 +191,15 @@ const linkFollowed = (
  * its paused state and instructions kept. An automatic CI follow-up on the
  * same branch moves to the new commit and starts watching again. Two round
  * trips: the lookup, then the write, the link, and the read back together.
+ * A new one records `createdBy` (`automationCreator`) as who set it up; a
+ * saved one keeps who it records.
  */
 export const createSubscription = async (
   db: D1Database,
   ownerUserId: string,
   input: SubscriptionInput,
   now = new Date(),
+  createdBy?: string | null,
 ) => {
   const key = await equivalenceKey(ownerUserId, input);
   const at = now.toISOString();
@@ -249,7 +254,7 @@ export const createSubscription = async (
         .prepare(
           `INSERT INTO github_subscription (${COLUMNS})
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 'active',
-                   NULL, ?13, ?14, ?15, ?15)`,
+                   NULL, ?13, ?14, ?15, ?15, ?16)`,
         )
         .bind(
           id,
@@ -267,6 +272,7 @@ export const createSubscription = async (
           input.expiresAt,
           key,
           at,
+          createdBy ?? null,
         ),
       ...linkFollowed(db, input, now),
       read(id),
@@ -275,13 +281,18 @@ export const createSubscription = async (
   };
 };
 
-/** Replaces a subscription's configuration and watches from now. */
+/**
+ * Replaces a subscription's configuration and watches from now. `createdBy`
+ * is who made the change (`automationCreator`); undefined keeps who is
+ * recorded.
+ */
 export const replaceSubscription = async (
   db: D1Database,
   current: SubscriptionRow,
   input: SubscriptionInput,
   enabled: boolean,
   now = new Date(),
+  createdBy?: string | null,
 ) => {
   const at = now.toISOString();
   const key = await equivalenceKey(current.owner_user_id, input);
@@ -294,7 +305,7 @@ export const replaceSubscription = async (
               agent_mode = ?9, instructions = ?10, automatic = ?11,
               enabled = ?12, state = 'active', state_detail = NULL,
               expires_at = ?13, equivalence_key = ?14, created_at = ?15,
-              updated_at = ?15
+              updated_at = ?15, created_by_user_id = ?16
         WHERE id = ?1`,
       )
       .bind(
@@ -313,6 +324,7 @@ export const replaceSubscription = async (
         input.expiresAt,
         key,
         at,
+        createdBy === undefined ? current.created_by_user_id : createdBy,
       ),
     ...linkFollowed(db, input, now),
     db
@@ -324,22 +336,31 @@ export const replaceSubscription = async (
 
 /**
  * Pauses or resumes. Webhooks that arrive while it is paused match nothing,
- * so resuming watches from now.
+ * so resuming watches from now. `createdBy` is who made the change
+ * (`automationCreator`); undefined keeps who is recorded.
  */
 export const setSubscriptionEnabled = async (
   db: D1Database,
   id: string,
   enabled: boolean,
   now = new Date(),
+  createdBy?: string | null,
 ) => {
   const at = now.toISOString();
   await db
     .prepare(
       `UPDATE github_subscription
-          SET enabled = ?2, updated_at = ?3
+          SET enabled = ?2, updated_at = ?3,
+              created_by_user_id = CASE WHEN ?5 THEN created_by_user_id ELSE ?4 END
         WHERE id = ?1`,
     )
-    .bind(id, enabled ? 1 : 0, at)
+    .bind(
+      id,
+      enabled ? 1 : 0,
+      at,
+      createdBy ?? null,
+      createdBy === undefined ? 1 : 0,
+    )
     .run();
   return readSubscription(db, id);
 };
@@ -380,13 +401,15 @@ export const listeningSubscriptions = async (
 };
 
 /**
- * Automatic CI follow-ups on a branch, finished ones too: a new push to it
- * starts them watching its new head.
+ * Automatic CI follow-ups on a branch of the repository, finished ones too:
+ * a new push to it starts them watching its new head. Expired ones stay
+ * ended. The caller makes sure the push is to this repository's branch.
  */
 export const automaticCiOn = async (
   db: D1Database,
   repository: string,
   branch: string,
+  now: Date,
 ) =>
   (
     await db
@@ -395,32 +418,49 @@ export const automaticCiOn = async (
           WHERE repository = ?1 COLLATE NOCASE AND filter_kind = 'ci'
             AND automatic = 1 AND state IN ('active', 'finished')
             AND json_extract(filter_json, '$.branch') = ?2
+            AND (expires_at IS NULL OR expires_at > ?3)
           LIMIT 20`,
       )
-      .bind(repository, branch)
+      .bind(repository, branch, now.toISOString())
       .all<SubscriptionRow>()
   ).results;
 
 /**
  * Saves what the header shows of a pull request on every subscription and
  * Thread link that follows it: one write each per pull_request webhook, so
- * no view reads GitHub.
+ * no view reads GitHub. Skips the Threads whose owner's access was not
+ * confirmed, and subscriptions that failed, such as on lost access.
  */
 export const savePullSubject = async (
   db: D1Database,
   repository: string,
   number: number,
   subject: PullSubject,
+  skipThreadIds: ReadonlyArray<string> = [],
 ) => {
   await db.batch([
     db
       .prepare(
         `UPDATE github_subscription SET subject_json = ?3
           WHERE repository = ?1 COLLATE NOCASE AND filter_kind = 'pr-comments'
-            AND json_extract(filter_json, '$.prNumber') = ?2`,
+            AND json_extract(filter_json, '$.prNumber') = ?2
+            AND state != 'failed'
+            AND thread_id NOT IN (SELECT value FROM json_each(?4))`,
       )
-      .bind(repository, number, JSON.stringify(subject)),
-    saveLinkSubjectStatement(db, repository, number, "pull", subject),
+      .bind(
+        repository,
+        number,
+        JSON.stringify(subject),
+        JSON.stringify(skipThreadIds),
+      ),
+    saveLinkSubjectStatement(
+      db,
+      repository,
+      number,
+      "pull",
+      subject,
+      skipThreadIds,
+    ),
   ]);
 };
 

@@ -15,6 +15,7 @@ import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/app.js";
 import { createAutomationTools } from "../../src/automations/agent-tools.js";
+import { deliverGitHubWebhook } from "../../src/automations/deliver.js";
 import { threadLinks } from "../../src/automations/links.js";
 import {
   SCHEDULE_WAKE_MESSAGE,
@@ -186,12 +187,13 @@ const bindings: Bindings = createTestBindings({
   DX_SIGN_IN_PROVIDERS: "email-password",
 });
 
-const tools = (threadId: string) =>
+const tools = (threadId: string, requester?: UserId) =>
   Object.fromEntries(
     createAutomationTools(
       threadId,
       () => ({ db: env.DB, bindings }),
       "sub_turn",
+      requester,
     ).map((tool) => [tool.name, tool]),
   );
 
@@ -200,10 +202,11 @@ const call = async (
   name: string,
   data: Record<string, unknown>,
   toolCallId = crypto.randomUUID(),
+  requester?: UserId,
 ) =>
   (
     (await (
-      tools(threadId)[name] as typeof createAutomationTools extends (
+      tools(threadId, requester)[name] as typeof createAutomationTools extends (
         ...args: never
       ) => Array<infer T>
         ? T
@@ -214,6 +217,36 @@ const call = async (
       signal: undefined,
     } as never)) as { output: unknown }
   ).output as Record<string, unknown> | null;
+
+/** A Contribute member of the owner's workspace, which `main` is shared with. */
+const member = "usr_00000000-0000-4000-8000-00000000a503" as UserId;
+const shareMainWithMember = async () => {
+  const workspaceId = `org_automations_${signups}`;
+  await env.DB.batch([
+    env.DB.prepare(
+      'INSERT OR IGNORE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, 1, 1)',
+    ).bind(member, "Member", `${member}@example.test`),
+    env.DB.prepare(
+      "INSERT INTO organization (id, name, slug, createdAt) VALUES (?, 'Acme', ?, 1)",
+    ).bind(workspaceId, `acme-automations-${signups}`),
+    env.DB.prepare(
+      "INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'owner', 1)",
+    ).bind(`${workspaceId}-1`, workspaceId, owner),
+    env.DB.prepare(
+      "INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'member', 1)",
+    ).bind(`${workspaceId}-2`, workspaceId, member),
+    env.DB.prepare(
+      "UPDATE threads SET workspace_access = 'contribute', contribute_until = '2099-06-01T00:00:00.000Z', shared_workspace_id = ? WHERE id = ?",
+    ).bind(workspaceId, main.id),
+  ]);
+};
+/** The member's Contribute grant ends; the Thread stays shared as View. */
+const endContribute = () =>
+  env.DB.prepare(
+    "UPDATE threads SET contribute_until = '2026-01-01T00:00:00.000Z' WHERE id = ?",
+  )
+    .bind(main.id)
+    .run();
 
 /** What the Thread header reads: GET …/automations, as the owner. */
 const shownTo = async (threadId: string) =>
@@ -420,6 +453,66 @@ describe("schedules", () => {
     expect(await call(main.id, "get_schedule", {})).toMatchObject({
       lastRun: { status: "skipped" },
     });
+  });
+
+  it("pauses a member's schedule once their Contribute access ends, and keeps the owner's running", async () => {
+    await shareMainWithMember();
+    const hourly = {
+      title: "Hourly",
+      prompt: "Look at the queue.",
+      schedule: "DTSTART:20990101T000000Z\nRRULE:FREQ=HOURLY",
+      schedule_label: "Hourly",
+    };
+    // The member's message asked for it: it records the member.
+    await call(main.id, "set_schedule", hourly, undefined, member);
+    await sweepAutomations(bindings, at("2099-01-01T00:00:00Z"));
+    expect(delivered.messages).toHaveLength(1);
+
+    await endContribute();
+    await sweepAutomations(bindings, at("2099-01-01T01:00:00Z"));
+    await sweepAutomations(bindings, at("2099-01-01T02:00:00Z"));
+    expect(delivered.messages).toHaveLength(1);
+    expect(await call(main.id, "get_schedule", {})).toMatchObject({
+      status: "paused",
+      lastRun: {
+        status: "skipped",
+        detail: expect.stringMatching(/no longer has Contribute access/),
+      },
+    });
+
+    // The owner resuming it from the Thread header makes it their own.
+    const resumed = await app.request(
+      `/v1/threads/${main.id}/automations/schedule`,
+      {
+        method: "PATCH",
+        headers: {
+          cookie: ownerCookie,
+          origin,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ enabled: true }),
+      },
+      authBindings,
+    );
+    expect(resumed.status).toBe(200);
+    const next = String((await call(main.id, "get_schedule", {}))?.nextRunAt);
+    await sweepAutomations(bindings, new Date(next));
+    expect(await call(main.id, "get_schedule", {})).toMatchObject({
+      status: "active",
+      lastRun: { status: "delivered" },
+    });
+
+    // A schedule the owner asked for runs on after the member's access ends.
+    await call(
+      main.id,
+      "set_schedule",
+      { ...hourly, schedule: "DTSTART:20990301T000000Z\nRRULE:FREQ=HOURLY" },
+      undefined,
+      owner,
+    );
+    await sweepAutomations(bindings, at("2099-03-01T00:00:00Z"));
+    expect(delivered.messages).toHaveLength(2);
+    expect(delivered.messages[1]?.threadId).toBe(main.id);
   });
 
   it("refuses another owner's Thread and polling-speed rules", async () => {
@@ -673,7 +766,7 @@ describe("GitHub subscriptions", () => {
         pull_request: {
           number,
           user: { login },
-          head: { sha, ref: "feat/y" },
+          head: { sha, ref: "feat/y", repo: { full_name: REPO } },
           html_url: `https://github.com/${REPO}/pull/${number}`,
           title: `Widget fix ${number}`,
           body: "## Problem\n\nWidgets   break.",
@@ -728,7 +821,7 @@ describe("GitHub subscriptions", () => {
         pull_request: {
           number: 9,
           user: { login: "octo-owner" },
-          head: { sha: SHA, ref: "feat/y" },
+          head: { sha: SHA, ref: "feat/y", repo: { full_name: REPO } },
           body: "",
           state: "open",
           created_at: "2026-10-01T00:00:00Z",
@@ -759,7 +852,7 @@ describe("GitHub subscriptions", () => {
       pull_request: {
         number: 9,
         user: { login: "octo-owner" },
-        head: { sha: next, ref: "feat/y" },
+        head: { sha: next, ref: "feat/y", repo: { full_name: REPO } },
       },
     });
     expect(await followed()).toEqual(
@@ -848,7 +941,7 @@ describe("GitHub subscriptions", () => {
       pull_request: {
         number: 21,
         user: { login: "octo-owner" },
-        head: { sha: SHA, ref: "feat/alias" },
+        head: { sha: SHA, ref: "feat/alias", repo: { full_name: REPO } },
         html_url: `https://github.com/${REPO}/pull/21`,
         title: "Widget fix 21",
         body: "",
@@ -870,6 +963,243 @@ describe("GitHub subscriptions", () => {
         }),
       ]),
     );
+  });
+
+  it("moves a CI follow-up only on pushes to its own repository's branch, before it expires (#2665)", async () => {
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR REPLACE INTO project_repository (project_id, provider,
+           binding_revision, full_name, web_url, clone_url, created_at, updated_at)
+         VALUES (?, 'github', 1, ?, 'https://github.com/acme/widgets',
+           'https://github.com/acme/widgets.git', ?, ?)`,
+      ).bind(ownerProject.id, REPO, now, now),
+      env.DB.prepare(
+        `INSERT OR REPLACE INTO github_user_authorization (id, user_id,
+           provider_account_id, provider_account_login, status, created_at, updated_at)
+         VALUES ('gua_owner', ?, '41', 'Octo-Owner', 'active', ?, ?)`,
+      ).bind(owner, now, now),
+      env.DB.prepare(
+        "UPDATE threads SET activity_status = 'working', last_activity_at = ? WHERE id = ?",
+      ).bind(now, main.id),
+    ]);
+    const pending = (sha: string) => {
+      github[`/repos/${REPO}/commits/${sha}/status`] = { statuses: [] };
+      github[`/repos/${REPO}/commits/${sha}/check-runs`] = {
+        check_runs: [checkRun(1, "build", null)],
+      };
+    };
+    const pull = (
+      action: string,
+      number: number,
+      login: string,
+      sha: string,
+      head: string,
+    ) =>
+      webhook("pull_request", {
+        action,
+        pull_request: {
+          number,
+          user: { login },
+          head: { sha, ref: "fix-login", repo: { full_name: head } },
+          html_url: `https://github.com/${REPO}/pull/${number}`,
+          title: `Fix ${number}`,
+          body: "",
+          state: "open",
+          created_at: "2026-10-01T00:00:00Z",
+        },
+      });
+    const ciFollowUps = async () =>
+      (
+        (await call(main.id, "list_github_subscriptions", {
+          scope: "this-thread",
+        })) as { subscriptions: Array<Record<string, unknown>> }
+      ).subscriptions.filter((row) => row.filterKind === "ci");
+
+    pending(SHA);
+    await pull("opened", 9, "octo-owner", SHA, REPO);
+    expect(await ciFollowUps()).toEqual([
+      expect.objectContaining({
+        filter: { commitSha: SHA, branch: "fix-login" },
+      }),
+    ]);
+    // The owner's own push to the branch moves it.
+    const pushed = "b".repeat(40);
+    pending(pushed);
+    await pull("synchronize", 9, "octo-owner", pushed, REPO);
+    expect(await ciFollowUps()).toEqual([
+      expect.objectContaining({
+        filter: { commitSha: pushed, branch: "fix-login" },
+      }),
+    ]);
+
+    // Mallory's fork PR reuses the branch name and keeps pushing: the
+    // follow-up stays on the owner's commit and nothing reads hers.
+    const forked = "e".repeat(40);
+    pending(forked);
+    githubRequests = [];
+    await pull("synchronize", 40, "mallory", forked, "mallory/widgets");
+    // A head whose fork was deleted names no repository.
+    await webhook("pull_request", {
+      action: "synchronize",
+      pull_request: {
+        number: 40,
+        user: { login: "mallory" },
+        head: { sha: forked, ref: "fix-login", repo: null },
+      },
+    });
+    expect(await ciFollowUps()).toEqual([
+      expect.objectContaining({
+        filter: { commitSha: pushed, branch: "fix-login" },
+      }),
+    ]);
+    expect(githubRequests.filter((path) => path.includes(forked))).toEqual([]);
+    expect(delivered.messages).toEqual([]);
+
+    // A fork PR its Thread opened is followed for comments, not by branch.
+    await pull("opened", 41, "octo-owner", forked, "octo-owner/widgets");
+    expect(await ciFollowUps()).toHaveLength(1);
+
+    // An expired follow-up stays ended when its branch moves.
+    await env.DB.prepare(
+      "UPDATE github_subscription SET expires_at = ? WHERE filter_kind = 'ci' AND thread_id = ?",
+    )
+      .bind(new Date(Date.now() - 1000).toISOString(), main.id)
+      .run();
+    const later = "f".repeat(40);
+    pending(later);
+    await pull("synchronize", 9, "octo-owner", later, REPO);
+    expect(await ciFollowUps()).toEqual([
+      expect.objectContaining({
+        filter: { commitSha: pushed, branch: "fix-login" },
+      }),
+    ]);
+  });
+
+  it("stops delivering a repository's content to a Thread whose owner lost access (#2666)", async () => {
+    // One Thread follows new issues and issue 70's comments; another only
+    // links PR 71.
+    const linker = thread(
+      "thr_00000000-0000-4000-8000-00000000a5c1",
+      ownerProject.id as ProjectId,
+      owner,
+    );
+    await runRepositories(
+      Effect.gen(function* () {
+        yield* (yield* ThreadRepository).insert(linker);
+      }),
+    );
+    const intake = await call(main.id, "create_github_subscription", {
+      title: "New issues",
+      repository: REPO,
+      filter_kind: "issue-opened",
+    });
+    const comments = await call(main.id, "create_github_subscription", {
+      title: "Issue 70",
+      repository: REPO,
+      filter_kind: "issue-comments",
+      issue_number: 70,
+    });
+    github[`/repos/${REPO}/issues/71`] = {
+      number: 71,
+      title: "Rotate keys",
+      state: "open",
+      pull_request: { merged_at: null },
+    };
+    await call(linker.id, "link_github_issue", {
+      repository: REPO,
+      number: 71,
+    });
+    const comment = (id: number) => ({
+      repository: { full_name: REPO },
+      sender: { login: "bob" },
+      issue: { number: 70 },
+      comment: {
+        id,
+        html_url: `https://github.com/${REPO}/issues/70#c${id}`,
+        body: "Private detail.",
+        user: { login: "bob" },
+      },
+    });
+    // While the owner reads the repository, a comment reaches the Thread.
+    await webhook("issue_comment", { action: "created", ...comment(1) });
+    expect(delivered.messages).toHaveLength(1);
+
+    // The owner is removed from the organization: GitHub answers 404.
+    delete github[`/repos/${REPO}`];
+    const later = new Date(Date.now() + 10 * 60_000);
+    await deliverGitHubWebhook(
+      bindings,
+      "issues",
+      "opened",
+      {
+        repository: { full_name: REPO },
+        sender: { login: "bob" },
+        issue: {
+          number: 72,
+          title: "Secret roadmap",
+          html_url: `https://github.com/${REPO}/issues/72`,
+          user: { login: "bob" },
+          labels: [],
+        },
+      },
+      undefined,
+      later,
+    );
+    await deliverGitHubWebhook(
+      bindings,
+      "issue_comment",
+      "created",
+      comment(2),
+      undefined,
+      later,
+    );
+    await deliverGitHubWebhook(
+      bindings,
+      "pull_request",
+      "edited",
+      {
+        repository: { full_name: REPO },
+        sender: { login: "bob" },
+        pull_request: {
+          number: 71,
+          user: { login: "bob" },
+          head: { sha: SHA, ref: "keys", repo: { full_name: REPO } },
+          title: "Rotate keys: sk-live-123",
+          body: "Private details.",
+          state: "open",
+          created_at: "2026-10-01T00:00:00Z",
+        },
+      },
+      undefined,
+      later,
+    );
+    expect(delivered.messages).toHaveLength(1);
+    expect(delivered.created).toEqual([]);
+    for (const created of [intake, comments])
+      expect(
+        await call(main.id, "get_github_subscription", {
+          subscription_id: created?.subscriptionId,
+        }),
+      ).toMatchObject({
+        state: "failed",
+        stateDetail: `The owner's GitHub credentials no longer read ${REPO}.`,
+      });
+    expect(JSON.stringify(await shownTo(linker.id))).not.toMatch(
+      /sk-live-123|Rotate keys/,
+    );
+    expect(
+      (
+        await env.DB.prepare(
+          "SELECT verified, subject_json FROM thread_github_link WHERE thread_id IN (?, ?)",
+        )
+          .bind(main.id, linker.id)
+          .all()
+      ).results,
+    ).toEqual([
+      { verified: 0, subject_json: null },
+      { verified: 0, subject_json: null },
+    ]);
   });
 
   it("quotes comment text as untrusted data, ignores forged and repeated deliveries, and stops when the PR merges", async () => {
@@ -952,6 +1282,55 @@ describe("GitHub subscriptions", () => {
       ...comment,
       comment: { ...comment.comment, id: 8 },
     });
+    expect(delivered.messages).toHaveLength(2);
+  });
+
+  it("pauses a member's subscription once their Contribute access ends", async () => {
+    await shareMainWithMember();
+    const created = await call(
+      main.id,
+      "create_github_subscription",
+      {
+        title: "PR 21",
+        repository: REPO,
+        filter_kind: "pr-comments",
+        pr_number: 21,
+      },
+      undefined,
+      member,
+    );
+    const comment = (id: number) => ({
+      action: "created",
+      issue: { number: 21, pull_request: {} },
+      comment: {
+        id,
+        html_url: `https://github.com/acme/widgets/pull/21#c${id}`,
+        body: "Looks good.",
+        user: { login: "mallory" },
+      },
+    });
+    await webhook("issue_comment", comment(1));
+    expect(delivered.messages).toHaveLength(1);
+
+    await endContribute();
+    await webhook("issue_comment", comment(2));
+    await webhook("issue_comment", comment(3));
+    expect(delivered.messages).toHaveLength(1);
+    expect(
+      await call(main.id, "get_github_subscription", {
+        subscription_id: created?.subscriptionId,
+      }),
+    ).toMatchObject({ enabled: false, state: "paused" });
+
+    // The owner resuming it makes it their own: it delivers again.
+    await call(
+      main.id,
+      "update_github_subscription",
+      { subscription_id: created?.subscriptionId, enabled: true },
+      undefined,
+      owner,
+    );
+    await webhook("issue_comment", comment(4));
     expect(delivered.messages).toHaveLength(2);
   });
 
@@ -1569,6 +1948,52 @@ describe("GitHub subscriptions", () => {
         delivered.messages.find(({ body }) => body.includes("Comment 1")),
       ).toBeUndefined();
     });
+  });
+});
+
+describe("the schedule sweep", () => {
+  it("takes due schedules in turns across owners, so one owner's backlog never delays another's", async () => {
+    await call(main.id, "set_schedule", {
+      title: "Once",
+      prompt: "Do it.",
+      schedule: "DTSTART:20990101T000000Z\nRRULE:FREQ=DAILY;COUNT=1",
+      schedule_label: "Once",
+    });
+    // Another owner's 60 schedules came due earlier, on Threads they
+    // archived: more than one sweep takes.
+    const flood = Array.from({ length: 60 }, (_, index) =>
+      thread(
+        `thr_00000000-0000-4000-8000-0000000b${String(index).padStart(4, "0")}`,
+        strangerProject.id as ProjectId,
+        stranger,
+      ),
+    );
+    await runRepositories(
+      Effect.gen(function* () {
+        for (const row of flood) yield* (yield* ThreadRepository).insert(row);
+      }),
+    );
+    await env.DB.batch(
+      flood.map((row) =>
+        env.DB.prepare(
+          `INSERT INTO thread_schedule (thread_id, owner_user_id, title, prompt,
+             rrule, time_zone, label, run_mode, agent_mode, enabled, next_run_at,
+             fired_count, created_at, updated_at)
+           VALUES (?, ?, 'Flood', 'x', 'DTSTART:20200101T000000Z
+RRULE:FREQ=MINUTELY;INTERVAL=5', 'UTC', 'x', 'existing', NULL, 1,
+             '2098-12-31T23:00:00.000Z', 0, '2026-01-01', '2026-01-01')`,
+        ).bind(row.id, stranger),
+      ),
+    );
+    await env.DB.prepare(
+      "UPDATE threads SET lifecycle_state = 'archived' WHERE owner_user_id = ?",
+    )
+      .bind(stranger)
+      .run();
+    await sweepAutomations(bindings, at("2099-01-01T00:00:00Z"));
+    expect(delivered.messages.map(({ threadId }) => threadId)).toEqual([
+      main.id,
+    ]);
   });
 });
 

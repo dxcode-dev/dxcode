@@ -1529,6 +1529,15 @@ describe("Public Portal links in workerd", () => {
       status: "success",
       data: { port: 4100 },
     });
+    // Visitors' open WebSockets close too: the Thread's object is told
+    // which port went private (#2670).
+    const closing = execution.calls.at(-1);
+    expect(closing?.url).toBe("https://thread-execution/proxy/public-revoked");
+    expect(closing?.method).toBe("POST");
+    expect(closing?.headers.get("x-dx-thread-id")).toBe(threadId);
+    expect(closing?.headers.get("x-dx-proxy-port")).toBe("4100");
+    const relayed = () =>
+      execution.calls.filter(({ url }) => url.includes("/proxy/http"));
     expect((await visit(bindings, `${origin}/a.js`, asScript)).status).toBe(
       401,
     );
@@ -1540,7 +1549,7 @@ describe("Public Portal links in workerd", () => {
         })
       ).status,
     ).toBe(302);
-    expect(execution.calls).toHaveLength(1);
+    expect(relayed()).toHaveLength(1);
     expect((await revoke(bindings, owner.cookie, threadId, 4100)).status).toBe(
       200,
     );
@@ -1555,7 +1564,7 @@ describe("Public Portal links in workerd", () => {
     });
     expect(again.status).toBe(200);
     expect(await again.text()).toContain("Public preview");
-    expect(execution.calls).toHaveLength(1);
+    expect(relayed()).toHaveLength(1);
 
     // Expiry is exact: one second past the hour, the port is private.
     vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
@@ -1622,6 +1631,59 @@ describe("Public Portal links in workerd", () => {
     ).toBe(401);
     vi.useRealTimers();
     expect(execution.calls).toHaveLength(before + 1);
+  });
+
+  it("binds an anonymous visitor's WebSocket to the public link it came through (#2670)", async () => {
+    const owner = await signUp("public-socket");
+    const threadId = await createThread(owner.userId);
+    const execution = fakeExecution(() => {
+      const pair = new WebSocketPair();
+      pair[1].accept();
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    });
+    const bindings = { ...baseBindings, THREAD_EXECUTION: execution.namespace };
+    const origin = portalOriginFor(threadId, 4400);
+    const published = await publish(bindings, owner.cookie, threadId, 4400);
+    const { data } = (await published.json()) as {
+      data: { expiresAt: string };
+    };
+    const upgrade = (headers: Record<string, string> = {}) =>
+      app.request(
+        `${origin}/@vite/hmr`,
+        {
+          headers: {
+            upgrade: "websocket",
+            connection: "Upgrade",
+            origin,
+            "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+            "sec-websocket-version": "13",
+            "sec-fetch-mode": "websocket",
+            "sec-fetch-site": "same-origin",
+            ...headers,
+          },
+        },
+        bindings,
+      );
+
+    // A visitor cannot pick the link or expiry the object checks.
+    const socket = await upgrade({
+      "x-dx-proxy-public-link": "forged",
+      "x-dx-proxy-public-expires": "99999999999999",
+    });
+    expect(socket.status).toBe(101);
+    socket.webSocket?.accept();
+    socket.webSocket?.close();
+    const relayed = execution.calls.at(-1)?.headers;
+    expect(relayed?.get("x-dx-proxy-anonymous")).toBe("1");
+    const link = await env.DB.prepare(
+      "SELECT id FROM portal_public_links WHERE thread_id = ? AND port = ?",
+    )
+      .bind(threadId, 4400)
+      .first<string>("id");
+    expect(relayed?.get("x-dx-proxy-public-link")).toBe(link);
+    expect(Number(relayed?.get("x-dx-proxy-public-expires"))).toBe(
+      Date.parse(data.expiresAt),
+    );
   });
 
   it("lets only the owner make ports public, at most three at once", async () => {

@@ -4,7 +4,7 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { actingUserOf } from "../../src/plugins/services/installs.js";
 import { actingInstallOf } from "../../src/plugins/services/requests.js";
 import {
@@ -111,6 +111,17 @@ const makeDue = (stub: DurableObjectStub) =>
 describe("plugin trigger durable delivery", () => {
   it("deduplicates either upstream identity and enforces the per-minute quota", async () => {
     const { triggerId, stub } = await setup();
+    // Each accepted event sets the alarm for now, so the object may deliver
+    // some before deferDeliveryAlarm runs; a slow machine delivers more. Let
+    // a delivery already started finish here, not in the next test.
+    onTestFinished(async () => {
+      await deferDeliveryAlarm(stub);
+      await vi.waitFor(
+        async () =>
+          expect((await status(stub)).deliverySummary.inFlight).toBe(0),
+        { timeout: 20_000, interval: 50 },
+      );
+    });
     const first = await enqueue(stub, triggerId, "event-1", "intent-1");
     expect(first.status).toBe(202);
     const firstBody = await first.json<{ id: string }>();
@@ -137,7 +148,13 @@ describe("plugin trigger durable delivery", () => {
     expect(
       (await enqueue(stub, triggerId, "event-61", "intent-61")).status,
     ).toBe(429);
-    expect((await status(stub)).deliverySummary.pending).toBe(60);
+    // Every accepted event is kept once, delivered yet or not: the quota
+    // counts the minute's events, whatever their status.
+    const { deliverySummary } = await status(stub);
+    expect(
+      Object.values(deliverySummary).reduce((sum, count) => sum + count, 0),
+    ).toBe(60);
+    expect(deliverySummary.deadLetter + deliverySummary.cancelled).toBe(0);
   });
 
   it("recovers an expired lease after eviction without losing the attempt", async () => {

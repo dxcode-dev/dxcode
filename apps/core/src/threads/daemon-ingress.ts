@@ -188,8 +188,9 @@ export const forwardDaemonUpgrade = async (
     namespace === undefined
   )
     return new Response(null, { status: 404 });
+  // The same 404 as a Thread that does not exist (#2671).
   if (!DAEMON_KEY.test(request.headers.get("authorization") ?? ""))
-    return new Response(null, { status: 401 });
+    return new Response(null, { status: 404 });
   const headers = new Headers({
     upgrade: "websocket",
     "x-dx-daemon-ingress": "1",

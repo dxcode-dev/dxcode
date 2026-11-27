@@ -162,6 +162,7 @@ import {
 import { pluginOrbEnvironmentReads } from "../plugins/services/orb-environment.js";
 import { handleServiceRequest } from "../plugins/services/requests.js";
 import { DESKTOP_GATEWAY_PORT, INTERNAL_GUEST_PORTS } from "../portals/host.js";
+import { proxyPublicLink } from "../portals/relay.js";
 import {
   publishChangesInvalidation,
   publishRealtimeInvalidation,
@@ -240,6 +241,9 @@ export const DAEMON_ACTIVATION_DEADLINE_MS = 90_000;
 /** The shortest time between two daemon re-keys of a Thread (#1584). */
 export const DAEMON_REKEY_INTERVAL_MS = 60_000;
 const REKEYED_AT_STORAGE_KEY = "daemon-rekeyed-at";
+const MINTED_KEY_HASHES_STORAGE_KEY = "daemon-minted-key-hashes";
+/** How many of the Thread's recent daemon keys `#mintedKeyHashes` keeps. */
+const MINTED_KEY_HASHES_LIMIT = 16;
 /** A Terminal warm-up starts at most once per this interval per Thread. */
 export const TERMINAL_WARM_INTERVAL_MS = 30_000;
 export const DAEMON_ACTIVATION_GRACE_MS = 90_000;
@@ -664,6 +668,14 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   #pluginOrb = false;
   /** The next activation delivers a new daemon key instead of a nudge. */
   #rekey = false;
+  /**
+   * SHA-256 of the daemon keys this object minted for its Thread, newest
+   * last. A daemon presenting one of them that the authority no longer
+   * holds is stale (#1584) and earns a re-key; any other key is a guess,
+   * which never does (#2671). Undefined: stored by a release before this
+   * list was kept, so any wrong key re-keys until the next mint starts it.
+   */
+  #mintedKeyHashes: ReadonlyArray<string> | undefined;
   #readinessProbe?: {
     readonly socket: WebSocket;
     readonly generation: DaemonGeneration;
@@ -839,6 +851,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       );
       this.#pluginOrb =
         (await ctx.storage.get<boolean>(PLUGIN_ORB_STORAGE_KEY)) === true;
+      this.#mintedKeyHashes = await ctx.storage.get<ReadonlyArray<string>>(
+        MINTED_KEY_HASHES_STORAGE_KEY,
+      );
       this.#orbRuns =
         (await ctx.storage.get<OrbRuns>(ORB_RUNS_STORAGE_KEY)) ?? NO_ORB_RUNS;
       this.#lastPersistedHeartbeatAt = this.#authority?.lastSeen;
@@ -1281,6 +1296,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       path === "/proxy/ports"
     )
       return this.#proxy(request, path);
+    if (path === "/proxy/public-revoked")
+      return this.#closePublicPortal(request);
     if (path === "/desktop/windows") return this.#serveDesktopWindows(request);
     if (path === "/orb/memory" || path === "/orb/memory/stop")
       return this.#serveOrbMemory(request, path);
@@ -1981,6 +1998,27 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   }
 
   /**
+   * The owner made a port private: anonymous visitors' sockets that came
+   * through its public link close (portals/routes.ts, #2670).
+   */
+  #closePublicPortal(request: Request) {
+    const threadId = request.headers.get("x-dx-thread-id");
+    const port = Number(request.headers.get("x-dx-proxy-port"));
+    if (
+      request.method !== "POST" ||
+      threadId === null ||
+      (this.#authority !== undefined &&
+        this.#authority.threadId !== threadId) ||
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65_535
+    )
+      return new Response(null, { status: 404 });
+    this.#proxyRelay.closePublic(port);
+    return new Response(null, { status: 204 });
+  }
+
+  /**
    * Portal and Desktop traffic for an already authorized caller. A request
    * that may wake (`x-dx-proxy-wake: 1`) goes through the same wake gate as
    * Files reads; one that may not answers `workspace-paused` instead.
@@ -2101,6 +2139,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     }
     if (websocket) {
       const session = readBrowserSessionHeaders(request.headers);
+      // An anonymous visitor's socket stays bound to the public link it came
+      // through, so revoking or expiring the link closes it (#2670).
+      const publicLink = anonymous
+        ? proxyPublicLink(request.headers, port)
+        : undefined;
+      if (anonymous && publicLink === undefined)
+        return proxyFailure("invalid-request");
       const response = await this.#proxyRelay.websocket({
         port,
         target,
@@ -2112,6 +2157,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         wake,
         anonymous,
         ...(session === undefined ? {} : { session }),
+        ...(publicLink === undefined ? {} : { publicLink }),
       });
       if (session !== undefined && response.status === 101)
         await this.#watchSessions();
@@ -3171,6 +3217,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           const minted = await mintThreadDaemonApiKey(this.env, threadId);
           const apiKeyHash = threadDaemonApiKeyHash(Redacted.value(minted.key));
           const current = this.#authority;
+          await this.#rememberDaemonKey(apiKeyHash, current?.apiKeyHash);
           if (current?.threadId === threadId) {
             const previousKeyId = current.apiKeyId;
             this.#authority = { ...current, apiKeyId: minted.id, apiKeyHash };
@@ -4997,7 +5044,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     );
     if (Option.isNone(threadId) || threadId.value !== authority.threadId)
       return new Response(null, { status: 404 });
-    if (key === undefined) return new Response(null, { status: 401 });
+    if (key === undefined) return new Response(null, { status: 404 });
     const hash = threadDaemonApiKeyHash(key);
     let learned = false;
     if (authority.apiKeyHash === undefined) {
@@ -5007,10 +5054,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         request.headers.get("authorization"),
       );
       if (verified?.keyId !== authority.apiKeyId)
-        return this.#rejectDaemonKey(threadId.value);
+        return this.#rejectDaemonKey(threadId.value, hash);
       learned = true;
     } else if (hash !== authority.apiKeyHash)
-      return this.#rejectDaemonKey(threadId.value);
+      return this.#rejectDaemonKey(threadId.value, hash);
     // The authority may have been replaced while this request waited.
     const current = this.#authority;
     if (
@@ -5093,6 +5140,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     const apiKeyHash = threadDaemonApiKeyHash(Redacted.value(credential.key));
     // Read again: the authority may have changed while the key was minted.
     const current = this.#authority;
+    await this.#rememberDaemonKey(apiKeyHash, current?.apiKeyHash);
     if (known !== undefined && current?.threadId === threadId) {
       // One generation per Thread for its whole life. Only Core's own
       // expected versions are refreshed here.
@@ -5165,15 +5213,38 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     return true;
   }
 
-  #rejectDaemonKey(threadId: ThreadId) {
-    if (!this.#isTransportReady() && !this.#rekey) {
+  #rejectDaemonKey(threadId: ThreadId, hash: string) {
+    // Only a key this object minted for the Thread is stale; anything else
+    // is a guess, which must not cost the Thread a re-key (#2671).
+    const stale = this.#mintedKeyHashes?.includes(hash) ?? true;
+    if (stale && !this.#isTransportReady() && !this.#rekey) {
       this.#rekey = true;
       threadDaemonLogger.warn("Thread daemon presented a stale key.", {
         event: "thread_daemon_key_rejected",
         threadId,
       });
     }
-    return new Response(null, { status: 401 });
+    // The same answer as for a Thread without a daemon: a wrong key learns
+    // nothing about the Thread (#2671).
+    return new Response(null, { status: 404 });
+  }
+
+  /**
+   * Remembers a key minted for the Thread, so the daemon may present it
+   * later as a stale key. `previous`, the authority's key before it, seeds
+   * the list stored by a release before it was kept.
+   */
+  async #rememberDaemonKey(hash: string, previous: string | undefined) {
+    const known =
+      this.#mintedKeyHashes ?? (previous === undefined ? [] : [previous]);
+    this.#mintedKeyHashes = [
+      ...known.filter((each) => each !== hash),
+      hash,
+    ].slice(-MINTED_KEY_HASHES_LIMIT);
+    await this.ctx.storage.put(
+      MINTED_KEY_HASHES_STORAGE_KEY,
+      this.#mintedKeyHashes,
+    );
   }
 
   async #confirmDaemonKey(

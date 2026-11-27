@@ -34,11 +34,14 @@ export interface ScheduleRow {
   readonly last_run_thread_id: string | null;
   readonly created_at: string;
   readonly updated_at: string;
+  /** The member who set it up, when not the owner (creator.ts). */
+  readonly created_by_user_id: string | null;
 }
 
 const COLUMNS = `thread_id, owner_user_id, title, prompt, rrule, time_zone,
   label, run_mode, agent_mode, enabled, next_run_at, fired_count, last_run_at,
-  last_run_status, last_run_detail, last_run_thread_id, created_at, updated_at`;
+  last_run_status, last_run_detail, last_run_thread_id, created_at, updated_at,
+  created_by_user_id`;
 
 /** The owner's IANA zone, recorded by their browser; UTC until it has. */
 export const ownerTimeZone = async (db: D1Database, ownerUserId: string) =>
@@ -113,13 +116,17 @@ export interface ScheduleInput {
   readonly agentMode: string | null;
 }
 
-/** Replaces the Thread's schedule and enables it. */
+/**
+ * Replaces the Thread's schedule and enables it. `createdBy` is who set it
+ * up (`automationCreator`); undefined keeps who is recorded.
+ */
 export const writeSchedule = async (
   db: D1Database,
   threadId: string,
   ownerUserId: string,
   input: ScheduleInput,
   now = new Date(),
+  createdBy?: string | null,
 ) => {
   const rule = parseRecurrence(input.schedule, {
     now,
@@ -132,13 +139,15 @@ export const writeSchedule = async (
   await db
     .prepare(
       `INSERT INTO thread_schedule (${COLUMNS})
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, 0, NULL, NULL, NULL, NULL, ?11, ?11)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, 0, NULL, NULL, NULL, NULL, ?11, ?11, ?12)
        ON CONFLICT (thread_id) DO UPDATE SET
          title = excluded.title, prompt = excluded.prompt, rrule = excluded.rrule,
          time_zone = excluded.time_zone, label = excluded.label,
          run_mode = excluded.run_mode, agent_mode = excluded.agent_mode,
          enabled = 1, next_run_at = excluded.next_run_at, fired_count = 0,
-         updated_at = excluded.updated_at`,
+         updated_at = excluded.updated_at,
+         created_by_user_id = CASE WHEN ?13 THEN thread_schedule.created_by_user_id
+                                   ELSE excluded.created_by_user_id END`,
     )
     .bind(
       threadId,
@@ -152,6 +161,8 @@ export const writeSchedule = async (
       input.agentMode,
       next.toISOString(),
       at,
+      createdBy ?? null,
+      createdBy === undefined ? 1 : 0,
     )
     .run();
   return readSchedule(db, threadId);
@@ -160,13 +171,15 @@ export const writeSchedule = async (
 /**
  * Changes some fields of the Thread's schedule. A new rule starts counting
  * firings again; resuming looks for the next occurrence from now, so a
- * paused schedule never replays what it missed.
+ * paused schedule never replays what it missed. `createdBy` is who made
+ * the change (`automationCreator`); undefined keeps who is recorded.
  */
 export const patchSchedule = async (
   db: D1Database,
   current: ScheduleRow,
   patch: Partial<ScheduleInput> & { readonly enabled?: boolean },
   now = new Date(),
+  createdBy?: string | null,
 ) => {
   let rrule = current.rrule;
   let timeZone = current.time_zone;
@@ -193,7 +206,8 @@ export const patchSchedule = async (
     .prepare(
       `UPDATE thread_schedule SET title = ?2, prompt = ?3, rrule = ?4,
          time_zone = ?5, label = ?6, run_mode = ?7, agent_mode = ?8,
-         enabled = ?9, next_run_at = ?10, fired_count = ?11, updated_at = ?12
+         enabled = ?9, next_run_at = ?10, fired_count = ?11, updated_at = ?12,
+         created_by_user_id = ?13
        WHERE thread_id = ?1`,
     )
     .bind(
@@ -209,6 +223,7 @@ export const patchSchedule = async (
       next,
       fired,
       now.toISOString(),
+      createdBy === undefined ? current.created_by_user_id : createdBy,
     )
     .run();
   return readSchedule(db, current.thread_id);
@@ -222,18 +237,36 @@ export const deleteSchedule = async (db: D1Database, threadId: string) =>
       .run()
   ).meta.changes > 0;
 
-/** Schedules whose next firing has come, oldest first. */
+/**
+ * Schedules whose next firing has come, taken in turns across owners: each
+ * owner's oldest due schedule, then each one's second, and so on, oldest
+ * first within a turn. One owner with many due schedules takes only the
+ * slots no one else needs, so it never delays other owners (#2668).
+ */
 export const dueSchedules = async (db: D1Database, now: Date, limit = 50) =>
   (
     await db
       .prepare(
-        `SELECT ${COLUMNS} FROM thread_schedule
-          WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
-          ORDER BY next_run_at LIMIT ?`,
+        `SELECT ${COLUMNS} FROM (
+           SELECT ${COLUMNS}, ROW_NUMBER() OVER (
+                    PARTITION BY owner_user_id ORDER BY next_run_at, thread_id
+                  ) AS turn
+             FROM thread_schedule
+            WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?1)
+          ORDER BY turn, next_run_at, thread_id LIMIT ?2`,
       )
       .bind(now.toISOString(), limit)
       .all<ScheduleRow>()
   ).results;
+
+/** Pauses a schedule; resuming finds its next occurrence from then. */
+export const pauseSchedule = (db: D1Database, threadId: string, now: Date) =>
+  db
+    .prepare(
+      "UPDATE thread_schedule SET enabled = 0, updated_at = ?2 WHERE thread_id = ?1",
+    )
+    .bind(threadId, now.toISOString())
+    .run();
 
 /**
  * Claims one firing: moves `next_run_at` on from the value the sweep read,

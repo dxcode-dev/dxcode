@@ -28,7 +28,7 @@ import {
   publishPortal,
   revokePortal,
 } from "./public-links.js";
-import { listGuestPorts } from "./relay.js";
+import { closePublicPortalSockets, listGuestPorts } from "./relay.js";
 
 const portalUrl = (
   configuration: PortalConfiguration,
@@ -248,6 +248,17 @@ export const threadPortalRoutes = new Hono<AppEnv>()
     if ("response" in request) return request.response;
     const { threadId, port, db, requestId } = request;
     await revokePortal(db, threadId, port);
+    // Visitors already connected lose their sockets too (#2670).
+    const namespace = context.env.THREAD_EXECUTION;
+    if (namespace !== undefined)
+      await closePublicPortalSockets(namespace, threadId, port).catch(() => {
+        portalLogger.warn("Public Portal sockets could not be closed.", {
+          event: "portal_public_sockets_close_failed",
+          requestId,
+          threadId,
+          port,
+        });
+      });
     portalLogger.info("Portal made private.", {
       event: "portal_public_link_revoked",
       requestId,

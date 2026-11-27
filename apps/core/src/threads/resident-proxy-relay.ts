@@ -87,6 +87,14 @@ export const proxyFailure = (
 export const proxyFailureReason = (response: Response) =>
   relayFailures.get(response);
 
+/** The public Portal link an anonymous visitor's socket came through. */
+export interface ProxyPublicLink {
+  readonly port: number;
+  readonly id: string;
+  /** Unix milliseconds; the socket closes once it passes. */
+  readonly expiresAt: number;
+}
+
 export interface ProxyBrowserAttachment {
   readonly kind: "proxy-browser";
   readonly streamId: number;
@@ -94,7 +102,14 @@ export interface ProxyBrowserAttachment {
   readonly daemonNonce: string;
   /** The browser session that opened the socket; it closes when that ends. */
   readonly session?: BrowserSessionBinding;
+  /** Opened by an anonymous visitor of a public Portal. */
+  readonly anonymous?: true;
+  /** The public link it came through; revoking or expiring it closes it. */
+  readonly publicLink?: ProxyPublicLink;
 }
+
+const attachmentOf = (socket: WebSocket) =>
+  socket.deserializeAttachment() as ProxyBrowserAttachment | undefined;
 
 export const proxyBrowserTag = (streamId: number) => `proxy:${streamId}`;
 
@@ -245,12 +260,18 @@ export class ResidentProxyRelay {
     }
   }
 
-  /** `too-many-streams` when the budget, or the anonymous share, is used up. */
+  /**
+   * `too-many-streams` when the budget, or the anonymous share, is used up.
+   * Accepted WebSockets count until they close: dxd holds them too (#2670).
+   */
   #full(anonymous: boolean) {
-    if (this.#streams.size >= MAX_STREAMS) return true;
+    const browsers = this.#host.browsers();
+    if (this.#streams.size + browsers.length >= MAX_STREAMS) return true;
     if (!anonymous) return false;
     let count = 0;
     for (const stream of this.#streams.values()) if (stream.anonymous) count++;
+    for (const browser of browsers)
+      if (attachmentOf(browser)?.anonymous === true) count++;
     return count >= MAX_ANONYMOUS_STREAMS;
   }
 
@@ -442,6 +463,7 @@ export class ResidentProxyRelay {
     readonly wake: boolean;
     readonly anonymous: boolean;
     readonly session?: BrowserSessionBinding;
+    readonly publicLink?: ProxyPublicLink;
   }): Promise<Response> {
     const daemon = this.#host.daemon();
     if (daemon === undefined) return proxyFailure("workspace-unavailable");
@@ -494,6 +516,10 @@ export class ResidentProxyRelay {
       streamId,
       daemonNonce: daemon.nonce,
       ...(input.session === undefined ? {} : { session: input.session }),
+      ...(input.anonymous ? { anonymous: true as const } : {}),
+      ...(input.publicLink === undefined
+        ? {}
+        : { publicLink: input.publicLink }),
     });
     this.#windows.set(streamId, {
       daemon: daemon.socket,
@@ -716,11 +742,13 @@ export class ResidentProxyRelay {
       this.#closeStream(socket, streamId, 1001);
       return;
     }
+    const live = browsers.filter((browser) => !this.#closeIfExpired(browser));
+    if (live.length === 0) return;
     const message =
       kind === DXD_PROXY_KIND_TEXT
         ? new TextDecoder().decode(payload)
         : payload;
-    for (const browser of browsers)
+    for (const browser of live)
       try {
         browser.send(message);
       } catch {
@@ -746,6 +774,7 @@ export class ResidentProxyRelay {
       socket.close(1012, "Workspace connection changed");
       return;
     }
+    if (this.#closeIfExpired(socket, attachment)) return;
     const payload =
       typeof frame === "string"
         ? new TextEncoder().encode(frame)
@@ -850,6 +879,44 @@ export class ResidentProxyRelay {
       // Already closed.
     }
     this.#closeStream(daemon, streamId, 1001);
+  }
+
+  /**
+   * Closes an anonymous visitor's socket, and its guest end, once its public
+   * link has expired (#2670). True when it did.
+   */
+  #closeIfExpired(socket: WebSocket, attachment = attachmentOf(socket)) {
+    const link = attachment?.publicLink;
+    if (attachment === undefined || link === undefined) return false;
+    if (Date.now() < link.expiresAt) return false;
+    this.#endPublic(socket, attachment, "Public link expired");
+    return true;
+  }
+
+  #endPublic(
+    socket: WebSocket,
+    attachment: ProxyBrowserAttachment,
+    reason: string,
+  ) {
+    this.#dropWindow(attachment.streamId);
+    try {
+      socket.close(1008, reason);
+    } catch {
+      // Already closed.
+    }
+    this.browserClosed(attachment, 1001, "");
+  }
+
+  /**
+   * The owner made `port` private: every anonymous visitor's socket that
+   * came through its public link closes now, and its guest end too (#2670).
+   */
+  closePublic(port: number) {
+    for (const browser of this.#host.browsers()) {
+      const attachment = attachmentOf(browser);
+      if (attachment?.publicLink?.port === port)
+        this.#endPublic(browser, attachment, "Public link revoked");
+    }
   }
 
   /** The browser session behind this socket ended; the guest end closes too. */

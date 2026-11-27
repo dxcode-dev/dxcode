@@ -347,7 +347,14 @@ export const threadAutomationRoutes = new Hono<AppEnv>()
       const row = await scheduleOf(db, userId, threadId);
       if (row === null)
         return failure(context, 404, "NOT_FOUND", "Schedule not found.");
-      await patchSchedule(db, row, { enabled: request.value.enabled });
+      // The owner resuming a member's schedule makes it their own.
+      await patchSchedule(
+        db,
+        row,
+        { enabled: request.value.enabled },
+        new Date(),
+        request.value.enabled ? null : undefined,
+      );
       return listed(context, db, userId, threadId);
     }),
   )
@@ -372,7 +379,14 @@ export const threadAutomationRoutes = new Hono<AppEnv>()
       );
       if (row === null)
         return failure(context, 404, "NOT_FOUND", "Subscription not found.");
-      await setSubscriptionEnabled(db, row.id, request.value.enabled);
+      // The owner resuming a member's subscription makes it their own.
+      await setSubscriptionEnabled(
+        db,
+        row.id,
+        request.value.enabled,
+        new Date(),
+        request.value.enabled ? null : undefined,
+      );
       return listed(context, db, userId, threadId);
     }),
   )

@@ -515,6 +515,7 @@ const dxTools = (
     threadId,
     agentThreadToolsContext,
     promptData?.plugins?.submissionId,
+    requesterUserId,
   ))
     tools.push(withToolFailureMessage(tool));
   // list_bug_reports and read_bug_report: only for the deployment's report

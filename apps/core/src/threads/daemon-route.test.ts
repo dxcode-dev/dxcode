@@ -81,7 +81,7 @@ describe("dxd ingress", () => {
       upgrade: "websocket",
       authorization: "Bearer invalid",
     });
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(404);
     expect(fixture.idFromName).not.toHaveBeenCalled();
   });
 

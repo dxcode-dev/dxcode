@@ -281,6 +281,7 @@ describe("DxAgent", () => {
       "thr_existing",
       pluginHost.agentThreadToolsContext,
       "sub_1",
+      undefined,
     );
     expect(
       hooks.useTool.mock.calls.map(([tool]) => (tool as { name: string }).name),

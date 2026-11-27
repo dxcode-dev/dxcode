@@ -146,6 +146,13 @@ export const readItemSubject = async (
 
 export class GitHubUnavailable extends Error {
   override readonly name = "GitHubUnavailable";
+  constructor(
+    message: string,
+    /** GitHub's HTTP status, when it answered. */
+    readonly status?: number,
+  ) {
+    super(message);
+  }
 }
 
 const API = "https://api.github.com";
@@ -232,10 +239,12 @@ const request = async <T>(
   if (response.status === 404)
     throw new GitHubUnavailable(
       `GitHub answered 404 for ${path.split("?")[0]}: the repository or item does not exist or this token cannot see it.`,
+      404,
     );
   if (!response.ok)
     throw new GitHubUnavailable(
       `GitHub answered ${response.status} for ${path.split("?")[0]}.`,
+      response.status,
     );
   return {
     body: (await response.json()) as T,

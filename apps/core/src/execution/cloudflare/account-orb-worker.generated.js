@@ -2233,6 +2233,7 @@ configureSync({
 	}]
 });
 getLogger(["dx", "readiness"]);
+getLogger(["dx", "transcript"]);
 getLogger(["dx", "claude-code"]);
 getLogger([
 	"dx",

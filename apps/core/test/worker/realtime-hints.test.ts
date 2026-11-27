@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import type { ThreadId, UserId } from "@dx/domain";
 import type { FlueObservation, ToolDefinition } from "@flue/runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bindings } from "../../src/http/types.js";
 import { publishChangesInvalidation } from "../../src/realtime/publication.js";
 import { makeThreadChangesRepository } from "../../src/thread-changes/repository-d1.js";
@@ -326,6 +326,7 @@ describe("Realtime hints", () => {
             run: (input: {
               data: Record<string, unknown>;
               toolCallId: string;
+              signal?: AbortSignal;
             }) => Promise<{
               output: {
                 settled: boolean;
@@ -335,25 +336,48 @@ describe("Realtime hints", () => {
           },
         ]),
       );
+    // A wait a failed test leaves behind is stopped, closing its hub socket.
+    const waits = new Set<AbortController>();
     const wait = (threads: ThreadId[], timeoutSeconds: number) => {
       const startedAt = Date.now();
+      const controller = new AbortController();
+      waits.add(controller);
       return tools()
         .wait_for_threads?.run({
           data: { threads, timeout_seconds: timeoutSeconds },
           toolCallId: `wait-${crypto.randomUUID()}`,
+          signal: controller.signal,
         })
-        .then((result) => ({ ...result?.output, ms: Date.now() - startedAt }));
+        .then((result) => ({ ...result?.output, ms: Date.now() - startedAt }))
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return undefined;
+          throw error;
+        });
     };
+    // The real timer, for the test's own pauses while the wait's are frozen.
+    const realSetTimeout = globalThis.setTimeout;
+    const pause = (milliseconds: number) =>
+      new Promise((resolve) => realSetTimeout(resolve, milliseconds));
+    /**
+     * Freezes the timers the wait could sleep on: its D1 poll, its hint
+     * recheck and its timeout. A wait that returns while they are frozen
+     * returned without sleeping on any of them, however slow the machine.
+     */
+    const freezeWaitTimers = () =>
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    afterEach(() => {
+      for (const controller of waits) controller.abort();
+      waits.clear();
+      vi.useRealTimers();
+    });
 
     it("returns at once when every Thread is already idle", async () => {
+      freezeWaitTimers();
       const result = await wait([sibling], 30);
       expect(result).toMatchObject({
         settled: true,
         threads: [{ threadId: sibling, state: "idle" }],
       });
-      // Far short of the 30 s timeout; the first call also loads the
-      // owner routes that read each Thread's latest message.
-      expect(result.ms).toBeLessThan(5_000);
     });
 
     it("returns as soon as the Thread settles, and not on another Thread's change", async () => {
@@ -371,8 +395,12 @@ describe("Realtime hints", () => {
         "sub-other",
         "2026-10-19T10:00:00.000Z",
       );
-      const waiting = wait([child], 30);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      freezeWaitTimers();
+      let returned = false;
+      const waiting = wait([child], 30)?.finally(() => {
+        returned = true;
+      });
+      await pause(300);
       // A hint for a Thread the wait does not watch.
       await observe(
         env.DB,
@@ -381,8 +409,8 @@ describe("Realtime hints", () => {
         "sub-other",
         "2026-10-19T10:00:01.000Z",
       );
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      const settledAt = Date.now();
+      await pause(300);
+      expect(returned).toBe(false);
       await observe(
         env.DB,
         "submission_settled",
@@ -390,13 +418,12 @@ describe("Realtime hints", () => {
         "sub-wait",
         "2026-10-19T10:00:02.000Z",
       );
+      // With its poll and recheck frozen, only the hint can end the wait.
       const result = await waiting;
       expect(result).toMatchObject({
         settled: true,
         threads: [{ threadId: child, state: "idle" }],
       });
-      // Well under the 2 s poll it replaces.
-      expect(Date.now() - settledAt).toBeLessThan(1_000);
     });
 
     it("still times out while the Thread keeps working", async () => {

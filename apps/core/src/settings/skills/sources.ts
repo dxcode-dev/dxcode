@@ -100,6 +100,23 @@ const MAX_WEBSITE_INDEX_BYTES = 1_048_576;
 /** A body over the bytes dx reads from it; never retried or cached. */
 class BodyTooLarge extends Error {}
 
+/** A download asked its host more times than one skill needs. */
+class RequestsSpent extends BodyTooLarge {}
+
+/**
+ * The most requests, retries included, one website skill's download makes:
+ * one per file a skill can hold, and a few retries (#2669).
+ */
+const MAX_WEBSITE_SKILL_REQUESTS = MAX_SKILL_FILES + 16;
+
+/** What one website skill's download has spent so far. */
+interface DownloadBudget {
+  /** Bytes read, oversized bodies counted at a skill file's limit. */
+  used: number;
+  /** Requests made, retries included. */
+  requests: number;
+}
+
 const tooLargeReason = (site: string) =>
   `${site} answered with more data than dx reads for a skill.`;
 
@@ -113,6 +130,7 @@ const cachedFetch = async (
   url: string,
   ttl: number,
   limit: number,
+  budget?: DownloadBudget,
 ): Promise<Response> => {
   const cache = (globalThis as { caches?: { default?: Cache } }).caches
     ?.default;
@@ -121,6 +139,12 @@ const cachedFetch = async (
   if (hit !== undefined) return hit;
   for (let attempt = 1; ; attempt += 1) {
     const last = attempt === 3;
+    if (budget !== undefined) {
+      budget.requests += 1;
+      // Spent: fail rather than ask the host again.
+      if (budget.requests > MAX_WEBSITE_SKILL_REQUESTS)
+        throw new RequestsSpent();
+    }
     try {
       const response = await fetch(url, {
         headers: { "user-agent": USER_AGENT },
@@ -226,17 +250,25 @@ const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
  * skill file's limit. Its bytes count against `budget`, a skill's whole
  * download, which fails past a skill's limit.
  */
-const fetchText = (url: string, site: string, budget: { used: number }) =>
+const fetchText = (url: string, site: string, budget: DownloadBudget) =>
   Effect.tryPromise({
     try: async (): Promise<Omit<DownloadedFile, "path">> => {
-      const response = await cachedFetch(url, 600, MAX_SKILL_FILE_BYTES).catch(
-        (error: unknown) => {
-          if (error instanceof BodyTooLarge) return undefined;
-          throw error;
-        },
-      );
-      if (response === undefined)
+      const response = await cachedFetch(
+        url,
+        600,
+        MAX_SKILL_FILE_BYTES,
+        budget,
+      ).catch((error: unknown) => {
+        // Oversized, not out of requests: skipped, but counted (#2669).
+        if (error instanceof BodyTooLarge && !(error instanceof RequestsSpent))
+          return undefined;
+        throw error;
+      });
+      if (response === undefined) {
+        budget.used += MAX_SKILL_FILE_BYTES + 1;
+        if (budget.used > MAX_SKILL_TOTAL_BYTES) throw new BodyTooLarge();
         return { contents: undefined, tooLarge: true };
+      }
       if (!response.ok) throw new Error(String(response.status));
       const bytes = await response.arrayBuffer();
       budget.used += bytes.byteLength;
@@ -272,13 +304,21 @@ const downloadWebsiteSkill = Effect.fn("downloadWebsiteSkill")(function* (
       reason: `${host} lists no skill ${slug}.`,
     });
   }
-  if (entry.files.length > MAX_SKILL_FILES * 2) {
+  // Only files dx imports are fetched, and a skill holds at most
+  // MAX_SKILL_FILES of them (#2669).
+  const fetchable = entry.files.filter(
+    (path) => skipReason(path, 0) === undefined,
+  );
+  if (
+    entry.files.length > MAX_SKILL_FILES * 2 ||
+    fetchable.length > MAX_SKILL_FILES
+  ) {
     return yield* new SkillImportRejected({
       field: "files",
       reason: `${host}/${slug} lists ${entry.files.length} files; a skill has at most ${MAX_SKILL_FILES}.`,
     });
   }
-  const budget = { used: 0 };
+  const budget: DownloadBudget = { used: 0, requests: 0 };
   const files: ReadonlyArray<DownloadedFile> = yield* Effect.forEach(
     entry.files,
     (path) =>

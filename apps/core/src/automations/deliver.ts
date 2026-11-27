@@ -5,6 +5,8 @@ import { publishRealtimeInvalidation } from "../realtime/publication.js";
 import { spacesEnabled } from "../spaces/availability.js";
 import { shipFromPullRequestWebhook } from "../spaces/progress/shipped.js";
 import { reportShippedToSpace } from "../spaces/report-back.js";
+import { loseRepositoryAccess, ownerReadsRepository } from "./access.js";
+import { creatorAccessEnded } from "./creator.js";
 import {
   ciEvent,
   type FilterKind,
@@ -28,6 +30,7 @@ import {
   recordNewEvents,
   type SubscriptionRow,
   savePullSubject,
+  setSubscriptionEnabled,
 } from "./subscriptions.js";
 import { message, threadState } from "./sweep.js";
 import {
@@ -70,14 +73,45 @@ const matches = (row: SubscriptionRow, happening: GitHubHappening) => {
   }
 };
 
-/** The event this subscription delivers, or none yet. */
+/**
+ * The event this subscription delivers, or none yet. Content reaches the
+ * Thread only while its owner still reads the repository; one that lost
+ * access ends the subscription.
+ */
 const eventFor = async (
   bindings: Bindings,
   db: D1Database,
   row: SubscriptionRow,
   happening: GitHubHappening,
+  now: Date,
 ): Promise<GitHubEvent | undefined> => {
-  if (happening.kind !== "ci") return happening.event;
+  if (happening.kind !== "ci") {
+    const reads = await ownerReadsRepository(
+      bindings,
+      db,
+      row.thread_id,
+      row.owner_user_id,
+      row.repository,
+      now.getTime(),
+    );
+    if (reads === undefined)
+      throw new Error(
+        `No GitHub credentials to check access to ${row.repository}: connect GitHub in Settings → Integrations.`,
+      );
+    if (reads) return happening.event;
+    await loseRepositoryAccess(
+      db,
+      row.thread_id,
+      row.owner_user_id,
+      row.repository,
+      now,
+    );
+    automationLogger.info("A GitHub subscription's owner lost access.", {
+      event: "github_subscription_access_lost",
+      subscriptionId: row.id,
+    });
+    return undefined;
+  }
   // One check settling says little: read the whole rollup as the owner.
   const token = await githubToken(
     bindings,
@@ -120,7 +154,26 @@ const deliverTo = async (
     });
     return;
   }
-  const event = await eventFor(bindings, db, row, happening);
+  // A member's subscription never outlives their Contribute access: it
+  // pauses until the owner resumes it.
+  const ended = await creatorAccessEnded(
+    db,
+    row.thread_id,
+    row.created_by_user_id,
+    now,
+  );
+  if (ended !== undefined) {
+    await setSubscriptionEnabled(db, row.id, false, now);
+    automationLogger.info(
+      "A member's GitHub subscription paused after their access ended.",
+      {
+        event: "github_subscription_creator_access_ended",
+        subscriptionId: row.id,
+      },
+    );
+    return;
+  }
+  const event = await eventFor(bindings, db, row, happening, now);
   if (event === undefined) return;
   const [fresh] = await recordNewEvents(db, row.id, [event], now);
   if (fresh === undefined) return;
@@ -344,7 +397,7 @@ const followPullRequest = async (
   const pull = (payload.pull_request ?? {}) as {
     number?: number;
     user?: { login?: string };
-    head?: { sha?: string; ref?: string };
+    head?: { sha?: string; ref?: string; repo?: { full_name?: string } | null };
   };
   const repository = (payload.repository as { full_name?: string } | undefined)
     ?.full_name;
@@ -357,6 +410,11 @@ const followPullRequest = async (
     branch === undefined
   )
     return;
+  // A branch names a CI follow-up only within its repository: a fork's
+  // branch is the fork author's to name, so a fork PR never moves or makes
+  // one (#2665).
+  const sameRepository =
+    pull.head?.repo?.full_name?.toLowerCase() === repository.toLowerCase();
   const ciFrom = (
     row: SubscriptionRow | undefined,
     thread: {
@@ -389,8 +447,9 @@ const followPullRequest = async (
       now,
     );
   if (action === "synchronize") {
+    if (!sameRepository) return;
     // Each automatic CI follow-up on this branch moves to the new head.
-    for (const row of await automaticCiOn(db, repository, branch)) {
+    for (const row of await automaticCiOn(db, repository, branch, now)) {
       const { row: moved } = await ciFrom(row, {
         threadId: row.thread_id,
         ownerUserId: row.owner_user_id,
@@ -423,19 +482,89 @@ const followPullRequest = async (
     },
     now,
   );
-  const { row: ci } = await ciFrom(undefined, owner);
   automationLogger.info("A Thread follows the PR it opened.", {
     event: "github_pull_request_followed",
     threadId: owner.threadId,
   });
+  if (!sameRepository) return;
+  const { row: ci } = await ciFrom(undefined, owner);
   await catchUpCi(bindings, ci, waitUntil);
+};
+
+/**
+ * Before a webhook's title and state reach the Threads that follow an issue
+ * or PR, each must still read its repository: one whose owner lost access
+ * loses its links and subscriptions there instead (#2666). Returns the
+ * Threads the write skips: those, and any whose owner has no credentials to
+ * check with. GitHub failing to answer says nothing of access: the write
+ * goes on, so an outage does not lose a PR's merge.
+ */
+const forgetLostFollowers = async (
+  bindings: Bindings,
+  db: D1Database,
+  repository: string,
+  number: number,
+  now: Date,
+) => {
+  const followers = (
+    await db
+      .prepare(
+        `SELECT l.thread_id, t.owner_user_id
+           FROM thread_github_link AS l JOIN threads AS t ON t.id = l.thread_id
+          WHERE l.repository_key = lower(?1) AND l.number = ?2 AND l.verified = 1
+         UNION
+         SELECT thread_id, owner_user_id FROM github_subscription
+          WHERE repository = ?1 COLLATE NOCASE AND filter_kind = 'pr-comments'
+            AND json_extract(filter_json, '$.prNumber') = ?2
+            AND state != 'failed'
+         LIMIT 50`,
+      )
+      .bind(repository, number)
+      .all<{ thread_id: string; owner_user_id: string }>()
+  ).results;
+  const skipped = await Promise.all(
+    followers.map(async (follower) => {
+      const reads = await ownerReadsRepository(
+        bindings,
+        db,
+        follower.thread_id,
+        follower.owner_user_id,
+        repository,
+        now.getTime(),
+      ).catch((cause) => {
+        automationLogger.info("Checking a linked Thread's access failed.", {
+          event: "github_link_access_check_failed",
+          threadId: follower.thread_id,
+          cause,
+        });
+        return true;
+      });
+      if (reads === true) return [];
+      if (reads === undefined) return [follower.thread_id];
+      await loseRepositoryAccess(
+        db,
+        follower.thread_id,
+        follower.owner_user_id,
+        repository,
+        now,
+      );
+      automationLogger.info("A linked Thread's owner lost GitHub access.", {
+        event: "github_link_access_lost",
+        threadId: follower.thread_id,
+      });
+      return [follower.thread_id];
+    }),
+  );
+  return skipped.flat();
 };
 
 /** Keeps the header's title, description, and state of a followed PR. */
 const savePullFromWebhook = async (
+  bindings: Bindings,
   db: D1Database,
   action: string,
   payload: Record<string, unknown>,
+  now: Date,
 ) => {
   if (!["opened", "edited", "closed", "reopened"].includes(action)) return;
   const pull = payload.pull_request as { number?: unknown } | undefined;
@@ -448,12 +577,17 @@ const savePullFromWebhook = async (
     subject === undefined
   )
     return;
-  await savePullSubject(db, repository, pull.number, subject).catch((cause) =>
-    automationLogger.warn("Saving a PR's title failed.", {
-      event: "github_pull_request_save_failed",
-      cause,
-    }),
-  );
+  const number = pull.number;
+  await forgetLostFollowers(bindings, db, repository, number, now)
+    .then((skipped) =>
+      savePullSubject(db, repository, number, subject, skipped),
+    )
+    .catch((cause) =>
+      automationLogger.warn("Saving a PR's title failed.", {
+        event: "github_pull_request_save_failed",
+        cause,
+      }),
+    );
 };
 
 /**
@@ -508,10 +642,12 @@ const shipMergedPullRequest = async (
  * events and every comment on it carry the issue.
  */
 const saveIssueFromWebhook = async (
+  bindings: Bindings,
   db: D1Database,
   event: string,
   action: string,
   payload: Record<string, unknown>,
+  now: Date,
 ) => {
   if (
     !(
@@ -535,13 +671,17 @@ const saveIssueFromWebhook = async (
     subject === undefined
   )
     return;
-  await saveLinkSubject(db, repository, issue.number, "issue", subject).catch(
-    (cause) =>
+  const number = issue.number;
+  await forgetLostFollowers(bindings, db, repository, number, now)
+    .then((skipped) =>
+      saveLinkSubject(db, repository, number, "issue", subject, skipped),
+    )
+    .catch((cause) =>
       automationLogger.warn("Saving an issue's title failed.", {
         event: "github_issue_save_failed",
         cause,
       }),
-  );
+    );
 };
 
 /**
@@ -572,10 +712,10 @@ export const deliverGitHubWebhook = async (
         cause,
       }),
     );
-    await savePullFromWebhook(db, action, payload);
+    await savePullFromWebhook(bindings, db, action, payload, now);
     await shipMergedPullRequest(bindings, db, action, payload, now, waitUntil);
   }
-  await saveIssueFromWebhook(db, event, action, payload);
+  await saveIssueFromWebhook(bindings, db, event, action, payload, now);
   const happening = fromWebhook(event, action, payload);
   if (happening === undefined) return 0;
   const rows = (

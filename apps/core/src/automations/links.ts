@@ -10,7 +10,9 @@ import type { FilterKind, PullSubject, SubscriptionFilter } from "./github.js";
  * Both read GitHub with the owner's credentials before linking, so a link
  * saved now is `verified`. Webhooks and other Threads' reads write only
  * verified links, and only their title and state are shown: an older link
- * saved without credentials names an item its owner may not see.
+ * saved without credentials names an item its owner may not see. Before a
+ * webhook writes, each linked Thread's owner must still read the repository
+ * (`access.ts`); one who lost access loses the link's verification.
  */
 export type LinkKind = "issue" | "pull";
 
@@ -90,20 +92,31 @@ export const linkThreadAndList = async (
   return (links?.results ?? []) as LinkRow[];
 };
 
-/** A webhook's title and state for every verified link to the item. */
+/**
+ * A webhook's title and state for every verified link to the item, except
+ * on the Threads skipped: those whose owner's access was not confirmed.
+ */
 export const saveLinkSubjectStatement = (
   db: D1Database,
   repository: string,
   number: number,
   kind: LinkKind,
   subject: PullSubject,
+  skipThreadIds: ReadonlyArray<string> = [],
 ) =>
   db
     .prepare(
       `UPDATE thread_github_link SET kind = ?3, subject_json = ?4
-        WHERE repository_key = lower(?1) AND number = ?2 AND verified = 1`,
+        WHERE repository_key = lower(?1) AND number = ?2 AND verified = 1
+          AND thread_id NOT IN (SELECT value FROM json_each(?5))`,
     )
-    .bind(repository, number, kind, JSON.stringify(subject));
+    .bind(
+      repository,
+      number,
+      kind,
+      JSON.stringify(subject),
+      JSON.stringify(skipThreadIds),
+    );
 
 /** See `saveLinkSubjectStatement`. */
 export const saveLinkSubject = (
@@ -112,7 +125,16 @@ export const saveLinkSubject = (
   number: number,
   kind: LinkKind,
   subject: PullSubject,
-) => saveLinkSubjectStatement(db, repository, number, kind, subject).run();
+  skipThreadIds: ReadonlyArray<string> = [],
+) =>
+  saveLinkSubjectStatement(
+    db,
+    repository,
+    number,
+    kind,
+    subject,
+    skipThreadIds,
+  ).run();
 
 const threadLinksStatement = (db: D1Database, threadId: string) =>
   db

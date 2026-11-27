@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import {
+  MAX_SKILL_FILES,
   ProjectId,
   ProjectRepository,
   ThreadRepository,
@@ -260,6 +261,30 @@ beforeEach(async () => {
         );
       }
       if (url.hostname === "endless.example.com") return endless();
+      // A site that lists far more files than a skill holds, or serves every
+      // file past a skill file's limit, to make dx fetch on its behalf.
+      if (url.hostname === "fanout.example.com") {
+        if (url.pathname === "/.well-known/skills/index.json")
+          return Response.json({
+            skills: [
+              {
+                name: "many",
+                files: Array.from(
+                  { length: MAX_SKILL_FILES + 1 },
+                  (_, index) => `f/${index}.md`,
+                ),
+              },
+              {
+                name: "oversized",
+                files: Array.from(
+                  { length: 40 },
+                  (_, index) => `f/${index}.md`,
+                ),
+              },
+            ],
+          });
+        return endless();
+      }
       if (url.hostname === "codeload.github.com") {
         const bytes = archive.slice();
         return new Response(bytes, {
@@ -450,6 +475,33 @@ describe("skills from skills.sh and GitHub", () => {
         ENDLESS_INDEX,
       ),
     ).toBeUndefined();
+  });
+
+  it("bounds the requests and bytes one website skill makes dx fetch (#2669)", async () => {
+    const preview = (slug: string) =>
+      app(owner)(`${personal}/sources/preview`, "POST", {
+        source: { kind: "skills.sh", id: `fanout.example.com/${slug}` },
+      });
+    const files = () =>
+      fetched.filter((url) =>
+        url.startsWith("fanout.example.com/.well-known/skills/"),
+      ).length -
+      fetched.filter(
+        (url) => url === "fanout.example.com/.well-known/skills/index.json",
+      ).length;
+
+    // More files than a skill holds: refused before any file is fetched.
+    const many = await preview("many");
+    expect(many.status).not.toBe(200);
+    expect(JSON.stringify(many.body)).toContain(`at most ${MAX_SKILL_FILES}`);
+    expect(files()).toBe(0);
+
+    // Every file oversized: each counts toward the 5 MiB budget, so dx
+    // stops after a handful instead of reading 40 MiB.
+    const oversized = await preview("oversized");
+    expect(oversized.status).not.toBe(200);
+    expect(oversized.body.data.code).toBe("SKILL_SOURCE_UNAVAILABLE");
+    expect(files()).toBeLessThan(16);
   });
 
   it("installs a skill without its file that has NUL bytes, and through a skills.sh outage", async () => {

@@ -45,6 +45,14 @@ import { seedSpaceUsers } from "./space-users.js";
  * zone; someone who cannot see the Space reads its progress.
  */
 
+// The owner still reads every repository on GitHub, which a webhook checks
+// before saving a PR's state on its Threads; automations.test.ts covers an
+// owner who lost access.
+vi.mock("../../src/automations/access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/automations/access.js")>()),
+  ownerReadsRepository: async () => true,
+}));
+
 // Thread creation runs for real; Flue's dispatch records nothing.
 vi.mock("../../src/threads/routes.js", async (importOriginal) => {
   const actual =
