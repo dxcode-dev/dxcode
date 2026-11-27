@@ -1,10 +1,10 @@
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
-import type {
-  ThreadListClientItem,
-  ThreadPage,
-} from "../../shared/api/client.js";
 import { millis } from "../threads/thread-list-order-queries.js";
-import { threadKeys } from "../threads/thread-queries.js";
+import {
+  type ThreadListClientItem,
+  type ThreadPage,
+  threadKeys,
+} from "../threads/thread-queries.js";
 
 /** A Thread whose finished turn the person has not seen. */
 export interface ThreadAttention {

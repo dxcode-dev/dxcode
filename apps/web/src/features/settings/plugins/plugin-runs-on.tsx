@@ -1,7 +1,7 @@
 import type { PluginBundleData } from "@dx/api";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { PackageBrowserSection } from "../../../shared/ui/package-browser.js";
 import { PluginRunsOnRow } from "../orb-providers/plugin-orb.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /** Where code with no program runs, in a person's words. */
 const runsOnText = (code: NonNullable<PluginBundleData["code"]>) =>

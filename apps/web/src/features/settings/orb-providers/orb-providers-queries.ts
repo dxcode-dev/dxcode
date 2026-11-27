@@ -5,9 +5,9 @@ import {
 } from "@dx/api";
 import type { ProjectId, UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { dxClient } from "../../../shared/api/client.js";
 import { retryQuery } from "../../../shared/query/query-retry.js";
+import type { PluginsTarget } from "../plugins/plugins-queries.js";
 
 /** Orb providers: each scope's own provider connections. */
 export const listOrbProviders = async (

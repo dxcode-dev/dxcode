@@ -8,10 +8,7 @@ import {
 } from "@dx/api";
 import type { WorkspaceSlug } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import {
-  dxClient,
-  type ModelRoutingTarget,
-} from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 
 const getModelRoutingGraph = async (
   target: ModelRoutingTarget,
@@ -94,3 +91,7 @@ export const modeProfileQueryOptions = (
         ? getModeProfile(signal)
         : getWorkspaceModeProfile(target.workspaceSlug, signal),
   });
+
+export type ModelRoutingTarget =
+  | { readonly scope: "personal" }
+  | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };

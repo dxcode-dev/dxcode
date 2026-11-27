@@ -2,18 +2,17 @@ import {
   AcceptWorkspaceInviteEndpoint,
   CreateWorkspaceInviteLinkEndpoint,
   type CreateWorkspaceInviteLinkRequest,
+  GetWorkspaceInvitePreviewEndpoint,
   ListWorkspaceInviteLinksEndpoint,
   ListWorkspaceMembersEndpoint,
   RemoveWorkspaceMemberEndpoint,
   RevokeWorkspaceInviteLinkEndpoint,
   TransferWorkspaceOwnershipEndpoint,
   UpdateWorkspaceMemberRoleEndpoint,
-  WorkspaceInvitePreviewResponseSchema,
-  WorkspaceMembersErrorResponseSchema,
 } from "@dx/api";
 import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
-import { ApiError, dxClient, request } from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
 import { settingsKeys } from "../settings-context-queries.js";
 import { workspaceKeys } from "../workspace/workspace-queries.js";
 
@@ -94,17 +93,13 @@ const revokeWorkspaceInviteLink = async (
     })
   ).data;
 
-/**
- * The public invite preview, served at `/api/invites` outside the `/v1`
- * contract so a signed-out person can open it.
- */
+/** The public invite preview, which a signed-out person can open too. */
 const getWorkspaceInvite = async (token: string, signal?: AbortSignal) =>
   (
-    await request(
-      `/api/invites/${encodeURIComponent(token)}`,
-      WorkspaceInvitePreviewResponseSchema,
+    await dxClient.call(
+      GetWorkspaceInvitePreviewEndpoint,
+      { params: { token } },
       { signal },
-      WorkspaceMembersErrorResponseSchema,
     )
   ).data;
 

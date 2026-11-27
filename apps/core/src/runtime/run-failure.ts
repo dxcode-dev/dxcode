@@ -101,17 +101,34 @@ const PLATFORM_PATTERN =
 const TRANSIENT_PATTERN =
   /overloaded|rate.?limit|too many requests|service.?unavailable|server.?error|network|connection (?:lost|reset|refused|closed|error)|socket hang up|fetch failed|timed? ?out|mid-response|ECONNRESET|\(empty_model_response\)|\(retryable_interruption\)|stream (?:ended|terminated)/i;
 
+/**
+ * A provider refusing the request for its size in bytes, not its tokens:
+ * Copilot and Google front ends ("Request Entity Too Large"), Anthropic
+ * (`request_too_large`), and proxies ("Payload Too Large"). Images in
+ * history are what usually push a request over.
+ */
+const TOO_LARGE_PATTERN =
+  /request entity too large|payload too large|content too large|request_too_large|request exceeds the maximum (?:allowed )?size|request body (?:is )?too large/i;
+
 const statusOf = (input: RunFailureInput) => {
   if (input.status !== undefined) return input.status;
   const text = input.message;
   const found =
     /"upstreamStatus"\s*:\s*(\d{3})/.exec(text) ??
+    /got status: (\d{3})\b/i.exec(text) ??
     /api error \((\d{3})\)/i.exec(text) ??
     /api error: (\d{3})\b/i.exec(text) ??
     /error code: (\d{3})\b/i.exec(text) ??
     /^(?:\w+\(sub_[^)]*\) failed: )?(\d{3})\b/.exec(text);
   return found?.[1] === undefined ? undefined : Number(found[1]);
 };
+
+/**
+ * The code of a request refused for its size. The same request fails
+ * again, so it is `internal`; the model transport resends it with fewer
+ * images instead (`settings/model-byok/flue-provider.ts`).
+ */
+export const REQUEST_TOO_LARGE = "REQUEST_TOO_LARGE";
 
 const plainText = (message: string) =>
   message.replace(/^\w+\(sub_[^)]*\) failed: /, "");
@@ -180,6 +197,13 @@ export const classifyRunFailure = (input: RunFailureInput): RunFailure => {
       "platform",
       "PLATFORM_INTERRUPTED",
       "The workspace platform interrupted this run.",
+      status,
+    );
+  if (status === 413 || TOO_LARGE_PATTERN.test(text))
+    return failure(
+      "internal",
+      REQUEST_TOO_LARGE,
+      "The request was too large for the model provider.",
       status,
     );
   if (status === 401 || status === 403)

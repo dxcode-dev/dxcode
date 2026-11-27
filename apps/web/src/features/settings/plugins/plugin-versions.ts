@@ -2,7 +2,6 @@ import type { PluginBundleData, PluginBundleUpdatePreviewData } from "@dx/api";
 import type { PluginId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settle } from "../../../shared/settle.js";
 import { errorMessage } from "./plugin-bundle-presentation.js";
@@ -13,6 +12,7 @@ import {
   previewPluginFiles,
   savePluginFilesMutationOptions,
 } from "./plugin-files-queries.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /** Thrown to keep an edit open while its review shows. */
 class SentToReview extends Error {}

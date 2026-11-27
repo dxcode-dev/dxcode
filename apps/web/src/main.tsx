@@ -14,7 +14,10 @@ import { peekBootSessionRead } from "./shared/auth/boot-session.js";
 import { onSessionEnded } from "./shared/auth/session-ended.js";
 import { BootScreen } from "./shared/boot/boot-screen.js";
 import { forgetRouters } from "./shared/boot/boot-wait.js";
-import { installClientDiagnostics } from "./shared/diagnostics/client-diagnostics.js";
+import {
+  clearClientDiagnostics,
+  installClientDiagnostics,
+} from "./shared/diagnostics/client-diagnostics.js";
 import { queryClient } from "./shared/query/query-client.js";
 import { lazyComponent } from "./shared/stale-chunk.js";
 import { FallbackTitle } from "./shared/ui/document-title.js";
@@ -72,6 +75,7 @@ const clearDraftsBeforeSignOut = (userId: UserId) => {
   forgetRouters();
   forgetShellPrefetch();
   queryClient.clear();
+  clearClientDiagnostics();
   discardUnsavedThreadDrafts();
   void import("./features/threads/new-thread-draft-store.js").then((drafts) => {
     drafts.clearNewThreadDraftsForUser(userId);
@@ -90,6 +94,7 @@ onSessionEnded(() => {
   forgetRouters();
   forgetShellPrefetch();
   queryClient.setQueryData(sessionQueryOptions.queryKey, null);
+  clearClientDiagnostics();
   discardUnsavedThreadDrafts();
   queryClient.removeQueries({
     predicate: (query) => query.queryKey[0] !== "auth",

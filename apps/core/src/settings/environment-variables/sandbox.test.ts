@@ -54,6 +54,37 @@ afterEach(async () => {
 });
 
 describe("Flue execution environment", () => {
+  it("keeps masking a running Thread's secrets after 256 other Threads open sandboxes in the isolate, and fails closed when it cannot", async () => {
+    const secret = "busy-thread-secret-value";
+    let unavailable = false;
+    const factory = withExecutionEnvironment(
+      { createSandbox: async () => ({}) as Sandbox },
+      async (id) => {
+        if (unavailable) throw new Error("environment unavailable");
+        return snapshot(
+          id === "busy-thread" ? [value("DEPLOY_TOKEN", "secret", secret)] : [],
+        );
+      },
+    );
+    await factory.createSandbox({ id: "busy-thread" });
+    expect((await threadEnvironmentMasker("busy-thread")).mask(secret)).toBe(
+      marker("DEPLOY_TOKEN"),
+    );
+    for (let index = 0; index < 300; index++)
+      await factory.createSandbox({ id: `other-thread-${index}` });
+
+    // A tool result of the long-running Thread still hides its secret.
+    expect(
+      (await threadEnvironmentMasker("busy-thread")).mask(`token ${secret}`),
+    ).toBe(`token ${marker("DEPLOY_TOKEN")}`);
+    // When its environment cannot be read, masking refuses rather than
+    // letting the result through with only dx's credentials hidden.
+    for (let index = 300; index < 600; index++)
+      await factory.createSandbox({ id: `other-thread-${index}` });
+    unavailable = true;
+    await expect(threadEnvironmentMasker("busy-thread")).rejects.toThrow();
+  });
+
   it("injects and refreshes values in a real local process while redacting every readable surface", async () => {
     let current = snapshot([
       value("BUILD_CHANNEL", "variable", "before"),

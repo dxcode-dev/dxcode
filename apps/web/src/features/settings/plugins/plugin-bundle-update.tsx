@@ -1,6 +1,5 @@
 import type { PluginBundleData, PluginBundleUpdatePreviewData } from "@dx/api";
 import { CircleAlert, KeyRound, Library, PlugZap } from "lucide-react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { Button } from "../../../shared/ui/button.js";
 import { DialogDescription, DialogTitle } from "../../../shared/ui/dialog.js";
 import { changeItems, permissionItems } from "./plugin-bundle-changes.js";
@@ -8,6 +7,7 @@ import { PluginBundleGroup } from "./plugin-bundle-group.js";
 import { type BundleRun, plural } from "./plugin-bundle-presentation.js";
 import { PluginBundleSourceLine } from "./plugin-bundle-source.js";
 import { PluginPayerNote } from "./plugin-payer-note.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /** The reviewed update of an installed plugin: what changes, then Update. */
 export function PluginBundleUpdate({

@@ -291,8 +291,8 @@ function dxFeedbackPanel(config) {
       .join("");
 
   let claimNow;
-  // The sign-in window this panel opened and the challenge it carries; the
-  // consent screen enables Allow only once this panel confirms the pair.
+  // The sign-in window this panel opened and the challenge it started; the
+  // consent screen takes the challenge only from this panel.
   let signIn;
 
   const continueWithDx = async () => {
@@ -314,8 +314,22 @@ function dxFeedbackPanel(config) {
     const challenge = hex(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
     );
+    // dx records consent only for a sign-in a panel started; the popup gets
+    // the challenge from this panel, never from its address.
+    const started = await call("POST", "/start", { challenge }).catch(() => ({
+      response: { status: 0 },
+    }));
+    if (started.response.status !== 204) {
+      popup.close();
+      if (started.response.status === 404) {
+        view = "error";
+        message = "This Feedback Widget was turned off.";
+      } else message = "dx is unreachable. Check your connection.";
+      render();
+      return;
+    }
     signIn = { popup, challenge };
-    popup.location.href = `${config.appOrigin}${api}/authorize?challenge=${challenge}`;
+    popup.location.href = `${config.appOrigin}${api}/authorize`;
     view = "waiting";
     render();
     const deadline = Date.now() + 10 * 60 * 1000;
@@ -419,13 +433,13 @@ function dxFeedbackPanel(config) {
       event.origin === config.appOrigin &&
       event.data?.type === "dx-fw:consent-requested"
     ) {
-      // The website framing this panel, which the consent screen names.
+      // Only the sign-in window this panel opened gets its challenge, with
+      // the website framing this panel, which the consent screen names.
       if (
         view === "waiting" &&
         signIn !== undefined &&
         parentOrigin !== undefined &&
-        event.source === signIn.popup &&
-        event.data.challenge === signIn.challenge
+        event.source === signIn.popup
       )
         signIn.popup.postMessage(
           {

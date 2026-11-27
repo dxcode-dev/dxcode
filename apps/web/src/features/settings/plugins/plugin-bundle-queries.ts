@@ -36,11 +36,8 @@ import {
 } from "@dx/api";
 import type { PluginCatalogId, PluginId, UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import {
-  ApiError,
-  dxClient,
-  type PluginsTarget,
-} from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 export type { PluginBundleData, PluginBundleListData };
 

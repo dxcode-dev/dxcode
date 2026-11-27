@@ -13,11 +13,8 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  ApiError,
-  dxClient,
-  type PluginsTarget,
-} from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
+import type { PluginsTarget } from "../plugins/plugins-queries.js";
 
 /**
  * Where plugins' programs run: Settings → Orb Providers → Plugins for a

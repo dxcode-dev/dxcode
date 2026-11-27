@@ -38,16 +38,16 @@ import type {
   SkillIntegrity,
   SkillVersion,
   UserId,
+  WorkspaceSlug,
 } from "@dx/domain";
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
-import { dxClient, type SkillsTarget } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 
 export type {
   DirectorySkillData,
   SkillData,
   SkillInstallSource,
   SkillProposalData,
-  SkillsTarget,
 };
 
 // The skills API lives with the Skills settings, not in the shared client,
@@ -375,3 +375,7 @@ export const skillsQueryOptions = (userId: UserId, target: SkillsTarget) =>
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: true,
   });
+
+export type SkillsTarget =
+  | { readonly scope: "personal" }
+  | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };

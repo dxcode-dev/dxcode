@@ -39,7 +39,6 @@ vi.mock("./sidebar-layout.js", async (importOriginal) => {
   };
 });
 
-import { getThreadListItem } from "../../shared/api/client.js";
 import { AuthContext } from "../../shared/auth/auth-context.js";
 import { CommandProvider } from "../../shared/commands/command-provider.js";
 import { createCommandRegistry } from "../../shared/commands/command-registry.js";
@@ -54,7 +53,10 @@ import { ThreadArchiveProvider } from "../threads/thread-archive.js";
 import { ThreadEditingProvider } from "../threads/thread-editing.js";
 import { ThreadMenu } from "../threads/thread-menu.js";
 import { threadKeys, threadQueryOptions } from "../threads/thread-queries.js";
-import { ThreadListRows } from "../threads/thread-row-queries.js";
+import {
+  getThreadListItem,
+  ThreadListRows,
+} from "../threads/thread-row-queries.js";
 import { ThreadSnoozeProvider } from "../threads/thread-snooze.js";
 import { ProductShell } from "./product-shell.js";
 import "../../styles.css";

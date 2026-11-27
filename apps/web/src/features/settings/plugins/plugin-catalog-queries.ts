@@ -17,7 +17,8 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { dxClient, type PluginsTarget } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /** Plugin catalogs (`marketplace.json` files) a scope added from GitHub. */
 const workspace = (target: Extract<PluginsTarget, { scope: "workspace" }>) => ({

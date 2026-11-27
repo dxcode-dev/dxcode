@@ -1,8 +1,8 @@
 import type { ThreadData } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
-import type { ThreadPage } from "../../shared/api/client.js";
 import { listAdmits, listOrder } from "./thread-list-order-queries.js";
+import type { ThreadPage } from "./thread-queries.js";
 
 type Listed = ThreadPage["items"][number];
 type ListData = InfiniteData<ThreadPage, unknown>;

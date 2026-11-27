@@ -1,4 +1,13 @@
 import type { ThreadData, ThreadDetailData } from "@dx/api";
+import {
+  GetThreadEndpoint,
+  GetThreadReadinessEndpoint,
+  ListSharedThreadsEndpoint,
+  ListThreadsEndpoint,
+  SearchThreadsEndpoint,
+  type SearchThreadsItem,
+  type ThreadListItem,
+} from "@dx/api";
 import type { PageCursor, ProjectId, ThreadId, UserId } from "@dx/domain";
 import {
   type InfiniteData,
@@ -8,15 +17,7 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  getThread,
-  getThreadReadiness,
-  listSharedThreads,
-  listThreads,
-  searchThreads,
-  type ThreadListTree,
-  type ThreadPage,
-} from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import { retryOnMountQuery } from "../../shared/query/query-retry.js";
 import { prefetchThreadHistory } from "../../shared/same-origin-fetch.js";
 import {
@@ -427,3 +428,109 @@ export const pluginLinkRemarkQueryOptions = (threadId: ThreadId) =>
 /** `plugin-ui.invalidated`: a plugin's prompt, notice, or action changed. */
 export const invalidatePluginUi = (client: QueryClient, threadId: ThreadId) =>
   client.invalidateQueries({ queryKey: ["plugin-ui", threadId] });
+
+export type ThreadListClientItem = ThreadData &
+  Partial<
+    Pick<
+      ThreadListItem,
+      | "mode"
+      | "changes"
+      | "childCount"
+      | "unread"
+      | "turnFailed"
+      | "childActivity"
+    >
+  >;
+
+/**
+ * `roots`: Threads not listed under a parent, with their child counts. A
+ * Thread ID: that parent's child Threads.
+ */
+type ThreadListTree = "roots" | ThreadId;
+
+export interface ThreadPage {
+  readonly items: ReadonlyArray<ThreadListClientItem>;
+  /** Roots lists only: the children listed under this page's roots. */
+  readonly children?: ReadonlyArray<ThreadListClientItem>;
+  readonly nextCursor?: PageCursor;
+}
+
+export const listThreads = async (
+  projectId?: ProjectId,
+  cursor?: PageCursor,
+  signal?: AbortSignal,
+  lifecycleState?: "active" | "archived",
+  tree?: ThreadListTree,
+): Promise<ThreadPage> => {
+  return (
+    await dxClient.call(
+      ListThreadsEndpoint,
+      {
+        query: {
+          limit: 100,
+          ...(lifecycleState === undefined ? {} : { lifecycleState }),
+          ...(tree === "roots"
+            ? { roots: "true" as const }
+            : tree === undefined
+              ? {}
+              : { parentThreadId: tree }),
+          ...(projectId === undefined ? {} : { projectId }),
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+      },
+      { signal },
+    )
+  ).data;
+};
+
+interface ThreadSearchPage {
+  readonly items: ReadonlyArray<SearchThreadsItem>;
+  readonly nextCursor?: string;
+}
+
+/** Thread search: the signed-in person's Threads and Threads shared with them. */
+const searchThreads = async (
+  query: string,
+  cursor?: string,
+  signal?: AbortSignal,
+): Promise<ThreadSearchPage> =>
+  (
+    await dxClient.call(
+      SearchThreadsEndpoint,
+      {
+        query: {
+          q: query,
+          limit: 30,
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+      },
+      { signal },
+    )
+  ).data;
+
+const listSharedThreads = async (
+  signal?: AbortSignal,
+): Promise<ReadonlyArray<ThreadListClientItem>> =>
+  (await dxClient.call(ListSharedThreadsEndpoint, {}, { signal })).data.items;
+
+const getThreadReadiness = async (threadId: ThreadId, signal?: AbortSignal) =>
+  (
+    await dxClient.call(
+      GetThreadReadinessEndpoint,
+      { params: { threadId } },
+      { signal },
+    )
+  ).data;
+
+const getThread = async (
+  threadId: string,
+  signal?: AbortSignal,
+): Promise<ThreadDetailData> =>
+  (
+    await dxClient.call(
+      GetThreadEndpoint,
+      // Callers pass a ThreadId; Core answers any other value as invalid.
+      { params: { threadId: threadId as ThreadId } },
+      { signal },
+    )
+  ).data;

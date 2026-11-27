@@ -5,19 +5,21 @@
 //   <script src=/<id>.js> ───────▶ widget script (inert when off)
 //   Send: <iframe /<id>/panel> ───▶ panel; frame-ancestors = allowed origins
 //     postMessage(comments) ─────▶ panel checks the sender is allowed
-//   Continue with dx:              popup GET /<id>/authorize?challenge
+//   Continue with dx:  panel POST /<id>/start {challenge}: sign-in started
+//                      popup GET /<id>/authorize (no challenge in the URL)
 //                                   dx session? else /signin?next=…
-//     popup ⇄ opener (dx origin):   panel confirms it holds the challenge
+//     popup ⇄ opener (dx origin):   panel hands the popup its challenge
 //                                   and names the website; popup shows it
-//                                   Allow → POST → consent recorded
+//                                   Allow → POST → consent recorded, only
+//                                   for a sign-in started < 10 min ago
 //   panel POST /<id>/token {verifier}: sha256(verifier) = challenge → grant
 //   panel GET /<id>/me, POST /<id>/threads with the grant as a bearer token
 //
 // The grant lives only in the panel's storage, which the browser partitions
-// by the website framing it; the website never sees it. A challenge seen in
-// the popup's address is useless without the verifier the panel keeps, and
-// a link built with someone else's challenge cannot be allowed, because no
-// panel holding that challenge opened it.
+// by the website framing it; the website never sees it. Someone else's
+// challenge cannot be allowed: the sign-in window takes its challenge only
+// from the panel that opened it, never from its address, and the server
+// records consent only for a challenge a panel started for this widget.
 
 import { FeedbackWidgetSendRequestSchema } from "@dx/api";
 import {
@@ -56,6 +58,7 @@ import {
   readGrant,
   recordAuthorization,
   sha256Hex,
+  startSignIn,
 } from "./store.js";
 import { feedbackThreadPrompt, feedbackThreadTitle } from "./thread-prompt.js";
 
@@ -196,10 +199,31 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
       allowedOrigins: widget.origins,
     });
   })
+  .post("/:clientId/start", async (context) => {
+    const widget = await widgetFor(context);
+    if (widget === undefined)
+      return apiError(
+        context,
+        404,
+        "FEEDBACK_WIDGET_NOT_FOUND",
+        "This Feedback Widget is turned off.",
+      );
+    const body = (await readBoundedJson(
+      context.req.raw,
+      MAX_SMALL_FORM_BYTES,
+    ).catch(() => undefined)) as { challenge?: unknown } | undefined;
+    const challenge = body?.challenge;
+    if (typeof challenge !== "string" || !CHALLENGE.test(challenge))
+      return apiError(context, 400, "INVALID_REQUEST", "Invalid challenge.");
+    await startSignIn(context.env.DB as D1Database, {
+      challenge,
+      clientId: widget.clientId,
+    });
+    return context.body(null, 204, { "cache-control": "no-store" });
+  })
   .get("/:clientId/authorize", async (context) => {
     const widget = await widgetFor(context);
-    const challenge = context.req.query("challenge") ?? "";
-    if (widget === undefined || !CHALLENGE.test(challenge))
+    if (widget === undefined)
       return messagePage(
         400,
         "This sign-in link is invalid",
@@ -209,7 +233,7 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
     if (current === null) {
       const self = new URL(context.req.url);
       const signIn = new URL("/signin", await appOrigin(context.env));
-      signIn.searchParams.set("next", `${self.pathname}${self.search}`);
+      signIn.searchParams.set("next", self.pathname);
       return context.redirect(signIn.href, 302);
     }
     const ready = await readiness(context.env, widget, current.user.id);
@@ -222,7 +246,6 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
     return consentPage({
       projectLabel: widget.projectLabel,
       userLabel: current.user.email || current.user.name,
-      challenge,
       action: `/api/feedback-widget/${widget.clientId}/authorize`,
       appOrigin: await appOrigin(context.env),
       allowedOrigins: widget.origins,
@@ -270,11 +293,17 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
         "Access Required",
         `You can't start Threads in ${widget.projectLabel}.`,
       );
-    await recordAuthorization(context.env.DB as D1Database, {
+    const recorded = await recordAuthorization(context.env.DB as D1Database, {
       challenge,
       clientId: widget.clientId,
       userId: current.user.id,
     });
+    if (!recorded)
+      return messagePage(
+        400,
+        "This sign-in expired",
+        "Close this window and choose Continue with dx in the widget again.",
+      );
     feedbackWidgetLogger.info("Feedback Widget consent recorded.", {
       event: "feedback_widget_consent",
       projectId: widget.projectId,

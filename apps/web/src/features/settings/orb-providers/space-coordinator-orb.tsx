@@ -1,13 +1,13 @@
 import type { SpaceCoordinatorOrbData } from "@dx/api";
 import type { RunnerProfileId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import {
   SettingsCard,
   SettingsRow,
   SettingsSelect,
 } from "../../../shared/ui/settings.js";
+import type { PluginsTarget } from "../plugins/plugins-queries.js";
 import { projectDefaultsQueryOptions } from "../project-defaults/project-defaults-queries.js";
 import type { OrbProviderListData } from "./orb-providers-queries.js";
 import { setUpOrbSizeGroups } from "./orb-size-groups.js";

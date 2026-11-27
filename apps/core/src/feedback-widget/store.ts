@@ -206,30 +206,72 @@ export const readClientWidget = async (
   };
 };
 
-/** Records a person's consent for the panel holding the challenge's verifier. */
-export const recordAuthorization = async (
+/**
+ * Records that a widget panel is starting a sign-in with this challenge, and
+ * drops sign-ins too old to be allowed or claimed.
+ */
+export const startSignIn = async (
   db: D1Database,
-  input: { challenge: string; clientId: string; userId: string },
+  input: { challenge: string; clientId: string },
 ) => {
-  await db
-    .prepare(
-      `INSERT INTO feedback_widget_authorization
-         (challenge, client_id, user_id, approved_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT (challenge) DO NOTHING`,
-    )
-    .bind(
-      input.challenge,
-      input.clientId,
-      input.userId,
-      new Date().toISOString(),
-    )
-    .run();
+  const now = Date.now();
+  await db.batch([
+    db
+      .prepare("DELETE FROM feedback_widget_sign_in WHERE started_at <= ?")
+      .bind(new Date(now - 2 * AUTHORIZATION_TTL_MS).toISOString()),
+    db
+      .prepare(
+        `INSERT INTO feedback_widget_sign_in (challenge, client_id, started_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT (challenge) DO NOTHING`,
+      )
+      .bind(input.challenge, input.clientId, new Date(now).toISOString()),
+  ]);
 };
 
 /**
- * Claims a consent once, within its lifetime, and mints the grant the panel
- * keeps. Undefined while the person has not approved yet.
+ * Records a person's consent for a sign-in a widget panel started for this
+ * widget in the last ten minutes. False when no panel started it, it is too
+ * old, or it was already claimed.
+ */
+export const recordAuthorization = async (
+  db: D1Database,
+  input: { challenge: string; clientId: string; userId: string },
+): Promise<boolean> => {
+  const now = Date.now();
+  const inserted = await db
+    .prepare(
+      `INSERT INTO feedback_widget_authorization
+         (challenge, client_id, user_id, approved_at)
+       SELECT challenge, client_id, ?1, ?2 FROM feedback_widget_sign_in
+        WHERE challenge = ?3 AND client_id = ?4 AND started_at > ?5
+       ON CONFLICT (challenge) DO NOTHING`,
+    )
+    .bind(
+      input.userId,
+      new Date(now).toISOString(),
+      input.challenge,
+      input.clientId,
+      new Date(now - AUTHORIZATION_TTL_MS).toISOString(),
+    )
+    .run();
+  if (inserted.meta.changes > 0) return true;
+  // Allow sent twice, such as a double click, still counts once.
+  const pending = await db
+    .prepare(
+      `SELECT 1 AS pending FROM feedback_widget_authorization
+        WHERE challenge = ? AND client_id = ? AND user_id = ?
+          AND claimed_at IS NULL`,
+    )
+    .bind(input.challenge, input.clientId, input.userId)
+    .first<{ pending: number }>();
+  return pending !== null;
+};
+
+/**
+ * Claims a consent once, within ten minutes of Allow and only for a sign-in
+ * a panel started, and mints the grant the panel keeps. Undefined while the
+ * person has not approved yet.
  */
 export const claimAuthorization = async (
   db: D1Database,
@@ -241,6 +283,8 @@ export const claimAuthorization = async (
       `UPDATE feedback_widget_authorization SET claimed_at = ?1
         WHERE challenge = ?2 AND client_id = ?3 AND claimed_at IS NULL
           AND approved_at > ?4
+          AND EXISTS (SELECT 1 FROM feedback_widget_sign_in
+                       WHERE challenge = ?2 AND client_id = ?3)
         RETURNING user_id`,
     )
     .bind(
@@ -252,20 +296,25 @@ export const claimAuthorization = async (
     .first<{ user_id: string }>();
   if (claimed === null) return undefined;
   const token = newGrantToken();
-  await db
-    .prepare(
-      `INSERT INTO feedback_widget_grant
-         (token_sha256, client_id, project_id, user_id, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      await sha256Hex(token),
-      input.widget.clientId,
-      input.widget.projectId,
-      claimed.user_id,
-      new Date(now).toISOString(),
-    )
-    .run();
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO feedback_widget_grant
+           (token_sha256, client_id, project_id, user_id, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        await sha256Hex(token),
+        input.widget.clientId,
+        input.widget.projectId,
+        claimed.user_id,
+        new Date(now).toISOString(),
+      ),
+    // A sign-in is spent once its grant is issued.
+    db
+      .prepare("DELETE FROM feedback_widget_sign_in WHERE challenge = ?")
+      .bind(input.challenge),
+  ]);
   return { token, userId: claimed.user_id };
 };
 

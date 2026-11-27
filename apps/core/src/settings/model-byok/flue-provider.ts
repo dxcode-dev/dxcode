@@ -24,6 +24,7 @@ import { dxContextAttachments } from "../../runtime/context-attachments.js";
 import {
   classifyRunFailure,
   markRunFailure,
+  REQUEST_TOO_LARGE,
   type RunFailure,
   type RunFailureClass,
   runFailureText,
@@ -196,6 +197,125 @@ const withSendableImages = (context: Context): Context => {
 /** History as every provider accepts it. */
 const sendableContext = (context: Context) =>
   withSendableImages(withNonEmptyToolErrors(context));
+
+const LEFT_OUT_FOR_SIZE =
+  "[An image was left out: the model provider refused a request this large. View it again if you need it.]";
+
+/**
+ * The context with only its newest images whose base64 fits in `budget`
+ * bytes; each older one becomes a note, so the agent can view it again.
+ */
+const withImageBudget = (
+  context: Context,
+  budget: number,
+): { readonly context: Context; readonly keptBytes: number } => {
+  let keptBytes = 0;
+  let full = false;
+  const fit = (
+    block: TextContent | ImageContent,
+  ): TextContent | ImageContent => {
+    if (block.type !== "image") return block;
+    if (!full && keptBytes + block.data.length <= budget) {
+      keptBytes += block.data.length;
+      return block;
+    }
+    full = true;
+    return { type: "text", text: LEFT_OUT_FOR_SIZE };
+  };
+  // Newest first, so the newest images are the ones kept.
+  const messages = [...context.messages].reverse().map((message) =>
+    message.role === "assistant" || typeof message.content === "string"
+      ? message
+      : {
+          ...message,
+          content: [...message.content].reverse().map(fit).reverse(),
+        },
+  ) as Context["messages"];
+  return {
+    context: full ? { ...context, messages: messages.reverse() } : context,
+    keptBytes,
+  };
+};
+
+const REQUEST_TOO_LARGE_STAMP = new RegExp(
+  `\\(dx_failure:[a-z]+:${REQUEST_TOO_LARGE}\\)`,
+);
+
+/**
+ * Image bytes a model last accepted after refusing a larger request, per
+ * model, so later calls start under the provider's size limit instead of
+ * being refused once each.
+ */
+type ImageBudgets = Map<string, number>;
+
+/**
+ * One model call that recovers from a provider's size limit: when the
+ * provider refuses the request as too large before any output, the call is
+ * sent again with half its image bytes, oldest left out first, until it
+ * fits. Flue keeps every image in history, so without this one oversized
+ * request fails the turn and every retry and later turn (thr_703635f3). With no
+ * images left, the refusal reaches Flue as a context overflow, which it
+ * compacts.
+ */
+const withinRequestLimit = (
+  model: Model<Api>,
+  context: Context,
+  budgets: ImageBudgets,
+  attempt: (context: Context) => AsyncIterable<AssistantMessageEvent>,
+) => {
+  const events = createAssistantMessageEventStream();
+  const key = `${model.provider}/${model.id}`;
+  void (async () => {
+    let budget = budgets.get(key) ?? Number.POSITIVE_INFINITY;
+    for (;;) {
+      const limited = withImageBudget(context, budget);
+      const held: AssistantMessageEvent[] = [];
+      let answered = false;
+      let done: AssistantMessageEvent | undefined;
+      let refused: AssistantMessageEvent | undefined;
+      for await (const event of attempt(limited.context)) {
+        if (!answered && event.type === "start") {
+          held.push(event);
+          continue;
+        }
+        if (
+          !answered &&
+          event.type === "error" &&
+          REQUEST_TOO_LARGE_STAMP.test(event.error.errorMessage ?? "")
+        ) {
+          refused = event;
+          break;
+        }
+        if (!answered) {
+          answered = true;
+          for (const start of held) events.push(start);
+        }
+        if (event.type === "done" || event.type === "error") done = event;
+        events.push(event);
+      }
+      if (refused?.type === "error" && limited.keptBytes > 0) {
+        budget = Math.floor(limited.keptBytes / 2);
+        budgets.set(key, budget);
+        continue;
+      }
+      if (refused?.type === "error") {
+        for (const start of held) events.push(start);
+        const error = {
+          ...refused.error,
+          errorMessage: `${refused.error.errorMessage ?? ""} Context length exceeded.`,
+        };
+        events.push({ ...refused, error });
+        events.end(error);
+        return;
+      }
+      if (done?.type === "done") events.end(done.message);
+      else if (done?.type === "error") events.end(done.error);
+      else events.end();
+      return;
+    }
+  })().catch(() => events.end());
+  return events;
+};
 
 const FAILURE_CLASSES: ReadonlySet<string> = new Set<RunFailureClass>([
   "account",
@@ -619,6 +739,35 @@ export const createDxModelRoutingProvider = (
     providerId === DX_PROVIDER_ID
       ? undefined
       : catalogProviderModels(providerId);
+  const budgets: ImageBudgets = new Map();
+  const send = (
+    method: "stream" | "streamSimple",
+    model: Model<Api>,
+    rawContext: Context,
+    options: Record<string, unknown>,
+  ) => {
+    const inDo =
+      IN_DO_APIS.has(model.api) || model.api === "cloudflare-ai-binding";
+    const loadAdapter = PROXY_STREAM[model.api];
+    if (!inDo && loadAdapter === undefined)
+      throw new Error(`Unsupported wire api ${model.api}.`);
+    return withinRequestLimit(
+      model,
+      sendableContext(rawContext),
+      budgets,
+      (context) =>
+        inDo || loadAdapter === undefined
+          ? streamViaCoordinator(deps, model, context, options)
+          : streamViaAdapter(
+              loadAdapter,
+              method,
+              deps,
+              model,
+              context,
+              options,
+            ),
+    );
+  };
   const provider: Provider = {
     id: providerId,
     name: providerId,
@@ -629,38 +778,15 @@ export const createDxModelRoutingProvider = (
       },
     },
     getModels: () => fixedModels ?? catalogProviderModels(providerId),
-    stream: ((model: Model<Api>, rawContext: Context, options: never) => {
-      const context = sendableContext(rawContext);
-      if (IN_DO_APIS.has(model.api) || model.api === "cloudflare-ai-binding")
-        return streamViaCoordinator(deps, model, context, options);
-      const loadAdapter = PROXY_STREAM[model.api];
-      if (loadAdapter === undefined)
-        throw new Error(`Unsupported wire api ${model.api}.`);
-      return streamViaAdapter(
-        loadAdapter,
-        "stream",
-        deps,
-        model,
-        context,
-        options as Record<string, unknown>,
-      );
-    }) as Provider["stream"],
-    streamSimple: ((model: Model<Api>, rawContext: Context, options: never) => {
-      const context = sendableContext(rawContext);
-      if (IN_DO_APIS.has(model.api) || model.api === "cloudflare-ai-binding")
-        return streamViaCoordinator(deps, model, context, options);
-      const loadAdapter = PROXY_STREAM[model.api];
-      if (loadAdapter === undefined)
-        throw new Error(`Unsupported wire api ${model.api}.`);
-      return streamViaAdapter(
-        loadAdapter,
+    stream: ((model: Model<Api>, rawContext: Context, options: never) =>
+      send("stream", model, rawContext, options)) as Provider["stream"],
+    streamSimple: ((model: Model<Api>, rawContext: Context, options: never) =>
+      send(
         "streamSimple",
-        deps,
         model,
-        context,
-        options as Record<string, unknown>,
-      );
-    }) as Provider["streamSimple"],
+        rawContext,
+        options,
+      )) as Provider["streamSimple"],
   };
   const options: FlueProviderOptions = {
     // Flue loads only the images a call can hold in the Durable Object.

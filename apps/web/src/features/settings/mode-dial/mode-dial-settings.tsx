@@ -2,11 +2,11 @@ import "./mode-dial.css";
 import { isClaudeCodeModel, type ModeId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { MODES } from "../../../shared/mode-labels.js";
 import { settle } from "../../../shared/settle.js";
 import {
+  type ModelRoutingTarget,
   modelRoutingChoicesQueryOptions,
   modeProfileQueryOptions,
 } from "../model-routing/model-routing-queries.js";

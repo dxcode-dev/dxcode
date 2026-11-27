@@ -15,13 +15,14 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { dxClient, type PluginsTarget } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { mcpServerKeys } from "../integrations/mcp-queries.js";
 import { skillKeys } from "../skills/skills-queries.js";
 import {
   pluginBundleKeys,
   pluginBundleSettingsKey,
 } from "./plugin-bundle-queries.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /**
  * An installed plugin's files for the Plugins page's browser: the tree when

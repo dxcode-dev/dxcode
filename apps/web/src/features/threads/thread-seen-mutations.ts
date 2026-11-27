@@ -1,17 +1,19 @@
+import { MarkThreadSeenEndpoint } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import {
   hashKey,
   type InfiniteData,
   type QueryClient,
 } from "@tanstack/react-query";
-import {
-  markThreadSeen,
-  type ThreadListClientItem,
-  type ThreadPage,
-} from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import { spaceKeys } from "../spaces/space-cache-queries.js";
 import { isOptimisticThread, wasCreatedHere } from "./thread-mutations.js";
-import { invalidateThreadLists, threadKeys } from "./thread-queries.js";
+import {
+  invalidateThreadLists,
+  type ThreadListClientItem,
+  type ThreadPage,
+  threadKeys,
+} from "./thread-queries.js";
 import { expectSeenEcho } from "./thread-row-queries.js";
 
 type Row = ThreadListClientItem;
@@ -154,4 +156,9 @@ const markWhenLoaded = (
       clearTimeout(timer);
     }
   });
+};
+
+/** The requester opened the Thread: what it finished is seen. */
+const markThreadSeen = async (threadId: ThreadId): Promise<void> => {
+  await dxClient.call(MarkThreadSeenEndpoint, { params: { threadId } });
 };

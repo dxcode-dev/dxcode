@@ -8,13 +8,13 @@ import {
   ListPersonalMcpServersEndpoint,
   ListWorkspaceMcpServersEndpoint,
 } from "@dx/api";
-import type { UserId } from "@dx/domain";
+import type {
+  EnvironmentVariableConfigReference,
+  UserId,
+  WorkspaceSlug,
+} from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import {
-  dxClient,
-  type McpServerInput,
-  type McpServersTarget,
-} from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 
 export const listMcpServers = async (
   target: McpServersTarget,
@@ -32,8 +32,6 @@ export const listMcpServers = async (
 export type {
   EnvironmentVariableData,
   McpServerData,
-  McpServerInput,
-  McpServersTarget,
   McpToolData,
   ProjectData,
 };
@@ -55,3 +53,36 @@ export const mcpServersQueryOptions = (
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: true,
   });
+
+export type McpServersTarget =
+  | { readonly scope: "personal" }
+  | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
+
+export interface McpServerInput {
+  readonly name: string;
+  readonly endpoint: string;
+  /** `auto` lets the server decide between no auth, OAuth, and a token. */
+  readonly authType?: "auto" | "none" | "bearer" | "oauth";
+  readonly authReference?: EnvironmentVariableConfigReference;
+  /** Write-only bearer token, stored encrypted on the server. */
+  readonly authToken?: string;
+  /** The module Code imports the server's tools under. */
+  readonly moduleId?: string;
+  /** Sent as the MCP client name; empty restores the default. */
+  readonly clientName?: string;
+  /** An own OAuth app; empty removes it. */
+  readonly oauthClientId?: string;
+  /** Write-only. */
+  readonly oauthClientSecret?: string;
+  /** The full header list; a secret without a value keeps its stored value. */
+  readonly headers?: ReadonlyArray<{
+    readonly name: string;
+    readonly value?: string;
+    readonly secret?: boolean;
+  }>;
+  readonly timeoutMs: number;
+  /** Omitted: the server is available to all projects (API default). */
+  readonly projectIds?: ReadonlyArray<string>;
+  /** Omitted: all workspace roles (API default). */
+  readonly roles?: ReadonlyArray<string>;
+}

@@ -1,9 +1,9 @@
 import type { PluginBundleData } from "@dx/api";
 import type { PluginId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { PackageBrowserSection } from "../../../shared/ui/package-browser.js";
 import { pluginHostUsageQueryOptions } from "./plugin-bundle-queries.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /** Money to the cent, or "under $0.01" for a little use. */
 const money = (microUsd: number) =>

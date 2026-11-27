@@ -27,11 +27,11 @@ const routeList = (file: URL) =>
     .map((line) => line.trim())
     .filter((line) => line !== "" && !line.startsWith("#"));
 
-const served = new Set(
-  app.routes
-    .filter(({ method, path }) => method !== "ALL" && path.startsWith("/v1/"))
-    .map(({ method, path }) => `${method} ${path}`),
-);
+const routes = app.routes
+  .filter(({ method }) => method !== "ALL")
+  .map(({ method, path }) => `${method} ${path}`);
+/** The /v1 routes, each an endpoint or listed as non-client. */
+const served = new Set(routes.filter((route) => route.includes(" /v1/")));
 /** The public endpoints, and those only dx's own deployment serves. */
 const endpoints = [...dxEndpoints, ...deploymentEndpoints];
 const defined = endpoints.map(({ method, path }) => `${method} ${path}`);
@@ -114,7 +114,10 @@ describe("headless endpoint contract", () => {
   });
 
   it("serves every endpoint defined in @dx/api", () => {
-    expect(defined.filter((route) => !served.has(route))).toEqual([]);
+    // An endpoint may sit outside /v1, such as the signed-out invite
+    // preview at /api/invites/:token.
+    const all = new Set(routes);
+    expect(defined.filter((route) => !all.has(route))).toEqual([]);
   });
 
   it("defines an endpoint for every new /v1 route", () => {
@@ -123,6 +126,12 @@ describe("headless endpoint contract", () => {
     // packages/api/src/endpoints.ts, or a line in non-client-routes.txt if
     // no dx UI calls it.
     expect([...served].filter((route) => !known.has(route)).sort()).toEqual([]);
+  });
+
+  it("leaves no legacy client route", () => {
+    // The migration is done: a new route gets an endpoint, or a line in
+    // non-client-routes.txt when no dx UI calls it (wiki/headless-client.md).
+    expect(legacy).toEqual([]);
   });
 
   it("keeps the legacy and non-client lists to routes that need them", () => {

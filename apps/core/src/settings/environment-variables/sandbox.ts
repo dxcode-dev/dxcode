@@ -59,19 +59,40 @@ export const environmentMaskerOf = async (
 
 /**
  * Each Thread's latest decorated sandbox in this isolate, so tools that never
- * touch the Orb mask the same values.
+ * touch the Orb mask the same values. Most recently used last.
  */
 const threadMaskers = new Map<string, () => Promise<SecretMasker>>();
 
 /**
+ * Reads a Thread's environment when its masker left the cache. Set by
+ * `withExecutionEnvironment`; the resolver only depends on the isolate's
+ * bindings, so the latest one serves every Thread.
+ */
+let resolveEvicted:
+  | ((threadId: string) => Promise<ExecutionEnvironmentSnapshot>)
+  | undefined;
+const evictedThreads = new Set<string>();
+
+/**
  * The masker of the Thread's sandbox. A Flue session creates its sandbox
- * before any tool runs; without one in this isolate, only dx's own
- * credentials are masked.
+ * before any tool runs. A Thread whose masker left this isolate's cache
+ * reads its environment again (#2422): an unmasked tool result is worse
+ * than a failed one, so that read failing fails the call. Without a sandbox
+ * in this isolate, only dx's own credentials are masked.
  */
 export const threadEnvironmentMasker = async (
   threadId: string,
-): Promise<SecretMasker> =>
-  (await threadMaskers.get(threadId)?.()) ?? credentialsOnly;
+): Promise<SecretMasker> => {
+  const cached = threadMaskers.get(threadId);
+  if (cached !== undefined) {
+    threadMaskers.delete(threadId);
+    threadMaskers.set(threadId, cached);
+    return cached();
+  }
+  if (evictedThreads.has(threadId) && resolveEvicted !== undefined)
+    return admittedValues(await resolveEvicted(threadId)).masker;
+  return credentialsOnly;
+};
 
 /**
  * Refuses a write of text that holds a hidden secret's marker: the file
@@ -353,11 +374,19 @@ export const withExecutionEnvironment = (
       () => resolve(id),
       revision === undefined ? undefined : () => revision(id),
     );
-    // Most recent last; an isolate keeps at most 256 Threads' maskers.
+    // Most recently used last; an isolate keeps at most 256 Threads'
+    // maskers, and remembers which it let go so they read theirs again.
+    resolveEvicted = resolve;
+    evictedThreads.delete(id);
     threadMaskers.delete(id);
     threadMaskers.set(id, () => environmentMaskerOf(decorated));
-    if (threadMaskers.size > 256)
-      threadMaskers.delete(threadMaskers.keys().next().value ?? id);
+    if (threadMaskers.size > 256) {
+      const oldest = threadMaskers.keys().next().value ?? id;
+      threadMaskers.delete(oldest);
+      evictedThreads.add(oldest);
+      if (evictedThreads.size > 4_096)
+        evictedThreads.delete(evictedThreads.values().next().value ?? oldest);
+    }
     return decorated;
   },
   ...(factory.tools === undefined ? {} : { tools: factory.tools }),

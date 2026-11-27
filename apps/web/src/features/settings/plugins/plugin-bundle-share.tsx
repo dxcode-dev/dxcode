@@ -2,13 +2,13 @@ import type { PluginBundleData } from "@dx/api";
 import type { PluginId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import { Input } from "../../../shared/ui/input.js";
 import { pluginBundleShareMutationOptions } from "./plugin-bundle-mutations.js";
 import { errorMessage } from "./plugin-bundle-presentation.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /**
  * Share links for one install (plugin plan M5). A new link is shown once,

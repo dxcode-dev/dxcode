@@ -7,11 +7,11 @@ import {
 } from "@dx/api";
 import type { ModeId, WorkspaceSlug } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
+import { dxClient } from "../../../shared/api/client.js";
 import {
-  dxClient,
   type ModelRoutingTarget,
-} from "../../../shared/api/client.js";
-import { modelRoutingKey } from "../model-routing/model-routing-queries.js";
+  modelRoutingKey,
+} from "../model-routing/model-routing-queries.js";
 
 /** Callers pass the mode they read; Core refuses one it does not know. */
 const modeParams = (mode: string) => ({ mode: mode as ModeId });

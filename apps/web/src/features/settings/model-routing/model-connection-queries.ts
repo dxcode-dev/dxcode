@@ -9,11 +9,11 @@ import {
 } from "@dx/api";
 import type { ModelConnectionId } from "@dx/domain";
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
+import { dxClient } from "../../../shared/api/client.js";
 import {
-  dxClient,
   type ModelRoutingTarget,
-} from "../../../shared/api/client.js";
-import { modelRoutingKey } from "./model-routing-queries.js";
+  modelRoutingKey,
+} from "./model-routing-queries.js";
 
 /*
  * Settings → Models: connections and the catalog. Apart from

@@ -1,9 +1,6 @@
 import type { InfiniteData } from "@tanstack/react-query";
 import { DateTime } from "effect";
-import type {
-  ThreadListClientItem,
-  ThreadPage,
-} from "../../shared/api/client.js";
+import type { ThreadListClientItem, ThreadPage } from "./thread-queries.js";
 
 type Row = ThreadListClientItem;
 type ListData = InfiniteData<ThreadPage, unknown>;

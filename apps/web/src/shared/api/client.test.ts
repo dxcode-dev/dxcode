@@ -4,7 +4,8 @@ import {
 } from "@dx/api";
 import type { PageCursor, ProjectId } from "@dx/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dxClient, listThreads } from "./client.js";
+import { listThreads } from "../../features/threads/thread-queries.js";
+import { dxClient } from "./client.js";
 
 const _timestamp = "2026-08-22T00:00:00.000Z";
 

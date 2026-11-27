@@ -4,7 +4,6 @@ import { pluginRebuildReason } from "@dx/domain";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { MoreHorizontal } from "lucide-react";
 import * as React from "react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { Button } from "../../../shared/ui/button.js";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import { EmptyState } from "../../../shared/ui/empty-state.js";
@@ -28,6 +27,7 @@ import {
   pluginFileQueryOptions,
   pluginFilesQueryOptions,
 } from "./plugin-files-queries.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 import "./plugins.css";
 import {
   type Panel,

@@ -1,8 +1,11 @@
 import type { ProjectData } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
-import type { ProjectPage } from "../../shared/api/client.js";
-import { projectKeys, seedProjectDetailFromList } from "./project-queries.js";
+import {
+  type ProjectPage,
+  projectKeys,
+  seedProjectDetailFromList,
+} from "./project-queries.js";
 
 /**
  * Writing a Project the server answered with into the Project caches. Apart

@@ -29,6 +29,12 @@ import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import {
+  BrowserSessionRequired,
+  requireBrowserSession,
+} from "../../auth/browser-session.js";
+import { requestAuth } from "../../auth/request-auth.js";
+import { loadAuthenticationRequirements } from "../../auth/requirements.js";
+import {
   decodeJsonBody,
   decodeRequestInput,
 } from "../../http/request-decoding.js";
@@ -54,11 +60,6 @@ class InvalidSigningKeysRequest extends Schema.TaggedError<InvalidSigningKeysReq
   {},
 ) {}
 
-class BrowserSessionRequired extends Schema.TaggedError<BrowserSessionRequired>()(
-  "BrowserSessionRequired",
-  {},
-) {}
-
 const layersFor = (db: D1Database) => {
   const d1 = D1Client.layer({ db });
   const workspace = WorkspaceRepositoryD1(db).pipe(Layer.provide(d1));
@@ -79,6 +80,18 @@ const authorizePersonal = Effect.fn("authorizePersonalSigningKeys")(function* (
     yield* settings.personal(context.get("principal"));
   }).pipe(Effect.provide(layersFor(db)));
 });
+
+/**
+ * Signing key writes act on a person's commit identity, so only their own
+ * browser makes them, never an API token or a request made for them (#2422).
+ */
+const authorizePersonalWrite = Effect.fn("authorizePersonalSigningKeyWrite")(
+  function* (context: Context<AppEnv>, db: D1Database) {
+    yield* authorizePersonal(context, db);
+    const requirements = yield* loadAuthenticationRequirements(context.env);
+    yield* requireBrowserSession(context, requestAuth(context, requirements));
+  },
+);
 
 const setupGuidance = {
   title: "Add this public key to your Git host",
@@ -232,7 +245,7 @@ personalSigningKeyRoutes.get("/", async (context) => {
 personalSigningKeyRoutes.post("/managed", async (context) => {
   const operation = Effect.gen(function* () {
     const db = yield* decodeD1Binding(context.env.DB);
-    yield* authorizePersonal(context, db);
+    yield* authorizePersonalWrite(context, db);
     const keyring = yield* requireManagedSigning(context.env);
     const key = yield* Effect.gen(function* () {
       const service = yield* SigningKeyService;
@@ -255,7 +268,7 @@ personalSigningKeyRoutes.post(
     const operation = Effect.gen(function* () {
       const id = yield* signingKeyId(context);
       const db = yield* decodeD1Binding(context.env.DB);
-      yield* authorizePersonal(context, db);
+      yield* authorizePersonalWrite(context, db);
       const keyring = yield* requireManagedSigning(context.env);
       const key = yield* Effect.gen(function* () {
         const service = yield* SigningKeyService;
@@ -278,7 +291,7 @@ personalSigningKeyRoutes.delete("/managed/:signingKeyId", async (context) => {
   const operation = Effect.gen(function* () {
     const id = yield* signingKeyId(context);
     const db = yield* decodeD1Binding(context.env.DB);
-    yield* authorizePersonal(context, db);
+    yield* authorizePersonalWrite(context, db);
     yield* Effect.gen(function* () {
       const service = yield* SigningKeyService;
       yield* service.revokeManaged(
@@ -305,7 +318,7 @@ personalSigningKeyRoutes.post("/verification", async (context) => {
       normalizeVerificationKeyName(body.name),
     ).pipe(Effect.mapError(() => new InvalidSigningKeysRequest()));
     const db = yield* decodeD1Binding(context.env.DB);
-    yield* authorizePersonal(context, db);
+    yield* authorizePersonalWrite(context, db);
     const key = yield* Effect.gen(function* () {
       const service = yield* SigningKeyService;
       return yield* service.addVerification(
@@ -328,7 +341,7 @@ personalSigningKeyRoutes.delete(
     const operation = Effect.gen(function* () {
       const id = yield* verificationKeyId(context);
       const db = yield* decodeD1Binding(context.env.DB);
-      yield* authorizePersonal(context, db);
+      yield* authorizePersonalWrite(context, db);
       yield* Effect.gen(function* () {
         const service = yield* SigningKeyService;
         yield* service.revokeVerification(

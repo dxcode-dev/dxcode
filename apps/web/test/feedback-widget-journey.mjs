@@ -548,10 +548,20 @@ await check(
 await check(
   "A consent link that no widget panel opened cannot be allowed",
   async () => {
-    // An attacker keeps the verifier and sends the signed-in victim the
-    // authorize link with its challenge (#2406).
+    // An attacker keeps the verifier, starts the sign-in as a panel would,
+    // and sends the signed-in victim the authorize link with its challenge
+    // (#2406, #2420).
     const verifier = `attacker-${randomBytes(32).toString("base64url")}`;
     const challenge = createHash("sha256").update(verifier).digest("hex");
+    const started = await bare(
+      "POST",
+      `/api/feedback-widget/${clientId}/start`,
+      {
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ challenge }),
+      },
+    );
+    assert.equal(started.status, 204);
     const link = `${dxOrigin}/api/feedback-widget/${clientId}/authorize?challenge=${challenge}`;
     const direct = await context.newPage();
     await direct.goto(link);

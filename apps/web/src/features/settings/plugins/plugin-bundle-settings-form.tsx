@@ -3,7 +3,6 @@ import type { PluginId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 import * as React from "react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { Input } from "../../../shared/ui/input.js";
 import {
   SettingsFormActions,
@@ -13,6 +12,7 @@ import {
 import { pluginBundleSettingsMutationOptions } from "./plugin-bundle-mutations.js";
 import { errorMessage } from "./plugin-bundle-presentation.js";
 import { pluginBundleSettingsQueryOptions } from "./plugin-bundle-queries.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 type Value = string | number | boolean;
 

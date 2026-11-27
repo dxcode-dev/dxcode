@@ -8,9 +8,15 @@ import type {
   UpdateThreadRequest,
 } from "@dx/api";
 import {
+  ArchiveThreadEndpoint,
   CreateThreadEndpoint,
+  DeleteThreadEndpoint,
+  PinThreadEndpoint,
+  RetryInitialDispatchEndpoint,
+  SnoozeThreadEndpoint,
   StartMailThreadEndpoint,
   threadAgentUrl,
+  UpdateThreadEndpoint,
 } from "@dx/api";
 import type {
   ModelConnectionId,
@@ -31,25 +37,18 @@ import {
   type QueryKey,
 } from "@tanstack/react-query";
 import { DateTime } from "effect";
-import {
-  ApiError,
-  type ArchivedThread,
-  deleteThread,
-  dxClient,
-  retryInitialDispatch,
-  setThreadArchived,
-  setThreadPinned,
-  setThreadSnoozed,
-  type ThreadPage,
-  updateThread,
-} from "../../shared/api/client.js";
+import { ApiError, dxClient } from "../../shared/api/client.js";
 import { seedProjectDetail } from "../projects/project-cache-mutations.js";
 import {
   invalidateSpaceForThread,
   spaceKeys,
 } from "../spaces/space-cache-queries.js";
 import { belongsInLoadedList, listOrder } from "./thread-list-order-queries.js";
-import { invalidateThreadQueries, threadKeys } from "./thread-queries.js";
+import {
+  invalidateThreadQueries,
+  type ThreadPage,
+  threadKeys,
+} from "./thread-queries.js";
 import {
   requestedChanges,
   withChanges,
@@ -1198,3 +1197,98 @@ export const retryInitialThreadDispatch = async (
   await retryInitialDispatch(threadId);
   await invalidateThreadQueries(queryClient, userId, threadId);
 };
+
+const setThreadPinned = async (
+  threadId: ThreadId,
+  pinned: boolean,
+): Promise<ThreadData> =>
+  (
+    await dxClient.call(PinThreadEndpoint, {
+      params: { threadId },
+      body: { pinned },
+    })
+  ).data;
+
+/** Hands a new Thread's first message that failed to start to its agent again. */
+const retryInitialDispatch = async (threadId: ThreadId) =>
+  (await dxClient.call(RetryInitialDispatchEndpoint, { params: { threadId } }))
+    .data;
+
+/** Snoozes the Thread until `snoozedUntil`, or wakes it when null. */
+const setThreadSnoozed = async (
+  threadId: ThreadId,
+  snoozedUntil: Date | null,
+): Promise<ThreadData> =>
+  (
+    await dxClient.call(SnoozeThreadEndpoint, {
+      params: { threadId },
+      body: {
+        snoozedUntil:
+          snoozedUntil === null ? null : DateTime.fromDateUnsafe(snoozedUntil),
+      },
+    })
+  ).data;
+
+const updateThread = async (
+  threadId: ThreadId,
+  update: UpdateThreadRequest,
+): Promise<ThreadData> =>
+  (
+    await dxClient.call(UpdateThreadEndpoint, {
+      params: { threadId },
+      body: update,
+    })
+  ).data;
+
+/** An archive or restore, and the child Threads it changed with it. */
+export interface ArchivedThread {
+  readonly thread: ThreadData;
+  readonly changedChildThreadIds?: ReadonlyArray<ThreadId>;
+  /** Archived, but its Orb couldn't be stopped yet; the server finishes it. */
+  readonly orbStopping?: true;
+}
+
+/**
+ * `children`: true for every child in the parent's former state, or the
+ * exact children to change, as an Undo restores them. `reason: "ship"`
+ * archives it from its Ship outcome, so its work counts as shipped.
+ */
+const setThreadArchived = async (
+  threadId: ThreadId,
+  archived: boolean,
+  children?: true | ReadonlyArray<ThreadId>,
+  reason?: "ship",
+): Promise<ArchivedThread> => {
+  const response = await dxClient.call(ArchiveThreadEndpoint, {
+    params: { threadId },
+    body: {
+      archived,
+      ...(children === undefined
+        ? {}
+        : {
+            includeChildren: true,
+            ...(children === true ? {} : { childThreadIds: children }),
+          }),
+      ...(reason === undefined ? {} : { reason }),
+    },
+  });
+  return {
+    thread: response.data,
+    ...(response.changedChildThreadIds === undefined
+      ? {}
+      : { changedChildThreadIds: response.changedChildThreadIds }),
+    ...(response.orbStopping === true ? { orbStopping: true as const } : {}),
+  };
+};
+
+/**
+ * Deletes a Thread for good: its conversation, sandbox, and files. `pending`
+ * cleanup finishes on the server.
+ */
+const deleteThread = async (threadId: ThreadId, includeChildren = false) =>
+  (
+    await dxClient.call(DeleteThreadEndpoint, {
+      params: { threadId },
+      query: includeChildren ? { includeChildren: "true" } : {},
+    })
+  ).data;

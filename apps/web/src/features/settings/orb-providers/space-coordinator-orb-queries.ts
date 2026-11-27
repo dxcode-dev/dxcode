@@ -10,11 +10,8 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  ApiError,
-  dxClient,
-  type PluginsTarget,
-} from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
+import type { PluginsTarget } from "../plugins/plugins-queries.js";
 
 /** Settings → Orb Providers → Space coordinator: its read and write. */
 

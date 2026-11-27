@@ -2,7 +2,6 @@ import type { UserId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Library, RefreshCw, Trash2 } from "lucide-react";
 import * as React from "react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
@@ -17,6 +16,7 @@ import {
   pluginCatalogsQueryOptions,
 } from "./plugin-catalog-queries.js";
 import { PluginStatusBadge } from "./plugin-status-badge.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 type Entry = PluginCatalogData["entries"][number];
 

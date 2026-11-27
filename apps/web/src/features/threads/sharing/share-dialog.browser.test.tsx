@@ -8,7 +8,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
-const sharing = vi.hoisted(() => ({ update: vi.fn() }));
+/** The sharing PUTs the dialog sends, answered as Core would. */
+const sharing = {
+  update: vi.fn<typeof globalThis.fetch>(),
+  bodies: () =>
+    sharing.update.mock.calls
+      .filter(([, init]) => init?.method === "PUT")
+      .map(([input, init]) => ({
+        path: String(input),
+        body: JSON.parse(String(init?.body)) as unknown,
+      })),
+};
 const userId = "share-user" as UserId;
 
 vi.mock("../../../shared/auth/auth-context.js", async (importOriginal) => ({
@@ -16,11 +26,6 @@ vi.mock("../../../shared/auth/auth-context.js", async (importOriginal) => ({
     typeof import("../../../shared/auth/auth-context.js")
   >()),
   useAuthenticatedIdentity: () => ({ identity: { id: "share-user" } }),
-}));
-
-vi.mock("../../../shared/api/client.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../shared/api/client.js")>()),
-  updateThreadSharing: sharing.update,
 }));
 
 import { Toaster } from "../../../shared/ui/sonner.js";
@@ -52,16 +57,24 @@ const click = (element: Element | undefined | null) =>
 
 afterEach(async () => {
   sharing.update.mockReset();
+  vi.unstubAllGlobals();
   await React.act(() => toast.dismiss());
   document.body.replaceChildren();
 });
 
 describe("Share dialog notices", () => {
   it("confirms a sharing change with a toast", async () => {
-    sharing.update.mockResolvedValue({
-      sharing: { workspaceAccess: "view" },
-      skipMultiplayerConfirmation: false,
-    });
+    sharing.update.mockImplementation(async () =>
+      Response.json({
+        status: "success",
+        data: {
+          threadId: thread.id,
+          sharing: { workspaceAccess: "view" },
+          skipMultiplayerConfirmation: false,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", sharing.update);
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -94,9 +107,14 @@ describe("Share dialog notices", () => {
         (item) => item.textContent?.trim() === "View",
       ),
     );
-    expect(sharing.update).toHaveBeenCalledWith(thread.id, {
-      workspaceAccess: "view",
-    });
+    await vi.waitFor(() =>
+      expect(sharing.bodies()).toEqual([
+        {
+          path: `/v1/threads/${thread.id}/sharing`,
+          body: { workspaceAccess: "view" },
+        },
+      ]),
+    );
     await vi.waitFor(() =>
       expect(titleOf(onlyToast())).toBe("Sharing updated"),
     );

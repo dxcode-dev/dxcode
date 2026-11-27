@@ -1,8 +1,8 @@
 import { MCP_OAUTH_CALLBACK_PATH } from "@dx/api";
 import { DEFAULT_MCP_TIMEOUT_MS } from "@dx/domain";
-import { ApiError, type McpServerInput } from "../../../shared/api/client.js";
+import { ApiError } from "../../../shared/api/client.js";
 import { MCP_TEMPLATES, type McpTemplate } from "./mcp-catalog.js";
-import type { McpServerData } from "./mcp-queries.js";
+import type { McpServerData, McpServerInput } from "./mcp-queries.js";
 
 /**
  * `auto` lets dx probe the server when it is added. `secret` is only shown

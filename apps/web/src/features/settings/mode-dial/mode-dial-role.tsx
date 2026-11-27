@@ -2,7 +2,6 @@ import type { ServedModelChoiceData } from "@dx/api";
 import type { ThinkingLevel } from "@dx/domain";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import {
   pickerOrder,
   servedPickerModel,
@@ -12,6 +11,7 @@ import {
   ModelPicker,
   type ModelPickerModel,
 } from "../../../shared/ui/model-picker.js";
+import type { ModelRoutingTarget } from "../model-routing/model-routing-queries.js";
 import { AUTO, type ModeDraft, type ModeSlot } from "./mode-dial-drafts.js";
 import { THINKING_LEVELS } from "./mode-dial-values.js";
 

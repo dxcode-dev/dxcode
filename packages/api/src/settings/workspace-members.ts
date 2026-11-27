@@ -295,6 +295,21 @@ export const RevokeWorkspaceInviteLinkEndpoint = defineEndpoint({
   refusals: workspaceMembersRefusals,
 });
 
+/**
+ * An invite link's preview: whether it still works and the workspace it
+ * joins. Core serves it at `/api/invites` outside `/v1` so a signed-out
+ * person opening the link can read it.
+ */
+export const GetWorkspaceInvitePreviewEndpoint = defineEndpoint({
+  id: "settings.workspaceInvites.preview",
+  summary: "Preview an invite link, signed in or not",
+  method: "GET",
+  path: "/api/invites/:token",
+  params: Schema.Struct({ token: Schema.String }),
+  success: WorkspaceInvitePreviewResponseSchema,
+  refusals: [{ status: 503, schema: WorkspaceMembersErrorResponseSchema }],
+});
+
 export const AcceptWorkspaceInviteEndpoint = defineEndpoint({
   id: "settings.workspaceInvites.accept",
   method: "POST",

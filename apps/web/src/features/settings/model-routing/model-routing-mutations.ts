@@ -27,16 +27,15 @@ import {
   type PersonalModelSubscriptionConnectionId,
 } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
-import {
-  ApiError,
-  dxClient,
-  type ModelRoutingTarget,
-} from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
 import {
   checkModelConnectionAccess,
   connectionParams,
 } from "./model-connection-queries.js";
-import { modelRoutingKey } from "./model-routing-queries.js";
+import {
+  type ModelRoutingTarget,
+  modelRoutingKey,
+} from "./model-routing-queries.js";
 
 const beginGitHubCopilotAuthorization = async () =>
   (

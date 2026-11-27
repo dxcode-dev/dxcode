@@ -1,7 +1,6 @@
 import type { PluginBundleData, PluginBundleUpdatePreviewData } from "@dx/api";
 import { pluginRebuildReason } from "@dx/domain";
 import type * as React from "react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -28,6 +27,7 @@ import { PluginBundleSourceLine } from "./plugin-bundle-source.js";
 import { PluginBundleUpdate } from "./plugin-bundle-update.js";
 import type { EditedPluginFile } from "./plugin-files-queries.js";
 import { PluginRunsOn } from "./plugin-runs-on.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /** A dialog the details open over the page. */
 export type Panel =

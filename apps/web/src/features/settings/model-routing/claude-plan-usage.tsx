@@ -8,7 +8,6 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
-import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useNowMinute } from "../../../shared/hooks/use-clock.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Radio } from "../../../shared/ui/checkbox.js";
@@ -19,6 +18,7 @@ import {
   apiMessage,
   connectionMutationOptions,
 } from "./model-routing-mutations.js";
+import type { ModelRoutingTarget } from "./model-routing-queries.js";
 
 const EXTRA_USAGE_OPTIONS = [
   {

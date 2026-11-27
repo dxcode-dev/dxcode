@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { requestId } from "../http/request-id.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { readinessLogger } from "../logging.js";
-import { createTestBindings, TEST_AUTH_SECRET } from "../testing/bindings.js";
+import {
+  createTestBindings,
+  TEST_AUTH_SECRET,
+  validR2Binding,
+} from "../testing/bindings.js";
+import { READINESS_CACHE_MS } from "./check.js";
 import { readinessHandler } from "./handler.js";
 
 const createReadinessApp = () => {
@@ -70,5 +75,40 @@ describe("readiness endpoint", () => {
       expect.objectContaining({ readinessCheck: "deployment_revision" }),
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain("not-a-revision");
+  });
+});
+
+describe("readiness endpoint load", () => {
+  it("checks once per window however many requests arrive", async () => {
+    const head = vi.fn(validR2Binding.head);
+    const bindings = createTestBindings({
+      DX_STORAGE: { ...validR2Binding, head } as unknown as R2Bucket,
+    });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    // Every request gets its own env with its own D1 session wrapper.
+    const readyz = () =>
+      createReadinessApp().request("/readyz", undefined, {
+        ...bindings,
+        DB: { ...bindings.DB } as D1Database,
+      });
+
+    const responses = await Promise.all(Array.from({ length: 20 }, readyz));
+    expect(responses.map(({ status }) => status)).toEqual(Array(20).fill(200));
+    expect(head).toHaveBeenCalledTimes(1);
+
+    now.mockReturnValue(1_000_000 + READINESS_CACHE_MS - 1);
+    expect((await readyz()).status).toBe(200);
+    expect(head).toHaveBeenCalledTimes(1);
+
+    now.mockReturnValue(1_000_000 + READINESS_CACHE_MS);
+    expect((await readyz()).status).toBe(200);
+    expect(head).toHaveBeenCalledTimes(2);
+
+    vi.spyOn(readinessLogger, "warn").mockImplementation(() => {});
+    const changed = await createReadinessApp().request("/readyz", undefined, {
+      ...bindings,
+      DX_DEPLOYMENT_REVISION: "not-a-revision",
+    });
+    expect(changed.status).toBe(503);
   });
 });

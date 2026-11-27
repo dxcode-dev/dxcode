@@ -1,4 +1,10 @@
 import type { ThreadDraftSlot, WorkspaceDraftSlot } from "@dx/api";
+import {
+  GetThreadDraftEndpoint,
+  GetWorkspaceDraftEndpoint,
+  UpdateThreadDraftEndpoint,
+  UpdateWorkspaceDraftEndpoint,
+} from "@dx/api";
 import type { ThreadId, UserId, WorkspaceId } from "@dx/domain";
 import {
   type QueryClient,
@@ -6,7 +12,7 @@ import {
   queryOptions,
   useQueryClient,
 } from "@tanstack/react-query";
-import { getComposerDraft, putComposerDraft } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import type { PresentationValue } from "./use-thread-presentation.js";
 
@@ -253,3 +259,61 @@ export function useThreadDraftValue(target: ThreadId | DraftAddress) {
   const { identity } = useAuthenticatedIdentity();
   return threadDraftValue(client, identity.id, target);
 }
+
+/**
+ * A composer's draft: a Thread's, `/v1/threads/:threadId/draft` with an
+ * optional `?slot=`, or a workspace's, `/v1/drafts/workspaces/:workspace/:slot`.
+ */
+type ComposerDraftLocation =
+  | { readonly threadId: ThreadId; readonly slot?: ThreadDraftSlot }
+  | { readonly workspace: string; readonly slot: WorkspaceDraftSlot };
+
+/** The signed-in person's unsent text in one composer; "" if none. */
+const getComposerDraft = async (
+  draft: ComposerDraftLocation,
+  signal?: AbortSignal,
+) =>
+  ("threadId" in draft
+    ? await dxClient.call(
+        GetThreadDraftEndpoint,
+        {
+          params: { threadId: draft.threadId },
+          query: draft.slot === undefined ? {} : { slot: draft.slot },
+        },
+        { signal },
+      )
+    : await dxClient.call(
+        GetWorkspaceDraftEndpoint,
+        { params: { workspace: draft.workspace, slot: draft.slot } },
+        { signal },
+      )
+  ).data.text;
+
+/**
+ * Saves the person's draft in one composer; `""` removes it. `keepalive`
+ * lets a save started as the page unloads finish.
+ */
+const putComposerDraft = async (
+  draft: ComposerDraftLocation,
+  text: string,
+  keepalive: boolean,
+) =>
+  ("threadId" in draft
+    ? await dxClient.call(
+        UpdateThreadDraftEndpoint,
+        {
+          params: { threadId: draft.threadId },
+          query: draft.slot === undefined ? {} : { slot: draft.slot },
+          body: { text },
+        },
+        { keepalive },
+      )
+    : await dxClient.call(
+        UpdateWorkspaceDraftEndpoint,
+        {
+          params: { workspace: draft.workspace, slot: draft.slot },
+          body: { text },
+        },
+        { keepalive },
+      )
+  ).data.text;

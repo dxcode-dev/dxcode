@@ -26,7 +26,6 @@ import {
 } from "prosemirror-state";
 import { selectedRect } from "prosemirror-tables";
 import type { EditorView } from "prosemirror-view";
-import type { ProjectPage } from "../../../shared/api/client.js";
 import {
   type PersonItem,
   peopleItems,
@@ -35,7 +34,10 @@ import type {
   SuggestMenuRow,
   SuggestMenuState,
 } from "../../../shared/comments/suggest-menu.js";
-import { projectKeys } from "../../projects/project-queries.js";
+import {
+  type ProjectPage,
+  projectKeys,
+} from "../../projects/project-queries.js";
 import { artifactMembersOptions } from "../artifact-comments-queries.js";
 import { acceptSavedArtifact } from "../artifact-document-queries.js";
 import type { ArtifactScope } from "../artifact-scope.js";

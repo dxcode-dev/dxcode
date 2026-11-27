@@ -3,12 +3,9 @@ import {
   GetPersonalProjectDefaultsEndpoint,
   GetWorkspaceProjectDefaultsEndpoint,
 } from "@dx/api";
-import type { UserId } from "@dx/domain";
+import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import {
-  dxClient,
-  type ProjectDefaultsTarget,
-} from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 
 const getProjectDefaults = async (
   target: ProjectDefaultsTarget,
@@ -23,7 +20,7 @@ const getProjectDefaults = async (
       )
   ).data;
 
-export type { ProjectDefaultsData, ProjectDefaultsTarget };
+export type { ProjectDefaultsData };
 
 export const projectDefaultsKeys = {
   all: (userId: UserId) => ["project-defaults", userId] as const,
@@ -42,3 +39,7 @@ export const projectDefaultsQueryOptions = (
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: true,
   });
+
+export type ProjectDefaultsTarget =
+  | { readonly scope: "personal" }
+  | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };

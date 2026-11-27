@@ -75,6 +75,16 @@ export const clientDiagnostics = () => ({
 });
 
 /**
+ * Forgets everything recorded so far, so the next account signed in to this
+ * tab never sends the last one's errors and request paths in a bug report.
+ */
+export const clearClientDiagnostics = () => {
+  logs.length = 0;
+  failedRequests.length = 0;
+  connection.length = 0;
+};
+
+/**
  * Runs one dx request and records it when it fails: a status of 400 or
  * more, or no response. An abort is the app's own choice, not a failure.
  */

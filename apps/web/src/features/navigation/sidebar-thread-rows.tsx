@@ -1,6 +1,6 @@
 import { PROJECTLESS_PROJECT_NAME } from "@dx/domain";
 import * as React from "react";
-import type { ThreadListClientItem } from "../../shared/api/client.js";
+import type { ThreadListClientItem } from "../threads/thread-queries.js";
 import {
   SidebarChildThreadRows,
   useThreadChildrenExpansion,

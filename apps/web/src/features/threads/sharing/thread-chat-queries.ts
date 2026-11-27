@@ -1,6 +1,7 @@
+import { GetThreadMembersEndpoint } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import { getThreadMembers } from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { threadKeys } from "../thread-queries.js";
 
 /** Members of the workspace a shared Thread is shared with. */
@@ -11,3 +12,12 @@ export const threadMembersQueryOptions = (userId: UserId, threadId: ThreadId) =>
     staleTime: 60_000,
     gcTime: 5 * 60_000,
   });
+
+const getThreadMembers = async (threadId: ThreadId, signal?: AbortSignal) =>
+  (
+    await dxClient.call(
+      GetThreadMembersEndpoint,
+      { params: { threadId } },
+      { signal },
+    )
+  ).data.members;

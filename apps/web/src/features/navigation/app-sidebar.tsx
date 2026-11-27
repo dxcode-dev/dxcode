@@ -9,7 +9,6 @@ import { useDebouncer } from "@tanstack/react-pacer";
 import { Link, useLocation } from "@tanstack/react-router";
 import { Search, SquarePen } from "lucide-react";
 import * as React from "react";
-import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { AppUpdateRow } from "../../shared/app-update/app-update-row.js";
 import { useNowAt, useNowMinute } from "../../shared/hooks/use-clock.js";
 import {
@@ -20,6 +19,7 @@ import { preloadableComponent } from "../../shared/preloadable-component.js";
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
 import { SharedRowContextMenu } from "../../shared/ui/row-context-menu.js";
+import type { ThreadListClientItem } from "../threads/thread-queries.js";
 import { DX_SIDEBAR_SECTIONS } from "./dx-sidebar-sections.js";
 import { NotificationInbox } from "./notification-inbox.js";
 import {

@@ -1,10 +1,7 @@
+import { GetThreadListItemEndpoint } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
-import {
-  getThreadListItem,
-  type ThreadListClientItem,
-  type ThreadPage,
-} from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import { shareEqualData } from "../../shared/query/structural-sharing.js";
 import {
   belongsInLoadedList,
@@ -15,6 +12,8 @@ import { isOptimisticThread } from "./thread-mutations.js";
 import {
   invalidateThreadLists,
   THREAD_FRESHNESS_SLO_MS,
+  type ThreadListClientItem,
+  type ThreadPage,
   threadKeys,
 } from "./thread-queries.js";
 import {
@@ -380,3 +379,16 @@ export class ThreadListRows {
     }
   }
 }
+
+/** One Thread's sidebar row, exactly as the requester's lists hold it. */
+export const getThreadListItem = async (
+  threadId: ThreadId,
+  signal?: AbortSignal,
+): Promise<ThreadListClientItem> =>
+  (
+    await dxClient.call(
+      GetThreadListItemEndpoint,
+      { params: { threadId } },
+      { signal },
+    )
+  ).data;

@@ -1,4 +1,8 @@
 import type { ThreadPaneLayout } from "@dx/api";
+import {
+  GetThreadPaneLayoutEndpoint,
+  UpdateThreadPaneLayoutEndpoint,
+} from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import {
   type QueryClient,
@@ -6,10 +10,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import {
-  getThreadPaneLayout,
-  putThreadPaneLayout,
-} from "../../../shared/api/client.js";
+import { dxClient } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { retryQuery } from "../../../shared/query/query-retry.js";
 import { closeTerminalSession } from "../../terminal/terminal-session-mutations.js";
@@ -211,3 +212,25 @@ export function usePaneLayoutReader(threadId: ThreadId) {
   return () =>
     client.getQueryData<ThreadPaneLayout>(key) ?? defaultPaneLayout();
 }
+
+/** The signed-in person's panes and tabs on a Thread; null until saved. */
+const getThreadPaneLayout = async (threadId: ThreadId, signal?: AbortSignal) =>
+  (
+    await dxClient.call(
+      GetThreadPaneLayoutEndpoint,
+      { params: { threadId } },
+      { signal },
+    )
+  ).data.layout;
+
+/** Saves the person's panes and tabs on a Thread. */
+const putThreadPaneLayout = async (
+  threadId: ThreadId,
+  layout: ThreadPaneLayout,
+) =>
+  (
+    await dxClient.call(UpdateThreadPaneLayoutEndpoint, {
+      params: { threadId },
+      body: layout,
+    })
+  ).data.layout;

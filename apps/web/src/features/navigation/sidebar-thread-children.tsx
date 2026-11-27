@@ -2,9 +2,11 @@ import type { ThreadData } from "@dx/api";
 import { PROJECTLESS_PROJECT_NAME } from "@dx/domain";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
-import { threadsQueryOptions } from "../threads/thread-queries.js";
+import {
+  type ThreadListClientItem,
+  threadsQueryOptions,
+} from "../threads/thread-queries.js";
 import {
   type SidebarThreadListProps,
   SidebarThreadRow,

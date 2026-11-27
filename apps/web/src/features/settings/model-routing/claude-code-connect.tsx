@@ -3,7 +3,6 @@ import { CLAUDE_CODE_PROVIDER_ID } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, ExternalLink, X } from "lucide-react";
 import { type FormEvent, useState, useSyncExternalStore } from "react";
-import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { Button } from "../../../shared/ui/button.js";
 import { ClaudeIcon } from "../../../shared/ui/claude-icon.js";
 import {
@@ -19,6 +18,7 @@ import {
   connectionMutationOptions,
   fieldErrorsOf,
 } from "./model-routing-mutations.js";
+import type { ModelRoutingTarget } from "./model-routing-queries.js";
 
 const SETUP_COMMAND = "claude setup-token";
 const INSTALL_URL = "https://code.claude.com/docs/en/setup";

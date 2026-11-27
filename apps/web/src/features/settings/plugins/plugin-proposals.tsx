@@ -4,7 +4,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { KeyRound, Library, PlugZap } from "lucide-react";
 import * as React from "react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -23,6 +22,7 @@ import {
 } from "./plugin-bundle-mutations.js";
 import { errorMessage } from "./plugin-bundle-presentation.js";
 import { PluginBundleSourceLine } from "./plugin-bundle-source.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 function PluginProposalDialog({
   proposal,

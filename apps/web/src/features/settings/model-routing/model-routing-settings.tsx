@@ -15,7 +15,6 @@ import {
   type SetStateAction,
   useState,
 } from "react";
-import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { DxLoading } from "../../../shared/brand/dx-loading.js";
 import { settingsNavigationState } from "../../../shared/navigation/settings-return.js";
@@ -45,7 +44,10 @@ import {
   fieldErrorsOf,
   invalidateAllModelRouting,
 } from "./model-routing-mutations.js";
-import { modelRoutingChoicesQueryOptions } from "./model-routing-queries.js";
+import {
+  type ModelRoutingTarget,
+  modelRoutingChoicesQueryOptions,
+} from "./model-routing-queries.js";
 
 const message = apiMessage;
 

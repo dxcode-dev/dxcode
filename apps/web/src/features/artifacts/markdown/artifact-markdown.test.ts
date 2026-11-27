@@ -443,6 +443,14 @@ describe("artifact links", () => {
     [" JavaScript:alert(1)", false],
     ["data:text/html,<b>x</b>", false],
     ["vbscript:x", false],
+    // Browsers drop tabs and newlines anywhere in a URL, and leading
+    // control characters, before they read its scheme.
+    ["java\tscript:alert(1)", false],
+    ["java\nscript:alert(1)", false],
+    ["jav\rascript:alert(1)", false],
+    ["\x01javascript:alert(1)", false],
+    ["\x00 \x1fjavascript:alert(1)", false],
+    ["https:\t//example.com", true],
   ])("treats %j as safe to follow: %s", (href, safe) => {
     expect(safeHref(href)).toBe(safe);
   });

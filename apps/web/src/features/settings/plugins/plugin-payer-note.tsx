@@ -1,10 +1,10 @@
 import type { PluginOrbData } from "@dx/api";
 import { useQuery } from "@tanstack/react-query";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { usePluginOrbSizeOptions } from "../orb-providers/plugin-orb.js";
 import { pluginOrbQueryOptions } from "../orb-providers/plugin-orb-queries.js";
 import type { PluginOrbSizeOption } from "../orb-providers/plugin-orb-text.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /**
  * Before installing or updating a plugin that runs a program: where it

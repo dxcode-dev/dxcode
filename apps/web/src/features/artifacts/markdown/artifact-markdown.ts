@@ -37,7 +37,11 @@ const keyAttr = { key: { default: null } };
  * any other scheme.
  */
 export const safeHref = (href: string) => {
-  const scheme = /^\s*([a-z][a-z0-9+.-]*):/i.exec(href)?.[1]?.toLowerCase();
+  // Read the scheme as a browser does: it drops every tab and newline and
+  // any leading control character or space, so `java\tscript:` is
+  // `javascript:`.
+  const url = href.replace(/[\t\n\r]/g, "").replace(/^[\0-\x20]+/, "");
+  const scheme = /^\s*([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase();
   return (
     scheme === undefined || ["http", "https", "mailto", "user"].includes(scheme)
   );

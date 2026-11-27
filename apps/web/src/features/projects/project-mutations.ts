@@ -10,7 +10,7 @@ import {
 } from "@dx/api";
 import type { ProjectId, RunnerProfileId, UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
-import { type CreateProjectInput, dxClient } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 import { threadKeys } from "../threads/thread-queries.js";
 import { cacheProject } from "./project-cache-mutations.js";
 import { projectKeys } from "./project-queries.js";
@@ -141,3 +141,5 @@ export const forgetDeletedProject = (
   queryClient.removeQueries({
     queryKey: projectKeys.detail(userId, projectId),
   });
+
+export type CreateProjectInput = typeof CreateProjectRequestSchema.Encoded;

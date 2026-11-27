@@ -11,12 +11,12 @@ import {
   threadSnoozeState,
 } from "@dx/domain";
 import { DateTime } from "effect";
+import type { PendingThreadCreation } from "../../shared/new-thread-surface.js";
+import { optimisticThreadData } from "../threads/thread-mutations.js";
 import type {
   ThreadListClientItem,
   ThreadPage,
-} from "../../shared/api/client.js";
-import type { PendingThreadCreation } from "../../shared/new-thread-surface.js";
-import { optimisticThreadData } from "../threads/thread-mutations.js";
+} from "../threads/thread-queries.js";
 
 export interface ThreadSection {
   readonly id: string;

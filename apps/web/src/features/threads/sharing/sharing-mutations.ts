@@ -5,6 +5,11 @@ import type {
   UpdateThreadSharingRequest,
   UpdateThreadSharingResponseData,
 } from "@dx/api";
+import {
+  FollowThreadEndpoint,
+  UnfollowThreadEndpoint,
+  UpdateThreadSharingEndpoint,
+} from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import {
   MutationObserver,
@@ -12,11 +17,7 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import {
-  ApiError,
-  setThreadFollowing,
-  updateThreadSharing,
-} from "../../../shared/api/client.js";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
 import {
   invalidateThreadQueries,
   threadKeys,
@@ -156,3 +157,22 @@ export const unfollowThreadMutationOptions = (
       }),
     ]),
 });
+
+export const updateThreadSharing = async (
+  threadId: ThreadId,
+  input: UpdateThreadSharingRequest,
+) =>
+  (
+    await dxClient.call(UpdateThreadSharingEndpoint, {
+      params: { threadId },
+      body: input,
+    })
+  ).data;
+
+const setThreadFollowing = async (threadId: ThreadId, following: boolean) =>
+  (
+    await dxClient.call(
+      following ? FollowThreadEndpoint : UnfollowThreadEndpoint,
+      { params: { threadId } },
+    )
+  ).data;

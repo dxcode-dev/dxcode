@@ -22,7 +22,6 @@ import {
   ApiError,
   dxClient,
   endpointPath,
-  type PluginsTarget,
 } from "../../../shared/api/client.js";
 import { mcpServerKeys } from "../integrations/mcp-queries.js";
 import { skillKeys } from "../skills/skills-queries.js";
@@ -40,6 +39,7 @@ import {
   updatePluginBundle,
 } from "./plugin-bundle-queries.js";
 import { previewPluginCatalogEntry } from "./plugin-catalog-queries.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 export type { PluginBundleUpload };
 

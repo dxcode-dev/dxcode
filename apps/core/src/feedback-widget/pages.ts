@@ -215,18 +215,17 @@ export const popupPage = (
 };
 
 /**
- * The consent screen. Anyone can build an authorize link with a challenge
- * whose verifier they keep, so Allow stays off until the window that opened
- * this one, the widget's panel on the dx origin, confirms the challenge is
- * the one it holds. A link opened on its own, or by another site, has no
- * such opener and cannot record consent (#2406). The panel also names the
- * website framing it, which the page shows only when it is one of the
- * Project's allowed origins.
+ * The consent screen. Its address carries no challenge: anyone can build a
+ * link with a challenge whose verifier they keep (#2406). The page asks the
+ * window that opened it, the widget's panel on the dx origin, for the
+ * challenge of the sign-in it started, and enables Allow only then. The
+ * panel also names the website framing it, which the page shows only when it
+ * is one of the Project's allowed origins. The server records consent only
+ * for a challenge a panel started for this widget (#2420).
  */
 export const consentPage = (input: {
   readonly projectLabel: string;
   readonly userLabel: string;
-  readonly challenge: string;
   readonly action: string;
   readonly appOrigin: string;
   readonly allowedOrigins: ReadonlyArray<string>;
@@ -240,14 +239,13 @@ export const consentPage = (input: {
 <p class="identity">Signed in as ${escapeHtml(input.userLabel)}</p>
 <p class="error" id="unbound" hidden>Open this window from the Feedback Widget on your website: choose Continue with dx there.</p>
 <form method="post" action="${escapeHtml(input.action)}" class="row">
-<input type="hidden" name="challenge" value="${escapeHtml(input.challenge)}">
+<input type="hidden" name="challenge" id="challenge" value="">
 <button type="button" id="cancel">Cancel</button>
 <span class="spacer"></span>
 <button type="submit" class="primary" id="allow" disabled>Allow</button>
 </form>`,
     `(() => {
 const appOrigin = ${scriptJson(input.appOrigin)};
-const challenge = ${scriptJson(input.challenge)};
 const allowedOrigins = ${scriptJson(input.allowedOrigins)};
 const allow = document.getElementById("allow");
 document.getElementById("cancel").addEventListener("click", () => window.close());
@@ -259,13 +257,15 @@ const siteName = (origin) => {
 };
 window.addEventListener("message", (event) => {
   if (event.source === null || event.source !== window.opener || event.origin !== appOrigin) return;
-  if (event.data?.type !== "dx-fw:consent-confirmed" || event.data.challenge !== challenge) return;
+  if (event.data?.type !== "dx-fw:consent-confirmed") return;
+  if (typeof event.data.challenge !== "string" || !/^[0-9a-f]{64}$/.test(event.data.challenge)) return;
   if (typeof event.data.site !== "string" || !allowedOrigins.includes(event.data.site)) return;
+  document.getElementById("challenge").value = event.data.challenge;
   document.getElementById("site-name").textContent = siteName(event.data.site);
   document.getElementById("site").hidden = false;
   allow.disabled = false;
 });
-try { window.opener?.postMessage({ type: "dx-fw:consent-requested", challenge }, appOrigin); } catch {}
+try { window.opener?.postMessage({ type: "dx-fw:consent-requested" }, appOrigin); } catch {}
 setTimeout(() => { if (allow.disabled) document.getElementById("unbound").hidden = false; }, 3000);
 })();`,
   );

@@ -1,7 +1,6 @@
 import type { PluginOrbData } from "@dx/api";
 import { orbSizeHourlyPrice, type RunnerProfileId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { PackageBrowserSection } from "../../../shared/ui/package-browser.js";
 import {
@@ -9,6 +8,7 @@ import {
   SettingsRow,
   SettingsSelect,
 } from "../../../shared/ui/settings.js";
+import type { PluginsTarget } from "../plugins/plugins-queries.js";
 import { projectDefaultsQueryOptions } from "../project-defaults/project-defaults-queries.js";
 import {
   type OrbProviderListData,

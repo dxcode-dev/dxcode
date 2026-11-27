@@ -10,11 +10,7 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import {
-  ApiError,
-  dxClient,
-  type ProjectPage,
-} from "../../shared/api/client.js";
+import { ApiError, dxClient } from "../../shared/api/client.js";
 
 /** One page of the person's Projects, 100 at a time. */
 export const listProjects = async (
@@ -107,3 +103,8 @@ export const seedProjectDetailFromList = (
       updatedAt: queryClient.getQueryState(listKey)?.dataUpdatedAt,
     });
 };
+
+export interface ProjectPage {
+  readonly items: ReadonlyArray<ProjectData>;
+  readonly nextCursor?: PageCursor;
+}

@@ -3,7 +3,6 @@ import type { UserId } from "@dx/domain";
 import { isStdioMcpServer, stdioCommandLine } from "@dx/domain";
 import { Upload } from "lucide-react";
 import * as React from "react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import { DialogDescription, DialogTitle } from "../../../shared/ui/dialog.js";
@@ -20,6 +19,7 @@ import {
 import { PluginBundleSourceLine } from "./plugin-bundle-source.js";
 import { PluginCatalogTab } from "./plugin-catalog-tab.js";
 import { PluginPayerNote } from "./plugin-payer-note.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 function ImportHeader() {
   return (

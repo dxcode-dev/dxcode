@@ -1,9 +1,9 @@
 import type { ThreadData } from "@dx/api";
 import { Archive, ChevronDown, FolderGit2 } from "lucide-react";
 import { Fragment, type ReactNode } from "react";
-import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
 import { Button } from "../../shared/ui/button.js";
+import type { ThreadListClientItem } from "../threads/thread-queries.js";
 import { SidebarProjectHeading } from "./sidebar-project-heading.js";
 import { SidebarThreadChildrenProvider } from "./sidebar-thread-children.js";
 import { SidebarThreadRows } from "./sidebar-thread-rows.js";

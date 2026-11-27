@@ -3,9 +3,8 @@ import {
   ListPersonalFirstPartyPluginsEndpoint,
   ListWorkspaceFirstPartyPluginsEndpoint,
 } from "@dx/api";
-import type { UserId } from "@dx/domain";
+import type { UserId, WorkspaceSlug } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { dxClient } from "../../../shared/api/client.js";
 
 export const listFirstPartyPlugins = async (
@@ -21,7 +20,7 @@ export const listFirstPartyPlugins = async (
       )
   ).data;
 
-export type { FirstPartyPluginData, FirstPartyPluginListData, PluginsTarget };
+export type { FirstPartyPluginData, FirstPartyPluginListData };
 
 export const firstPartyPluginKeys = {
   all: (userId: UserId) => ["first-party-plugins", userId] as const,
@@ -40,3 +39,7 @@ export const firstPartyPluginsQueryOptions = (
     gcTime: 5 * 60_000,
     refetchOnWindowFocus: true,
   });
+
+export type PluginsTarget =
+  | { readonly scope: "personal" }
+  | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };

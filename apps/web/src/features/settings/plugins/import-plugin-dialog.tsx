@@ -2,7 +2,6 @@ import type { UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useRouterState } from "@tanstack/react-router";
 import * as React from "react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
   DialogContent,
@@ -20,6 +19,7 @@ import {
   isBrokenShareLink,
   pluginSharePreviewQueryOptions,
 } from "./plugin-bundle-queries.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /**
  * The share link someone opened (`?share=`), until its dialog closes. The

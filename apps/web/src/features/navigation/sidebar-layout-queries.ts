@@ -4,6 +4,7 @@ import type {
   SidebarLayoutData,
   SidebarOrder,
 } from "@dx/api";
+import { GetSidebarLayoutEndpoint, UpdateSidebarLayoutEndpoint } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import {
   mutationOptions,
@@ -14,12 +15,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import {
-  getSidebarLayout,
-  putSidebarCollapsed,
-  putSidebarLayoutEntry,
-  putSidebarWidth,
-} from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 
 export const sidebarLayoutKeys = {
   layout: (userId: UserId) => ["sidebar-layout", userId] as const,
@@ -204,3 +200,27 @@ export const useSidebarArrangement = (
     setOrder: (order) => choose({ kind: "order", order }),
   };
 };
+
+/** The signed-in person's sidebar layout, shared by their devices. */
+const getSidebarLayout = async (signal?: AbortSignal) =>
+  (await dxClient.call(GetSidebarLayoutEndpoint, {}, { signal })).data;
+
+/** Records one sidebar choice and returns the whole layout. */
+const putSidebarLayoutEntry = async (entry: SidebarLayoutChoice) =>
+  (await dxClient.call(UpdateSidebarLayoutEndpoint, { body: entry })).data;
+
+/** Records the desktop sidebar's width and returns the whole layout. */
+const putSidebarWidth = async (width: number) =>
+  (
+    await dxClient.call(UpdateSidebarLayoutEndpoint, {
+      body: { kind: "width", width },
+    })
+  ).data;
+
+/** Records whether the desktop sidebar is collapsed; returns the layout. */
+const putSidebarCollapsed = async (collapsed: boolean) =>
+  (
+    await dxClient.call(UpdateSidebarLayoutEndpoint, {
+      body: { kind: "collapsed", collapsed },
+    })
+  ).data;

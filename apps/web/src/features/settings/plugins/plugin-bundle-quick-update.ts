@@ -2,10 +2,10 @@ import type { PluginBundleData, PluginBundleUpdatePreviewData } from "@dx/api";
 import type { PluginId, UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
-import type { PluginsTarget } from "../../../shared/api/client.js";
 import { settle } from "../../../shared/settle.js";
 import { type BundleRun, errorMessage } from "./plugin-bundle-presentation.js";
 import { pluginBundleUpdatesQueryOptions } from "./plugin-bundle-queries.js";
+import type { PluginsTarget } from "./plugins-queries.js";
 
 /**
  * The row's "Update" for a plugin whose source has a newer version (plan

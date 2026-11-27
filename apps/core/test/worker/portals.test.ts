@@ -2487,7 +2487,7 @@ describe("Feedback Widget in Portals in workerd", () => {
     const { clientId } = (
       (await enabled.json()) as { data: { clientId: string } }
     ).data;
-    // The widget's sign-in: consent to a challenge, then claim a token.
+    // The widget's sign-in: the panel starts it, consent to its challenge, then claim a token.
     const verifier = "v".repeat(43);
     const digest = await crypto.subtle.digest(
       "SHA-256",
@@ -2496,6 +2496,16 @@ describe("Feedback Widget in Portals in workerd", () => {
     const challenge = [...new Uint8Array(digest)]
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
+    const started = await app.request(
+      `${appOrigin}/api/feedback-widget/${clientId}/start`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ challenge }),
+      },
+      baseBindings,
+    );
+    expect(started.status).toBe(204);
     const consent = await app.request(
       `${appOrigin}/api/feedback-widget/${clientId}/authorize`,
       {
