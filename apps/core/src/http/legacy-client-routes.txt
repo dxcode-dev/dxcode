@@ -1,6 +1,3 @@
 # Core /v1 routes no dx client calls through an endpoint in @dx/api yet.
 # Move a route out of this list by defining its endpoint (wiki/headless-client.md).
 # Never add a line: a new route gets an endpoint, or goes in non-client-routes.txt.
-GET /v1/realtime
-GET /v1/shell
-POST /v1/agents/dx/:id

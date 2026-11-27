@@ -1,11 +1,20 @@
 import {
   ABSENT_CONVERSATION_REQUEST_HEADER,
   ABSENT_CONVERSATION_RESPONSE_HEADER,
+  GetPersonalAccountEndpoint,
+  GetShellEndpoint,
+  GetSidebarLayoutEndpoint,
+  GetThreadEndpoint,
+  GetThreadPaneLayoutEndpoint,
   SHELL_PARTS,
   type ShellPart,
-  ShellResponseSchema,
+  threadAgentUrl,
 } from "@dx/api";
-import { absentHistoryResponse } from "@dx/client";
+import {
+  absentHistoryResponse,
+  createDxClient,
+  endpointPath,
+} from "@dx/client";
 import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { noticeUnauthenticated } from "./auth/session-ended.js";
@@ -59,7 +68,7 @@ const absentAsNotFound = (response: Response) =>
  * - on a Thread's page, the reads it waits on before it shows: the Thread,
  *   its pane layout, and its first page of history.
  *
- * The dx transport (`request`) and this fetch hand each answer to the first
+ * The dx client (`dxClient`) and this fetch hand each answer to the first
  * `GET` of the same path and query, so the features' own queries and Flue's
  * client stay the owners of their data and only their first read skips the
  * network. A failed answer, a path read a second time, and anything asked
@@ -71,13 +80,17 @@ const BOOT_READ_LIFETIME_MS = 15_000;
 
 /** Read alone at boot: each page renders only once these answer. */
 const GATING_BOOT_READS = [
-  "/v1/settings/personal/account",
-  "/v1/sidebar-layout",
-] as const;
+  endpointPath(GetPersonalAccountEndpoint, {}),
+  endpointPath(GetSidebarLayoutEndpoint, {}),
+];
 
 /** Flue's first history page, as the Thread session asks for it. */
-const threadHistoryPath = (threadId: string) =>
-  `/v1/agents/dx/${encodeURIComponent(threadId)}?view=history&promptLimit=${THREAD_HISTORY_PAGE.promptLimit}&maxBytes=${THREAD_HISTORY_PAGE.maxBytes}`;
+const threadHistoryPath = (threadId: ThreadId) =>
+  `${threadAgentUrl(threadId)}?${new URLSearchParams({
+    view: "history",
+    promptLimit: String(THREAD_HISTORY_PAGE.promptLimit),
+    maxBytes: String(THREAD_HISTORY_PAGE.maxBytes),
+  })}`;
 
 /** A Thread page's reads, from its URL; none elsewhere. */
 const threadBootReads = (pathname: string) => {
@@ -87,8 +100,12 @@ const threadBootReads = (pathname: string) => {
     ),
   );
   if (threadId === undefined) return [];
-  const thread = `/v1/threads/${encodeURIComponent(threadId)}`;
-  return [thread, `${thread}/layout`, threadHistoryPath(threadId)];
+  // The paths the Thread page's own calls build, so they take these answers.
+  return [
+    endpointPath(GetThreadEndpoint, { params: { threadId } }),
+    endpointPath(GetThreadPaneLayoutEndpoint, { params: { threadId } }),
+    threadHistoryPath(threadId),
+  ];
 };
 
 export interface BootAnswer {
@@ -131,16 +148,16 @@ const readAlone = async (path: string): Promise<BootAnswer | undefined> => {
   }
 };
 
+/** The boot's own reads, before the app's dx client and its diagnostics load. */
+const bootClient = createDxClient({
+  fetch: (path, init) => fetch(path, { ...init, credentials: "same-origin" }),
+});
+
 const readShell = async () => {
-  const answer = await readAlone("/v1/shell");
-  // Signed out, or a Core without the route: every read goes out itself.
-  if (answer?.status !== 200) return undefined;
   try {
-    const shell = await Schema.decodeUnknownPromise(ShellResponseSchema)(
-      JSON.parse(answer.text),
-    );
+    const shell = await bootClient.call(GetShellEndpoint);
     return {
-      arrivedAt: answer.arrivedAt,
+      arrivedAt: Date.now(),
       parts: new Map<string, ShellPart>(
         Object.entries(SHELL_PARTS).map(([name, path]) => [
           path,
@@ -149,6 +166,7 @@ const readShell = async () => {
       ),
     };
   } catch {
+    // Signed out, or the answer did not decode: every read goes out itself.
     return undefined;
   }
 };
@@ -186,7 +204,7 @@ export const prefetchBootReads = () => {
  * pressing its link does, so Flue's first read of it takes this answer
  * (#1438). A read started within the answer lifetime is reused.
  */
-export const prefetchThreadHistory = (threadId: string) => {
+export const prefetchThreadHistory = (threadId: ThreadId) => {
   const target = threadHistoryPath(threadId);
   bootReads ??= new Map();
   const started = prefetchedAt.get(target);

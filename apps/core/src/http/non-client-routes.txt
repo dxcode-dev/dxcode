@@ -33,6 +33,13 @@ GET /v1/integrations/github/setup
 GET /v1/settings/personal/integrations/oauth/callback/:provider
 POST /v1/integrations/github/webhooks
 
+# Protocols an endpoint does not describe. A UI opens the Realtime Hub's
+# WebSocket with RealtimeConnection in @dx/client, and sends to a Thread's
+# agent with @flue/sdk's createFlueClient (createThreadAgentClient in
+# @dx/client): Flue's own conversation protocol, not a dx JSON endpoint.
+GET /v1/realtime
+POST /v1/agents/dx/:id
+
 # A Project's icon: an image the browser loads from the `iconUrl` Core puts
 # in the Project's data, not a JSON answer a client decodes.
 GET /v1/projects/:projectId/icon

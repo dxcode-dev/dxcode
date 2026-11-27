@@ -12,9 +12,11 @@ import {
   type ThreadChangesRange,
   type ThreadChangesWorktreeId,
   type ThreadShipPlan,
+  threadAgentUrl,
 } from "@dx/api";
 import { ApiError, createDxClient, endpointPath } from "@dx/client";
 import type { ThreadId } from "@dx/domain";
+import { createFlueClient, FlueApiError } from "@flue/sdk";
 import { Schema } from "effect";
 import {
   isSessionEndedClose,
@@ -244,31 +246,27 @@ export const createChangesTransport = (
           ),
         signal,
       ).then((response) => response.data),
-    // The same message the composer sends, so it runs as a typed one would.
+    // The same message the composer sends, so it runs as a typed one would,
+    // through the Thread agent's Flue protocol.
     ship: async (threadId, { prompt, idempotencyKey }) => {
-      const response = await fetchImpl(
-        `/v1/agents/dx/${encodeURIComponent(threadId)}`,
-        {
-          method: "POST",
-          credentials: "same-origin",
-          headers: {
-            accept: "application/json",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ idempotencyKey, kind: "user", body: prompt }),
-        },
-      );
-      if (response.ok) return;
-      const body = (await response.json().catch(() => undefined)) as
-        | { data?: { message?: unknown }; error?: { message?: unknown } }
-        | undefined;
-      const message = body?.data?.message ?? body?.error?.message;
-      throw new ChangesApiError(
-        response.status,
-        typeof message === "string" && message !== ""
-          ? message
-          : "The Ship message was not sent.",
-      );
+      try {
+        await createFlueClient({
+          url: threadAgentUrl(threadId),
+          fetch: fetchImpl,
+        }).send({ idempotencyKey, message: { kind: "user", body: prompt } });
+      } catch (cause) {
+        if (!(cause instanceof FlueApiError)) throw cause;
+        const body = cause.body as
+          | { data?: { message?: unknown }; error?: { message?: unknown } }
+          | undefined;
+        const message = body?.data?.message ?? body?.error?.message;
+        throw new ChangesApiError(
+          cause.status,
+          typeof message === "string" && message !== ""
+            ? message
+            : "The Ship message was not sent.",
+        );
+      }
     },
     subscribe: (threadId, onChangesUpdated) =>
       subscribeToChanges(

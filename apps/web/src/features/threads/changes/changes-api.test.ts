@@ -132,6 +132,56 @@ describe("Changes transport", () => {
     });
   });
 
+  it("sends Ship to the Thread's agent as a typed message, and reads its refusal", async () => {
+    vi.stubGlobal("location", { origin: "https://dx.test" });
+    const fetch = vi.fn<typeof globalThis.fetch>(async () =>
+      response({ submissionId: "sub_249", uid: "uid_249" }, 202),
+    );
+    const transport = createChangesTransport(fetch);
+
+    await transport.ship?.(threadId, {
+      prompt: "Ship it.",
+      idempotencyKey: "ship-249",
+    });
+    const [input, request] = fetch.mock.calls[0] ?? [];
+    expect(new URL(String(input), "https://dx.test").pathname).toBe(
+      `/v1/agents/dx/${threadId}`,
+    );
+    expect(request?.method).toBe("POST");
+    expect(JSON.parse(String(request?.body))).toEqual({
+      idempotencyKey: "ship-249",
+      kind: "user",
+      body: "Ship it.",
+    });
+
+    fetch.mockImplementationOnce(async () =>
+      response(
+        {
+          status: "error",
+          data: {
+            code: "THREAD_ARCHIVED",
+            message: "This thread is archived.",
+          },
+        },
+        409,
+      ),
+    );
+    await expect(
+      transport.ship?.(threadId, { prompt: "Ship it.", idempotencyKey: "k" }),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "This thread is archived.",
+    });
+    fetch.mockImplementationOnce(async () => response({}, 503));
+    await expect(
+      transport.ship?.(threadId, { prompt: "Ship it.", idempotencyKey: "k" }),
+    ).rejects.toMatchObject({
+      status: 503,
+      message: "The Ship message was not sent.",
+    });
+    vi.unstubAllGlobals();
+  });
+
   it("contains server failures behind a stable client error", async () => {
     const failure: GetThreadChangesResponse = {
       status: "success",

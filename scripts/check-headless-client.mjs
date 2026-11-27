@@ -65,17 +65,35 @@ const parsed = (path) => {
   });
 };
 
-/** String and template pieces that hold a dx API path, outside comments. */
+/**
+ * Whether a literal's text holds a dx API path. A `/v1` right after a
+ * scheme and host in the same literal, such as `https://${host}/v1` for a
+ * provider's own API, is another service's URL. A template's expressions
+ * read as `EXPRESSION`, text that is not a slash, so `${host}` can be that host while
+ * `${origin}/v1/…`, with no scheme, stays a dx path.
+ */
+/** Stands for a template's expression: a private-use character. */
+const EXPRESSION = "\uE000";
+const holdsDxPath = (text) =>
+  [...text.matchAll(/(^|[^A-Za-z0-9])\/v1(?=\/|$|\?|\uE000)/g)].some(
+    (match) =>
+      !/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s]+$/.test(
+        text.slice(0, match.index + match[1].length),
+      ),
+  );
+
+/** String and template literals that hold a dx API path, outside comments. */
 const pathLiteralCount = (path) => {
   let count = 0;
-  const holdsPath = (text) => /(^|[^A-Za-z0-9])\/v1(\/|$|\?|`)/.test(text);
   traverse(parsed(path), {
     StringLiteral(node) {
-      if (holdsPath(node.node.value)) count += 1;
+      if (holdsDxPath(node.node.value)) count += 1;
     },
     TemplateLiteral(node) {
-      if (node.node.quasis.some((quasi) => holdsPath(quasi.value.raw)))
-        count += 1;
+      const text = node.node.quasis
+        .map((quasi) => quasi.value.raw)
+        .join(EXPRESSION);
+      if (holdsDxPath(text)) count += 1;
     },
   });
   return count;

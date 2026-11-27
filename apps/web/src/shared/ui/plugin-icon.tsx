@@ -1,4 +1,9 @@
-import type { PluginIconSetData } from "@dx/api";
+import {
+  GetLucideIconEndpoint,
+  GetPluginIconEndpoint,
+  type PluginIconSetData,
+} from "@dx/api";
+import { endpointPath } from "@dx/client";
 import "./plugin-icon.css";
 
 /**
@@ -13,7 +18,7 @@ import "./plugin-icon.css";
  * - Then `legacySrc` (a `data:` URL from older servers).
  * - Else a rounded tile with the plugin's first letter, colored from its name.
  *
- * Files load from `/v1/plugins/icons/<hash>`, cached for a year.
+ * Files load from `GetPluginIconEndpoint`'s path, cached for a year.
  */
 
 export type PluginIconSize = 16 | 20 | 32 | 64;
@@ -44,10 +49,11 @@ function LetterTile({ name }: { readonly name: string }) {
 
 type Resolve = (hash: string) => string;
 
-/** Where an icon file is served (`pluginIconPath` in @dx/api, inlined). */
-const pluginIconUrl: Resolve = (hash) => `/v1/plugins/icons/${hash}`;
+const pluginIconUrl: Resolve = (hash) =>
+  endpointPath(GetPluginIconEndpoint, { params: { sha256: hash } });
 
-const lucidePath: Resolve = (name) => `/v1/plugins/icons/lucide/${name}`;
+const lucidePath: Resolve = (name) =>
+  endpointPath(GetLucideIconEndpoint, { params: { name } });
 
 const served = pluginIconUrl;
 

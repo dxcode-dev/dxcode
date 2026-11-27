@@ -1,4 +1,6 @@
 import { Schema } from "effect";
+import { ForbiddenResponseSchema } from "../auth/forbidden-response.js";
+import { defineEndpoint } from "../http/endpoint.js";
 import { successResponse } from "../http/response.js";
 
 /**
@@ -43,3 +45,16 @@ export const ShellResponseSchema = successResponse(
 );
 
 export type ShellResponse = typeof ShellResponseSchema.Type;
+
+/**
+ * A browser's first load only: Core refuses an API token (403), which reads
+ * each part's route itself. The boot reads it beside the app's code.
+ */
+export const GetShellEndpoint = defineEndpoint({
+  id: "shell.get",
+  summary: "Read the signed-in shell's first-load parts in one request",
+  method: "GET",
+  path: "/v1/shell",
+  success: ShellResponseSchema,
+  refusals: [{ status: 403, schema: ForbiddenResponseSchema }],
+});

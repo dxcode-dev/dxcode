@@ -75,6 +75,7 @@ import {
   UpdateMailLabelEndpoint,
 } from "./mail/mail-endpoints.js";
 import { GetMailboxEndpoint } from "./mail/mailbox-endpoint.js";
+import { GetShellEndpoint } from "./navigation/shell.js";
 import {
   GetSidebarLayoutEndpoint,
   UpdateSidebarLayoutEndpoint,
@@ -968,6 +969,7 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   ExportWorkspaceUsageEndpoint,
   GetWorkspaceUsageEndpoint,
   InspectWorkspacePrivateThreadEndpoint,
+  GetShellEndpoint,
   GetSidebarLayoutEndpoint,
   UpdateSidebarLayoutEndpoint,
   ApprovePersonalSkillProposalEndpoint,
