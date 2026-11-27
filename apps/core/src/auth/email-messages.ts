@@ -84,7 +84,21 @@ export const existingAccountEmail = (signInUrl: string): AuthEmail => ({
   }),
 });
 
-/** Sent once, when an unknown address first joins the waitlist. */
+/**
+ * Sent instead of a sign-in link when this deployment does not admit the
+ * address, so the sign-in page answers alike for every address.
+ */
+export const signInRefusedEmail = (reason: string): AuthEmail => ({
+  subject: "Your dx sign-in request",
+  text: `Someone asked to sign in to dx with this email, but it can't sign in yet. ${reason}\n\nIf this wasn't you, you can ignore this email.`,
+  html: layout({
+    heading: "This email can't sign in yet",
+    body: `Someone asked to sign in to dx with this email. ${reason}`,
+    footnote: "If this wasn't you, you can ignore this email.",
+  }),
+});
+
+/** Sent when an unknown address joins the waitlist, and when a waitlisted address asks for a sign-in link. */
 export const waitlistJoinedEmail = (): AuthEmail => ({
   subject: "You're on the dx waitlist",
   text: "Thanks for your interest in dx. You're on the waitlist, and we'll email you as soon as your access is ready.\n\nYou don't need to do anything until then.",

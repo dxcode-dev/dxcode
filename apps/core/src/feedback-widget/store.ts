@@ -311,3 +311,15 @@ export const deleteGrant = async (db: D1Database, token: string) => {
     .bind(await sha256Hex(token))
     .run();
 };
+
+/**
+ * Ends every widget grant a person holds, on every website. Signing out
+ * everywhere and changing the password call it, so a grant left on a lost
+ * laptop stops working with the person's sessions (#2420).
+ */
+export const deletePersonGrants = async (db: D1Database, userId: string) => {
+  await db
+    .prepare("DELETE FROM feedback_widget_grant WHERE user_id = ?")
+    .bind(userId)
+    .run();
+};

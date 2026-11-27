@@ -457,9 +457,10 @@ export function AuthCheckEmail({
         }
       >
         <p>
-          We sent a sign-in link to <strong>{email}</strong>.
+          We sent <strong>{email}</strong> a sign-in link, or a note if it can't
+          sign in yet.
         </p>
-        <p>It works once and expires in 10 minutes.</p>
+        <p>A link works once and expires in 10 minutes.</p>
       </AuthNotice>
       {children}
     </AuthLayout>

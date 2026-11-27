@@ -1,13 +1,10 @@
 import { Schema } from "effect";
 
 /**
- * `sent` means a sign-in link is on its way; `waitlisted` means the address
- * is on the waitlist and no email was sent.
+ * Always `sent`: the address gets a sign-in link, or an email saying why it
+ * cannot sign in yet, so the response never says whether an account exists.
  */
-export const MagicLinkRequestOutcomeSchema = Schema.Literals([
-  "sent",
-  "waitlisted",
-]);
+export const MagicLinkRequestOutcomeSchema = Schema.Literal("sent");
 
 export type MagicLinkRequestOutcome = typeof MagicLinkRequestOutcomeSchema.Type;
 

@@ -10,13 +10,14 @@ export interface CloudflareMagicLinkOptions {
   readonly from: string;
   readonly verifyRequest?: (token: string | null) => Promise<void>;
   /**
-   * Decides before any email is sent. Returns `waitlisted` to skip the email,
-   * or throws an APIError to refuse the request.
+   * Decides before any email is sent. Returns `withheld` when the address
+   * gets no link; the caller has emailed it why. The response is the same
+   * `sent` either way, so it never says whether an account exists.
    */
   readonly admitEmail?: (
     email: string,
     callbackURL: unknown,
-  ) => Promise<MagicLinkRequestOutcome>;
+  ) => Promise<"send" | "withheld">;
 }
 
 const magicLinkToken = () =>
@@ -57,11 +58,11 @@ export const cloudflareMagicLink = ({
               typeof recipient === "string" &&
               admitEmail !== undefined &&
               (await admitEmail(recipient, context.body?.callbackURL)) ===
-                "waitlisted"
+                "withheld"
             ) {
               return context.json({
                 status: true,
-                outcome: "waitlisted" satisfies MagicLinkRequestOutcome,
+                outcome: "sent" satisfies MagicLinkRequestOutcome,
               });
             }
           }),

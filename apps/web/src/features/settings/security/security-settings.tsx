@@ -642,7 +642,7 @@ function SessionList() {
             </DialogTitle>
             <DialogDescription>
               {target === "others"
-                ? "Ends every other browser session. This device stays signed in."
+                ? "Ends every other browser session and signs you out of the Feedback Widget on every website. This device stays signed in."
                 : "Ends that browser session. This device stays signed in."}
             </DialogDescription>
             {error === undefined ? null : (

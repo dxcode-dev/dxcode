@@ -13,10 +13,12 @@ import { betterAuth, type InferAPI } from "better-auth";
 import { APIError, getOAuthState } from "better-auth/api";
 import { organization } from "better-auth/plugins";
 import { Effect, Option, Schema } from "effect";
+import { deletePersonGrants } from "../feedback-widget/store.js";
 import type { Bindings } from "../http/types.js";
 import { primaryDatabase } from "../persistence/d1-session.js";
 import {
   admitNewIdentity,
+  sendSignInRefusal,
   signInRejectionMessages,
   userExists,
 } from "./admission.js";
@@ -87,14 +89,16 @@ export const signInPlugins = (
         from: email.from,
         verifyRequest,
         admitEmail: async (address, callbackURL) => {
-          if (await userExists(db, address)) return "sent";
+          if (await userExists(db, address)) return "send";
           const rejection = await admitNewIdentity(db, configuration, {
             email: address,
             callbackURL,
+            notifyJoined: false,
           });
-          if (rejection === "waitlisted") return "waitlisted";
-          if (rejection !== undefined) throw rejectionError(rejection);
-          return "sent";
+          if (rejection === undefined) return "send";
+          // One email either way, so the answer and its timing match.
+          await sendSignInRefusal(configuration.email, address, rejection);
+          return "withheld";
         },
       }),
     );
@@ -111,16 +115,27 @@ export const signInPlugins = (
               },
             }
           : {}),
-        ...(configuration.emailVerification && verifyRequest
-          ? { verifyRequest }
-          : {}),
+        ...(verifyRequest === undefined ? {} : { verifyRequest }),
         admitSignUp: async (address, callbackURL) => {
           if (await userExists(db, address)) return;
           const rejection = await admitNewIdentity(db, configuration, {
             email: address,
             callbackURL,
+            notifyJoined: !configuration.emailVerification,
           });
-          if (rejection !== undefined) throw rejectionError(rejection);
+          if (rejection === undefined) return;
+          // With verification on, Better Auth answers an existing address
+          // with a generic success, so a refused one must get the same:
+          // email it why, and let `validateUserInfo` refuse the create,
+          // which Better Auth hides behind that generic response. Without
+          // Turnstile (an invite-only self-host may skip it) no refusal is
+          // emailed, so sign-up never mails any address a script names.
+          if (configuration.emailVerification) {
+            if (verifyRequest !== undefined)
+              await sendSignInRefusal(configuration.email, address, rejection);
+            return;
+          }
+          throw rejectionError(rejection);
         },
       }),
     );
@@ -404,6 +419,17 @@ export const createAuth = (
           before: async (account) => ({
             data: { ...account, issuer: accountIssuer(account) },
           }),
+        },
+        update: {
+          // Better Auth updates a password account only to change its
+          // password (change-password, set-password); other providers'
+          // updates refresh OAuth tokens. A new password ends every Feedback
+          // Widget grant, as it would on a lost laptop. dx enables none of
+          // the paths that change passwords in bulk (reset, admin, OTP).
+          after: async (account) => {
+            if (account?.providerId === "credential")
+              await deletePersonGrants(db, account.userId);
+          },
         },
       },
       session: {

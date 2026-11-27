@@ -181,7 +181,17 @@ export const loadSignInConfiguration = Effect.fn("loadSignInConfiguration")(
       return yield* fail("google_credentials_required");
 
     const secretKey = nonEmpty(bindings.DX_TURNSTILE_SECRET_KEY);
-    if (providers.includes("magic-link") && !development && !secretKey)
+    // Every public request that makes the deployment send email to an
+    // address the caller names needs Turnstile: a magic link, and a password
+    // sign-up that sends a confirmation or a refusal.
+    if (
+      !development &&
+      !secretKey &&
+      (providers.includes("magic-link") ||
+        (providers.includes("email-password") &&
+          admission !== "invite" &&
+          email !== undefined))
+    )
       return yield* fail("turnstile_required");
     const siteKey = nonEmpty(bindings.DX_TURNSTILE_SITE_KEY);
 

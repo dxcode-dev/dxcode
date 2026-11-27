@@ -286,11 +286,33 @@ describe("sign-in providers", () => {
       },
     ],
     [
+      // #2424: it would mail any address a script names.
+      "public password sign-up with a sender but without Turnstile",
+      {
+        DX_SIGN_IN_PROVIDERS: "email-password",
+        DX_SIGN_IN_ADMISSION: "waitlist",
+        DX_TURNSTILE_SECRET_KEY: undefined,
+      },
+    ],
+    [
       "a malformed allowed domain",
       { DX_SIGN_IN_ALLOWED_EMAIL_DOMAINS: "*.example.com" },
     ],
   ])("fails closed on %s", (_label, overrides) => {
     expect(() => configured(overrides)).toThrow();
+  });
+
+  it("lets invite-only password sign-in run without Turnstile, and mails no refusal there", async () => {
+    const auth = configured({
+      DX_SIGN_IN_PROVIDERS: "email-password",
+      DX_SIGN_IN_ADMISSION: "invite",
+      DX_TURNSTILE_SECRET_KEY: undefined,
+      DX_TURNSTILE_SITE_KEY: undefined,
+    });
+    const stranger = await signUp(auth, "no-turnstile@example.com");
+    expect(stranger.status).toBe(200);
+    expect(await userEmail("no-turnstile@example.com")).toBeNull();
+    expect(sentEmails).toEqual([]);
   });
 
   it("refuses an email domain outside the allowlist on every provider", async () => {
@@ -301,16 +323,15 @@ describe("sign-in providers", () => {
     });
     const outsider = "outsider@elsewhere.dev";
 
+    // The page answers as for any address; the email says why (#2424).
     const link = await requestMagicLink(auth, outsider);
-    expect(link.status).toBe(403);
-    await expect(link.json()).resolves.toMatchObject({
-      code: "email_domain_not_allowed",
+    expect(link.status).toBe(200);
+    await expect(link.json()).resolves.toEqual({
+      status: true,
+      outcome: "sent",
     });
     const password = await signUp(auth, outsider);
-    expect(password.status).toBe(403);
-    await expect(password.json()).resolves.toMatchObject({
-      code: "email_domain_not_allowed",
-    });
+    expect(password.status).toBe(200);
     const google = await signInWithGoogle(auth, {
       email: outsider,
       email_verified: true,
@@ -320,7 +341,14 @@ describe("sign-in providers", () => {
       "email_domain_not_allowed",
     );
 
-    expect(sentEmails).toHaveLength(0);
+    expect(sentEmails.map(({ to, subject }) => ({ to, subject }))).toEqual([
+      { to: outsider, subject: "Your dx sign-in request" },
+      { to: outsider, subject: "Your dx sign-in request" },
+    ]);
+    for (const sent of sentEmails) {
+      expect(sent.text).toContain("This email domain can't be used");
+      expect(sent.text).not.toMatch(/https?:\/\//);
+    }
     expect(await userEmail(outsider)).toBeNull();
     expect(await waitlistStatus(outsider)).toBeNull();
 
@@ -365,13 +393,16 @@ describe("sign-in providers", () => {
     const link = await requestMagicLink(auth, email);
     await expect(link.json()).resolves.toEqual({
       status: true,
-      outcome: "waitlisted",
+      outcome: "sent",
     });
-    // Joining through Google sent the one waitlist email; the magic-link
-    // request while still waiting sends neither another one nor a link.
+    // Joining through Google sent the waitlist email; the magic-link request
+    // while still waiting answers `sent` like any other and, in place of a
+    // link, reminds the address that it is on the waitlist.
     expect(sentEmails.map(({ subject }) => subject)).toEqual([
       "You're on the dx waitlist",
+      "You're on the dx waitlist",
     ]);
+    expect(sentEmails[1]?.text).not.toMatch(/https?:\/\//);
     sentEmails.length = 0;
 
     await env.DB.prepare(
@@ -413,10 +444,20 @@ describe("sign-in providers", () => {
     const contractor = "contractor@agency.dev";
 
     const closed = await requestMagicLink(auth, "stranger@acme.dev");
-    expect(closed.status).toBe(403);
-    await expect(closed.json()).resolves.toMatchObject({
-      code: "signup_closed",
+    expect(closed.status).toBe(200);
+    await expect(closed.json()).resolves.toEqual({
+      status: true,
+      outcome: "sent",
     });
+    expect(sentEmails).toHaveLength(1);
+    expect(sentEmails[0]).toMatchObject({
+      to: "stranger@acme.dev",
+      subject: "Your dx sign-in request",
+    });
+    expect(sentEmails[0]?.text).toContain(
+      "Ask a workspace admin for an invite",
+    );
+    sentEmails.length = 0;
 
     const invite = await createInviteLink();
     const link = await requestMagicLink(auth, contractor, invite);
@@ -510,10 +551,9 @@ describe("sign-in providers", () => {
     });
     const email = "password-waitlist@example.com";
     const response = await signUp(auth, email);
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({
-      code: "waitlisted",
-    });
+    // Better Auth's generic answer, as for an existing account (#2424).
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ token: null });
     expect(await userEmail(email)).toBeNull();
     expect(await waitlistStatus(email)).toBe("pending");
     // The waitlist email, and no verification email for an account that
@@ -734,6 +774,49 @@ describe("sign-in providers", () => {
         .first(),
     ).resolves.toEqual({ name: "Linked Person", displayName: "Linked Person" });
   });
+
+  for (const admission of ["waitlist", "invite"] as const)
+    it(`answers a sign-in link or sign-up alike whether or not the account exists (${admission}, #2424)`, async () => {
+      const auth = configured({
+        DX_SIGN_IN_PROVIDERS: "magic-link,email-password",
+        DX_SIGN_IN_ADMISSION: admission,
+      });
+      const existing = `existing-${admission}@example.com`;
+      const unknown = `unknown-${admission}@example.com`;
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)',
+      )
+        .bind(`user-${admission}`, "Existing", existing, now, now)
+        .run();
+
+      // What a prober sees: status, headers that matter, and body.
+      const observe = async (response: Response) => ({
+        status: response.status,
+        contentType: response.headers.get("content-type"),
+        body: (await response.json()) as Record<string, unknown>,
+      });
+      const shape = (body: Record<string, unknown>) =>
+        JSON.stringify(body, (key, value) =>
+          key === "" || typeof value === "object" ? value : typeof value,
+        );
+
+      for (const request of [requestMagicLink, signUp]) {
+        sentEmails.length = 0;
+        const known = await observe(await request(auth, existing));
+        const unknownAnswer = await observe(await request(auth, unknown));
+        expect(unknownAnswer.status).toBe(known.status);
+        expect(unknownAnswer.contentType).toBe(known.contentType);
+        if (request === requestMagicLink)
+          expect(unknownAnswer.body).toEqual(known.body);
+        else expect(shape(unknownAnswer.body)).toBe(shape(known.body));
+        // One email to each address: a link or reminder for the account,
+        // the reason for the other, so the work per request matches too.
+        expect(sentEmails.map(({ to }) => to)).toEqual([existing, unknown]);
+        expect(sentEmails[1]?.text).not.toMatch(/https?:\/\//);
+      }
+      expect(await userEmail(unknown)).toBeNull();
+    });
 
   it("emails a sign-in reminder when someone signs up with an existing account's email", async () => {
     const auth = configured({

@@ -6,7 +6,7 @@ import {
 import { senderAddress } from "../email/sender.js";
 import { authenticationLogger } from "../logging.js";
 import { inviteSignupAdmission } from "../settings/members/service.js";
-import { waitlistJoinedEmail } from "./email-messages.js";
+import { signInRefusedEmail, waitlistJoinedEmail } from "./email-messages.js";
 import type { SignInConfiguration } from "./sign-in-configuration.js";
 import { waitlistAdmission, waitlistApproved } from "./waitlist.js";
 
@@ -38,7 +38,15 @@ export const admitNewIdentity = async (
     SignInConfiguration,
     "admission" | "allowedEmailDomains" | "email"
   >,
-  input: { readonly email: string; readonly callbackURL: unknown },
+  input: {
+    readonly email: string;
+    readonly callbackURL: unknown;
+    /**
+     * False when the caller emails every refusal itself
+     * (`sendSignInRefusal`), so a new waitlist entry is not told twice.
+     */
+    readonly notifyJoined?: boolean;
+  },
 ): Promise<SignInRejection | undefined> => {
   if (await inviteSignupAdmission(db, input.callbackURL)) return undefined;
   if (await waitlistApproved(db, input.email)) return undefined;
@@ -52,32 +60,37 @@ export const admitNewIdentity = async (
     case "waitlist": {
       const outcome = await waitlistAdmission(db)(input.email);
       if (outcome === "approved") return undefined;
-      if (outcome === "joined")
-        await sendWaitlistJoined(configuration.email, input.email);
+      if (outcome === "joined" && input.notifyJoined !== false)
+        await sendSignInRefusal(configuration.email, input.email, "waitlisted");
       return "waitlisted";
     }
   }
 };
 
 /**
- * Tells a person once that they joined the waitlist. Without an email
- * sender, or if sending fails, they still see the waitlist message on the
- * sign-in page, so a failure is logged and never refuses the request.
+ * Tells an address by email why it gets no sign-in link, so the response
+ * itself never has to say whether an account exists. Without an email
+ * sender, or if sending fails, the request still succeeds: a failure is
+ * logged and never refuses it.
  */
-const sendWaitlistJoined = async (
+export const sendSignInRefusal = async (
   sender: SignInConfiguration["email"],
   to: string,
+  rejection: SignInRejection,
 ) => {
   if (sender === undefined) return;
   try {
     await sender.binding.send({
       from: senderAddress(sender),
       to: normalizeEmail(to),
-      ...waitlistJoinedEmail(),
+      ...(rejection === "waitlisted"
+        ? waitlistJoinedEmail()
+        : signInRefusedEmail(signInRejectionMessages[rejection])),
     });
   } catch (error) {
-    authenticationLogger.warn("Waitlist email failed.", {
-      event: "waitlist_joined_email_failed",
+    authenticationLogger.warn("Sign-in refusal email failed.", {
+      event: "sign_in_refusal_email_failed",
+      rejection,
       error: error instanceof Error ? error.message : String(error),
     });
   }

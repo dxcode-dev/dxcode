@@ -105,12 +105,12 @@ export function SignInPage({
     passwordSignIn.error ??
     passwordSignUp.error ??
     google.error;
+  // A magic link never says waitlisted: that answer comes only from a
+  // password sign-up without email verification, or a Google redirect.
   const waitlistedEmail =
-    magicLink.data?.outcome === "waitlisted"
-      ? magicLink.data.email
-      : signInErrorCode(passwordSignUp.error) === "waitlisted"
-        ? passwordSignUp.variables?.email
-        : undefined;
+    signInErrorCode(passwordSignUp.error) === "waitlisted"
+      ? passwordSignUp.variables?.email
+      : undefined;
   const waitlisted =
     waitlistedEmail !== undefined || redirectError === "waitlisted";
   const verificationEmail =

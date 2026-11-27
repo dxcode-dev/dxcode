@@ -44,6 +44,7 @@ import {
 } from "../../auth/browser-session.js";
 import { requestAuth } from "../../auth/request-auth.js";
 import { loadAuthenticationRequirements } from "../../auth/requirements.js";
+import { deletePersonGrants } from "../../feedback-widget/store.js";
 import {
   decodeJsonBody,
   decodeRequestInput,
@@ -594,6 +595,9 @@ personalSecurityRoutes.post("/sessions/revoke-others", async (context) => {
     yield* provider(() =>
       auth.api.revokeOtherSessions({ headers: context.req.raw.headers }),
     );
+    // Signing out everywhere also signs out the Feedback Widget on every
+    // website (#2420).
+    yield* Effect.promise(() => deletePersonGrants(db, principal.userId));
     yield* audit(db, {
       action: "browser_session.revoke_others",
       outcome: "success",

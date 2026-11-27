@@ -19,9 +19,10 @@ export interface EmailPasswordOptions {
   /** Runs before sign-up, for example to check a Turnstile token. */
   readonly verifyRequest?: (token: string | null) => Promise<void>;
   /**
-   * Throws when admission refuses a new address. Better Auth hides refusals
-   * behind a generic response once verification is on, so the policy runs
-   * here first to tell the person they are waitlisted or out of bounds.
+   * Runs admission for a new address before Better Auth does. With
+   * verification on it emails a refused address why, and Better Auth's
+   * generic response hides the refusal as it hides an existing account;
+   * without verification it throws, since nothing else can tell them.
    */
   readonly admitSignUp?: (email: string, callbackURL: unknown) => Promise<void>;
 }
