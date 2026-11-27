@@ -309,6 +309,8 @@ export const fakeAgent37 =
       );
     }
 
+    if (method === "GET" && path === "/v1/instances")
+      return json({ data: [...world.instances.values()].map(instanceBody) });
     if (method === "POST" && path === "/v1/instances") {
       if (!world.templates.has(body.template))
         return error(400, "invalid_request", "Unknown template.");

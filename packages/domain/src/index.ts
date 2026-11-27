@@ -320,6 +320,7 @@ export {
   type NormalizedExperimentalFeaturePreferences,
   normalizeExperimentalFeaturePreferences,
   productionExperimentalFeatureRegistry,
+  SERVER_TRANSCRIPT_FEATURE_ID,
   validateExperimentalFeaturePreferences,
 } from "./settings/experimental-feature.js";
 export {

@@ -118,6 +118,19 @@ const ClefQuickActions = lazyComponent(() =>
 );
 
 /**
+ * Compares the server's transcript items with this panel's model, for people
+ * with the `server-transcript` experimental feature on. It renders nothing
+ * and loads after the transcript paints; a chunk that cannot load compares
+ * nothing.
+ */
+const ServerTranscriptShadow = lazyComponent(() =>
+  import("./server-transcript-shadow.js").then(
+    (module) => ({ default: module.ServerTranscriptShadow }),
+    () => ({ default: () => null }),
+  ),
+);
+
+/**
  * The composer's quick-action row (experimental). It follows the agent's
  * response that ends the conversation, while the agent waits: none after a
  * failed or stopped turn, or once anything newer arrives. Reply chips hide
@@ -1596,7 +1609,20 @@ function AgentConversation({
       footer={footer}
     />
   );
-  return transcript;
+  const threadId = React.useContext(ThreadPresentationContext)?.id;
+  return threadId === undefined ? (
+    transcript
+  ) : (
+    <>
+      {transcript}
+      <React.Suspense fallback={null}>
+        <ServerTranscriptShadow
+          threadId={threadId}
+          localModel={transcripts.current}
+        />
+      </React.Suspense>
+    </>
+  );
 }
 
 /**

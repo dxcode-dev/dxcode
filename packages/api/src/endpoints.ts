@@ -257,8 +257,8 @@ import {
   GetPersonalSecurityEndpoint,
   ListBrowserSessionsEndpoint,
   ListPersonalApiTokensEndpoint,
-  RevokeBrowserSessionEndpoint,
   RevokeAllPersonalApiTokensEndpoint,
+  RevokeBrowserSessionEndpoint,
   RevokeOtherBrowserSessionsEndpoint,
   RevokePersonalApiTokenEndpoint,
   RotatePersonalApiTokenEndpoint,
@@ -626,6 +626,10 @@ import {
   GetThreadUsageEndpoint,
   GetThreadUsageRequestsEndpoint,
 } from "./threads/thread-usage-endpoints.js";
+import {
+  GetTranscriptPageEndpoint,
+  TranscriptUpdatesEndpoint,
+} from "./threads/transcript-items.js";
 import { UpdateThreadEndpoint } from "./threads/update-thread.js";
 
 /**
@@ -1092,6 +1096,8 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   EditThreadMessageEndpoint,
   EditQueuedThreadMessageEndpoint,
   ListThreadQueuedMessagesEndpoint,
+  GetTranscriptPageEndpoint,
+  TranscriptUpdatesEndpoint,
   DeleteThreadOrbFolderEndpoint,
   GetThreadOrbDiskEndpoint,
   GetThreadOrbMemoryEndpoint,

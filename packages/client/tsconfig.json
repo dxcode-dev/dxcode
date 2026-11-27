@@ -7,5 +7,9 @@
     "outDir": "./dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../domain" }, { "path": "../api" }]
+  "references": [
+    { "path": "../domain" },
+    { "path": "../api" },
+    { "path": "../transcript" }
+  ]
 }

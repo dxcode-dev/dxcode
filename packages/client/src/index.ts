@@ -1,5 +1,8 @@
+// The transcript model, for every UI that already imports @dx/client.
+export * from "@dx/transcript";
 export * from "./api-error.js";
 export * from "./dx-client.js";
+export * from "./event-stream.js";
 export * from "./realtime/presence-scope.js";
 export * from "./realtime/realtime-connection.js";
 export * from "./send/attachment-requests.js";
@@ -16,16 +19,5 @@ export * from "./threads/existing-agent-uid.js";
 export * from "./threads/send-refusal.js";
 export * from "./threads/thread-agent-client.js";
 export * from "./threads/thread-session-registry.js";
-export * from "./transcript/artifact-tool-part.js";
-export * from "./transcript/claude-code-tools.js";
-export * from "./transcript/mcp-app-part.js";
-export * from "./transcript/message-edit-model.js";
 export * from "./transcript/sent-messages.js";
-export * from "./transcript/shell-command-operation.js";
-export * from "./transcript/skill-activation.js";
-export * from "./transcript/subagent-view.js";
-export * from "./transcript/transcript-activity-projection.js";
 export * from "./transcript/transcript-derivation.js";
-export * from "./transcript/transcript-progress.js";
-export * from "./transcript/transcript-view-model.js";
-export * from "./transcript/withdrawn-sends.js";

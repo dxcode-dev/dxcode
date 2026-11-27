@@ -3,8 +3,10 @@
 //   allows. New calls go through `dxClient.call(<Endpoint>)` with an endpoint
 //   defined in @dx/api, so a UI never repeats a path by hand. When a file
 //   holds fewer, the baseline must shrink with it: run with --update.
-// - packages/client imports a UI framework or reads a browser global, since
-//   every UI (web, native shells, a CLI) must be able to run it.
+// - packages/client or packages/transcript imports a UI framework or reads a
+//   browser global, since every UI (web, native shells, a CLI) must be able
+//   to run them, and Core may run the transcript model too. The transcript
+//   model also never imports @dx/client.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -177,29 +179,42 @@ const browserGlobals = new Set([
   "navigator",
   "location",
 ]);
-for (const path of walk(join(repositoryRoot, "packages/client/src")).filter(
-  isProductionSource,
-)) {
-  traverse(parsed(path), {
-    ImportDeclaration(node) {
-      const source = node.node.source.value;
-      if (forbiddenImport.test(source) || source.startsWith("../../"))
-        failures.push(
-          `${repositoryPath(path)}: imports ${source}. @dx/client runs under every UI, so it imports only @dx/api, @dx/domain, effect, and @flue/sdk (not @flue/react).`,
-        );
-    },
-    Identifier(node) {
-      const name = node.node.name;
-      if (
-        browserGlobals.has(name) &&
-        node.isReferencedIdentifier() &&
-        node.scope.getBinding(name) === undefined
-      )
-        failures.push(
-          `${repositoryPath(path)}: reads the browser global ${name}. Take it from the DxTransport or another argument the UI passes in.`,
-        );
-    },
-  });
+const frameworkFree = [
+  {
+    directory: "packages/client/src",
+    forbidden: forbiddenImport,
+    rule: "@dx/client runs under every UI, so it imports only @dx/api, @dx/domain, @dx/transcript, effect, and @flue/sdk (not @flue/react).",
+  },
+  {
+    directory: "packages/transcript/src",
+    forbidden:
+      /^(react|react-dom|@tanstack\/|@base-ui\/|@flue\/react|@dx\/web|@dx\/core|@dx\/client)(\/|$)/,
+    rule: "@dx/transcript runs in every UI and in Core, so it imports only @dx/api, @dx/domain, and @flue/sdk.",
+  },
+];
+for (const { directory, forbidden, rule } of frameworkFree) {
+  for (const path of walk(join(repositoryRoot, directory)).filter(
+    isProductionSource,
+  )) {
+    traverse(parsed(path), {
+      ImportDeclaration(node) {
+        const source = node.node.source.value;
+        if (forbidden.test(source) || source.startsWith("../../"))
+          failures.push(`${repositoryPath(path)}: imports ${source}. ${rule}`);
+      },
+      Identifier(node) {
+        const name = node.node.name;
+        if (
+          browserGlobals.has(name) &&
+          node.isReferencedIdentifier() &&
+          node.scope.getBinding(name) === undefined
+        )
+          failures.push(
+            `${repositoryPath(path)}: reads the browser global ${name}. Take it from the DxTransport or another argument the UI passes in.`,
+          );
+      },
+    });
+  }
 }
 
 if (failures.length > 0) {

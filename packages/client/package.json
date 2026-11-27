@@ -10,6 +10,7 @@
   "dependencies": {
     "@dx/api": "workspace:^",
     "@dx/domain": "workspace:^",
+    "@dx/transcript": "workspace:^",
     "@flue/sdk": "file:../../third-party/flue/sdk-ea96490468932c82c2894dd9463b56a21b158dad.tgz",
     "effect": "4.0.5"
   }

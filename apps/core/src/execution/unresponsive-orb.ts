@@ -53,10 +53,18 @@ const unresponsiveRunError = (details: string) =>
 const sleep = (ms: number) =>
   new Promise<"elapsed">((resolve) => setTimeout(() => resolve("elapsed"), ms));
 
+/**
+ * The probe's folder: the home folder, which every Orb has. Never the
+ * repository's: it runs while the source program clones it, and a runner
+ * creates a command's missing working folder, so the clone found an empty
+ * `workspace/repo` in its place and failed as a conflict.
+ */
+const PROBE_CWD = "/home/user";
+
 /** Whether the guest runs a trivial command within the probe budget. */
 const answers = async (guest: ExecutionGuest) => {
   const probe = guest.commands
-    .run("true", { timeoutMs: ORB_LIVENESS_PROBE_MS })
+    .run("true", { cwd: PROBE_CWD, timeoutMs: ORB_LIVENESS_PROBE_MS })
     .then(
       () => "answered" as const,
       () => "failed" as const,

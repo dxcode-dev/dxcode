@@ -19,6 +19,7 @@ export interface FakeSandbox {
   orb: boolean;
   /** Pauses so far; each resume is a fresh boot. */
   pauses: number;
+  readonly metadata: Record<string, string>;
 }
 
 export interface FakeSnapshot {
@@ -97,6 +98,7 @@ const sandboxBody = (sandbox: FakeSandbox) => ({
   template: sandbox.template ?? "claude",
   pauseError: null,
   crashReason: null,
+  metadata: sandbox.metadata,
 });
 
 /** The quoted arguments of an `sh -c '...' sh 'a' 'b'` command line. */
@@ -168,10 +170,24 @@ export const fakeLizard =
         setupPolls: 0,
         pauses: 0,
         orb: snapshot !== undefined,
+        metadata: body.metadata ?? {},
       };
       world.sandboxes.set(sandbox.id, sandbox);
       return json(sandboxBody(sandbox), 201);
     }
+    // Lizard's list leaves out metadata; a sandbox's own read has it.
+    if (
+      method === "GET" &&
+      path === `/api/projects/${world.projectId}/sandboxes`
+    )
+      return json(
+        [...world.sandboxes.values()]
+          .filter(({ status }) => status !== "stopped")
+          .map((sandbox) => {
+            const { metadata: _, ...listed } = sandboxBody(sandbox);
+            return listed;
+          }),
+      );
     const match = /^\/api\/sandboxes\/([^/]+)(?:\/(.+))?$/.exec(path);
     if (match !== null) {
       const sandbox = world.sandboxes.get(match[1] as string);

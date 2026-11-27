@@ -1,11 +1,10 @@
 import { type ThreadQueuedMessage, withMessageAttachments } from "@dx/api";
+import { isWithdrawnSettlement, type UserPromptRow } from "@dx/transcript";
 import type {
   FlueConversationMessage,
   FlueConversationSettlement,
 } from "@flue/sdk";
 import { sendRefusal } from "../threads/send-refusal.js";
-import type { UserPromptRow } from "./message-edit-model.js";
-import { isWithdrawnSettlement } from "./withdrawn-sends.js";
 
 /**
  * What a transcript shows of the viewer's own sends beside Flue's history:

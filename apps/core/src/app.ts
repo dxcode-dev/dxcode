@@ -5,6 +5,7 @@ import {
   replaceQueuedThreadMessage,
   rewindThreadAgent,
   stopThreadAgent,
+  threadFlueClient,
   withdrawThreadMessage,
 } from "./agents/routes.js";
 import { artifactLibraryRoutes } from "./artifact-library/routes.js";
@@ -132,6 +133,10 @@ import {
   threadDraftRoutes,
   workspaceDraftRoutes,
 } from "./threads/thread-draft-route.js";
+import {
+  createTranscriptRoutes,
+  serverTranscriptOn,
+} from "./transcript/transcript-routes.js";
 import { workloadIdentityRoutes } from "./workload-identity/routes.js";
 
 installRuntimeTracing();
@@ -333,6 +338,18 @@ const threadMessageAgent = {
 };
 app.route("/v1/threads", createThreadMessageEditRoutes(threadMessageAgent));
 app.route("/v1/threads", createThreadMessageQueueRoutes(threadMessageAgent));
+// The transcript as items Core projects (prototype, behind the
+// `server-transcript` experimental feature).
+app.use("/v1/threads/:threadId/transcript", authorizeThread);
+app.use("/v1/threads/:threadId/transcript/*", authorizeThread);
+app.route(
+  "/v1/threads",
+  createTranscriptRoutes({
+    // Read at call time: worker tests replace the agent routes module.
+    flue: (threadId, env) => threadFlueClient(threadId, env),
+    featureOn: serverTranscriptOn,
+  }),
+);
 // Installed plugins' prompts, notices, quick actions, and commands; the
 // list is `/plugin-ui`, everything else is under it.
 app.use("/v1/threads/:threadId/plugin-ui", authorizeThread);

@@ -20,9 +20,10 @@ export type EndpointUpload = "json" | "multipart" | "bytes";
  * What the route answers with on success: `json` (the default), decoded
  * with `success`; `file`, bytes such as an image or a download, which a UI
  * fetches or links to; `none`, no body at all, such as a 204 or a 202
- * that only accepts the work.
+ * that only accepts the work; `sse`, a `text/event-stream` whose every
+ * event's `data` is JSON that `success` decodes, such as a live transcript.
  */
-export type EndpointAnswer = "json" | "file" | "none";
+export type EndpointAnswer = "json" | "file" | "none" | "sse";
 
 /** The success schema of an endpoint whose answer is a file. */
 export const FileAnswerSchema = Schema.Unknown;
@@ -138,7 +139,10 @@ export const defineEndpoint = <
   /** A `multipart` or `bytes` upload has no `body` schema. */
   readonly body?: Upload extends "json" ? Body : undefined;
   readonly upload?: Upload;
-  /** `FileAnswerSchema` when `answer` is `file`, `NoContentSchema` when `none`. */
+  /**
+   * `FileAnswerSchema` when `answer` is `file`, `NoContentSchema` when
+   * `none`; for `sse`, the schema of one event's JSON `data`.
+   */
   readonly success: Success;
   readonly successStatus?: SuccessStatus;
   /** `{ status, schema }` for each error answer, with Core's status. */

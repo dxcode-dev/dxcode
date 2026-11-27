@@ -224,7 +224,7 @@ process.stdin.on("end", () => {
 
 const sourceWorkspaceTemplate = String.raw`#!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import nodeFs from "node:fs";
 import { dirname, join, parse, posix, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -353,6 +353,20 @@ const readRegular = (path, maximum = MAX_MARKER) => {
     return readFileSync(descriptor, "utf8");
   } catch { fail("conflict"); }
   finally { if (descriptor !== undefined) closeSync(descriptor); }
+};
+// An empty workspace/repo that dx never accepted holds nothing to keep: a
+// runner creates a command's missing working folder, so a command run there
+// before or during the clone leaves one. It counts as absent.
+const dropEmptyRoot = () => {
+  const entry = lstat(ROOT);
+  if (entry === undefined || entry.isSymbolicLink() || !entry.isDirectory()) return;
+  let names;
+  try { names = readdirSync(ROOT); } catch { return; }
+  if (names.length !== 0) return;
+  try { rmdirSync(ROOT); } catch (error) { if (error?.code !== "ENOENT" && error?.code !== "ENOTEMPTY" && error?.code !== "EEXIST") fail("conflict"); }
+};
+const dropUnacceptedEmptyRoot = () => {
+  if (lstat(STATE) === undefined) dropEmptyRoot();
 };
 const sha = value => createHash("sha256").update(value).digest("hex");
 const identity = () => {
@@ -519,6 +533,7 @@ const resolveExisting = sourceIdentity => {
     fail("absent");
   }
   assertDirectoryChain(WORKSPACE_PARENT);
+  dropUnacceptedEmptyRoot();
   const rootEntry = lstat(ROOT);
   if (rootEntry === undefined) {
     forgetDeletedCheckout();
@@ -575,6 +590,7 @@ const unshallow = (expected, credential) => {
   verify(expected);
 };
 const initialize = (expected, credential) => {
+  dropUnacceptedEmptyRoot();
   const rootEntry = lstat(ROOT);
   if (rootEntry !== undefined) return verify(expected);
   if (lstat(STATE) !== undefined) fail("conflict");
@@ -598,6 +614,7 @@ const initialize = (expected, credential) => {
     git(temporary, expected.repositoryName, ["config", "branch." + expected.defaultBranch + ".remote", "origin"], false, 120000, [0], true);
     git(temporary, expected.repositoryName, ["config", "branch." + expected.defaultBranch + ".merge", "refs/heads/" + expected.defaultBranch], false, 120000, [0], true);
     atomicClaim({ ...expected, invocationId: required("DX_INVOCATION_ID") });
+    dropEmptyRoot();
     if (lstat(ROOT) !== undefined) fail("conflict");
     renameSync(temporary, ROOT);
     claimedFinal = true;
@@ -614,6 +631,7 @@ const initialize = (expected, credential) => {
   }
 };
 const initializeAnonymous = sourceIdentity => {
+  dropUnacceptedEmptyRoot();
   if (lstat(ROOT) !== undefined) return resolveExisting(sourceIdentity);
   if (lstat(STATE) !== undefined) fail("conflict");
   ensureDirectoryChain(WORKSPACE_PARENT);
@@ -635,6 +653,7 @@ const initializeAnonymous = sourceIdentity => {
     const discovered = { ...sourceIdentity, sourceSha, defaultBranch, initialRef: "refs/heads/" + defaultBranch };
     if (!validSnapshot(discovered)) throw new Error("invalid-discovery");
     atomicClaim({ ...discovered, invocationId });
+    dropEmptyRoot();
     if (lstat(ROOT) !== undefined) fail("conflict");
     renameSync(temporary, ROOT);
     claimedFinal = true;

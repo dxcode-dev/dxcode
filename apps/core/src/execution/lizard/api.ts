@@ -29,6 +29,8 @@ export interface LizardSandbox {
   readonly size?: string;
   readonly pauseError?: string | null;
   readonly crashReason?: string | null;
+  /** dx's own labels, given at create. */
+  readonly metadata?: Readonly<Record<string, string>>;
 }
 
 export interface LizardCommandResult {
@@ -76,6 +78,11 @@ export interface LizardApi {
     readonly deleteAfterMs?: number;
   }) => Promise<LizardSandbox>;
   readonly getSandbox: (id: string) => Promise<LizardSandbox | undefined>;
+  /**
+   * The project's sandboxes with their metadata. Lizard's list leaves
+   * metadata out, so each one without it is read on its own.
+   */
+  readonly sandboxes: () => Promise<ReadonlyArray<LizardSandbox>>;
   readonly pause: (id: string) => Promise<void>;
   readonly resume: (id: string) => Promise<void>;
   readonly kill: (id: string) => Promise<void>;
@@ -147,6 +154,16 @@ const sandboxOf = (body: unknown): LizardSandbox => {
     ...(typeof value.size === "string" ? { size: value.size } : {}),
     pauseError: (value.pauseError as string | null | undefined) ?? null,
     crashReason: (value.crashReason as string | null | undefined) ?? null,
+    ...(typeof value.metadata === "object" && value.metadata !== null
+      ? {
+          metadata: Object.fromEntries(
+            Object.entries(value.metadata).filter(
+              (entry): entry is [string, string] =>
+                typeof entry[1] === "string",
+            ),
+          ),
+        }
+      : {}),
   };
 };
 
@@ -242,6 +259,30 @@ export const lizardApi = (
       if (response.status === 404) return undefined;
       if (!response.ok) throw await failure(response);
       return sandboxOf(await response.json());
+    },
+    async sandboxes() {
+      const listed = await json<unknown>(
+        "GET",
+        `/api/projects/${encodeURIComponent(projectId)}/sandboxes`,
+      );
+      const items = Array.isArray(listed)
+        ? listed
+        : Array.isArray((listed as { sandboxes?: unknown }).sandboxes)
+          ? (listed as { sandboxes: Array<unknown> }).sandboxes
+          : [];
+      const sandboxes = items.map(sandboxOf);
+      return Promise.all(
+        sandboxes.map(async (listedSandbox) =>
+          listedSandbox.metadata === undefined
+            ? await call("GET", sandbox(listedSandbox.id)).then(
+                async (response) =>
+                  response.ok
+                    ? sandboxOf(await response.json())
+                    : listedSandbox,
+              )
+            : listedSandbox,
+        ),
+      );
     },
     // Every Lizard pause keeps files only and the resume boots fresh: memory
     // pauses are off since 2026-11-10 (SDK 1.0.19).

@@ -37,12 +37,17 @@ export type EndpointInput<E extends Endpoint> = Field<"params", E["params"]> &
   Field<"query", E["query"]> &
   BodyField<E>;
 
-/** What a call answers: the decoded success, or a file's bytes. */
+/**
+ * What a call answers: the decoded success, a file's bytes, or for an event
+ * stream the open response, which `readEventStream` reads.
+ */
 export type EndpointAnswerValue<E extends Endpoint> = E["answer"] extends "file"
   ? Blob
   : E["answer"] extends "none"
     ? undefined
-    : E["success"]["Type"];
+    : E["answer"] extends "sse"
+      ? Response
+      : E["success"]["Type"];
 
 export interface CallOptions {
   readonly signal?: AbortSignal;
@@ -176,7 +181,12 @@ export const createDxClient = (transport: DxTransport): DxClient => {
     const response = await transport.fetch(path, {
       method: endpoint.method,
       headers: {
-        accept: endpoint.answer === "file" ? "*/*" : "application/json",
+        accept:
+          endpoint.answer === "file"
+            ? "*/*"
+            : endpoint.answer === "sse"
+              ? "text/event-stream"
+              : "application/json",
         ...(json && body && { "content-type": "application/json" }),
         ...options.headers,
       },
@@ -187,6 +197,8 @@ export const createDxClient = (transport: DxTransport): DxClient => {
     if (response.ok && endpoint.answer === "file") return response.blob();
     // A 204 or a bodiless 202: nothing to read.
     if (response.ok && endpoint.answer === "none") return undefined;
+    // An event stream stays open; the caller reads it.
+    if (response.ok && endpoint.answer === "sse") return response;
     const answer: unknown = await response.json().catch(() => undefined);
     if (!response.ok)
       throw await refusalError(endpoint, response.status, answer);

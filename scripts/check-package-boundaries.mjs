@@ -6,13 +6,18 @@ const packages = {
     path: "packages/api/package.json",
     allowed: new Set(["@dx/domain"]),
   },
+  // The transcript model: pure functions both a client and Core may run.
+  "@dx/transcript": {
+    path: "packages/transcript/package.json",
+    allowed: new Set(["@dx/api", "@dx/domain"]),
+  },
   "@dx/client": {
     path: "packages/client/package.json",
-    allowed: new Set(["@dx/api", "@dx/domain"]),
+    allowed: new Set(["@dx/api", "@dx/domain", "@dx/transcript"]),
   },
   "@dx/core": {
     path: "apps/core/package.json",
-    allowed: new Set(["@dx/api", "@dx/domain"]),
+    allowed: new Set(["@dx/api", "@dx/domain", "@dx/transcript"]),
   },
   "@dx/web": {
     path: "apps/web/package.json",

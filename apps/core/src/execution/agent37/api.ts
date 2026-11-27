@@ -49,6 +49,8 @@ export interface Agent37Instance {
   readonly template?: string;
   readonly mountPath?: string;
   readonly pastDue?: boolean;
+  /** dx's own labels, given at create. */
+  readonly metadata?: Readonly<Record<string, string>>;
 }
 
 export interface Agent37Template {
@@ -136,6 +138,16 @@ const instanceOf = (value: unknown): Agent37Instance => {
       ? { mountPath: body.mount_path }
       : {}),
     ...(typeof body.past_due === "boolean" ? { pastDue: body.past_due } : {}),
+    ...(typeof body.metadata === "object" && body.metadata !== null
+      ? {
+          metadata: Object.fromEntries(
+            Object.entries(body.metadata).filter(
+              (entry): entry is [string, string] =>
+                typeof entry[1] === "string",
+            ),
+          ),
+        }
+      : {}),
   };
 };
 

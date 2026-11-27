@@ -38,6 +38,7 @@ configureSync({
 });
 
 export const readinessLogger = getLogger(["dx", "readiness"]);
+export const transcriptLogger = getLogger(["dx", "transcript"]);
 export const claudeCodeLogger = getLogger(["dx", "claude-code"]);
 export const builtInSkillsLogger = getLogger([
   "dx",

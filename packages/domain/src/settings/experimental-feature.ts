@@ -260,6 +260,13 @@ export const MAILBOX_FEATURE_ID = "mailbox";
  */
 export const DXD_WORKSPACE_ROUTE_FEATURE_ID = "dxd-workspace-route";
 
+/**
+ * The personal flag that opens a Thread's transcript as items Core projects
+ * (`/v1/threads/:threadId/transcript`). The web keeps rendering its own
+ * projection and, with the flag on, compares the two and logs differences.
+ */
+export const SERVER_TRANSCRIPT_FEATURE_ID = "server-transcript";
+
 export const productionExperimentalFeatureRegistry =
   createExperimentalFeatureRegistry({
     version: 1,
@@ -409,6 +416,29 @@ export const productionExperimentalFeatureRegistry =
           migration: "Nothing stored; off reverts on the next turn.",
           graduation: "Default once clean on every provider.",
           removal: "Drop the dxd sandbox route.",
+        },
+      },
+      {
+        id: SERVER_TRANSCRIPT_FEATURE_ID,
+        title: "Transcript from the server",
+        description:
+          "Prototype: dx also builds this account's transcripts on the server, for native apps. The web still shows its own and compares the two, logging any difference to the browser console. Off, nothing changes.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/clients" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "low",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "immediate",
+        reviewDate: "2027-02-15",
+        lifecyclePlan: {
+          migration: "Nothing stored; off stops the server stream.",
+          graduation:
+            "Once server items match the web's projection on every journey, native apps read them by default.",
+          removal: "Drop the transcript routes and the comparison.",
         },
       },
     ],

@@ -106,7 +106,7 @@ const rootsOf = (endpoint: Endpoint): ReadonlyArray<Root> => [
   ...(endpoint.body === undefined
     ? []
     : [{ endpoint, part: "body" as const, schema: endpoint.body }]),
-  ...(endpoint.answer !== "json"
+  ...(endpoint.answer !== "json" && endpoint.answer !== "sse"
     ? []
     : [{ endpoint, part: "success" as const, schema: endpoint.success }]),
   ...endpoint.refusals.map((refusal, index) => ({
@@ -540,6 +540,9 @@ export const toOpenApiDocument = (
       answers.set(status, [...(answers.get(status) ?? []), schema]);
     let fileAnswer: string | undefined;
     let noContent: string | undefined;
+    let eventStream:
+      | { readonly status: string; readonly schema: JsonSchema.JsonSchema }
+      | undefined;
     for (const { endpoint, own } of variants) {
       const of = (part: Part) => own.find(({ root }) => root.part === part);
       for (const [part, location] of [
@@ -560,6 +563,11 @@ export const toOpenApiDocument = (
       const success = of("success")?.schema;
       if (endpoint.answer === "none")
         noContent = String(endpoint.successStatus);
+      else if (endpoint.answer === "sse" && success !== undefined)
+        eventStream = {
+          status: String(endpoint.successStatus),
+          schema: success,
+        };
       else if (success === undefined)
         fileAnswer = String(endpoint.successStatus);
       else answer(String(endpoint.successStatus), success);
@@ -574,6 +582,12 @@ export const toOpenApiDocument = (
       };
     if (noContent !== undefined)
       responses[noContent] = { description: "Success, with no content" };
+    // Each event's `data` is one JSON value the schema describes.
+    if (eventStream !== undefined)
+      responses[eventStream.status] = {
+        description: "Server-sent events; each event's data is JSON",
+        content: { "text/event-stream": { schema: eventStream.schema } },
+      };
     for (const [status, schemas] of answers) {
       const codes = [
         ...new Set(schemas.map((schema) => refusalCode(schema, definitions))),

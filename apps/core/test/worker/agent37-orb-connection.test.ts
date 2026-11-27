@@ -755,3 +755,205 @@ describe("a deployment's named sizes on an Agent37 account its admin added", () 
     });
   }, 30_000);
 });
+
+/**
+ * One Thread, one instance. Ways it could fail, each covered below: two
+ * activations at once (a new Thread's early Orb start and its first run)
+ * each create an instance; an activation whose create reached Agent37 but
+ * whose request was cancelled before recording it leaves that instance
+ * running, unrecorded and never slept, while the next activation makes a
+ * second; a claim whose holder vanished before reaching Agent37 is never
+ * taken over, so the Thread never gets an Orb; a refused create (an empty
+ * wallet) keeps the claim, so the next try waits it out; an instance left
+ * behind before this fix is never deleted, or the cleanup deletes another
+ * Thread's.
+ */
+describe("Agent37 creates one instance per Thread", () => {
+  const ready = async (id: string) => {
+    await call("/agent37/connection", "PUT", {
+      credentials: { apiKey: "sk_live_one" },
+    });
+    await prepare();
+    const { target } = await pinThread(id);
+    if (target.credential.scope !== "personal") throw new Error("no account");
+    const context: ExecutionContext = {
+      account: {
+        scope: "personal",
+        userId: solo,
+        providerAccount: "mem_owner",
+      },
+      credentials: target.credential.credentials,
+      profile: target.profile,
+    };
+    return {
+      context,
+      provider: makeAgent37ExecutionProvider({ fetch: send }),
+      template:
+        target.profile.adapter === "agent37" ? target.profile.template : "",
+    };
+  };
+  const open = (opened: Awaited<ReturnType<typeof ready>>, id: string) =>
+    opened.provider.workspace.create(
+      opened.context,
+      { threadId: id as never },
+      { authorize: async () => {} },
+    );
+  const created = () =>
+    world.calls.filter((line) => line === "POST api.agent37.com/v1/instances")
+      .length;
+  /** An instance as Agent37 holds it after a create dx never saw finish. */
+  const leftBehind = (
+    id: string,
+    template: string,
+    metadata: Record<string, string>,
+  ) => {
+    world.count += 1;
+    const instance: FakeInstance = {
+      id: `left${world.count}`,
+      template,
+      name: `dx ${id}`,
+      mountPath: "/home/user/workspace",
+      resources: { cpu: 4, memory: 8, disk: 20 },
+      metadata,
+      status: "running",
+      startedAt: world.clock,
+      files: new Map(),
+      execs: [],
+    };
+    world.instances.set(instance.id, instance);
+    return instance;
+  };
+  const claim = async (id: string, attempt: string, updatedAt: string) =>
+    env.DB.prepare(
+      `UPDATE execution_workspace
+          SET state = 'provisioning', initialization_attempt_id = ?, updated_at = ?
+        WHERE thread_id = ?`,
+    )
+      .bind(attempt, updatedAt, id)
+      .run();
+
+  it("gives two activations at once the same instance", async () => {
+    const id = "thr_00000000-0000-4000-8000-0000000037d1";
+    const opened = await ready(id);
+    const before = created();
+    const [first, second] = await Promise.all([
+      open(opened, id),
+      open(opened, id),
+    ]);
+    expect(created() - before).toBe(1);
+    const instances = [...world.instances.values()].filter(
+      ({ metadata }) => metadata.dxThread === id,
+    );
+    expect(instances).toHaveLength(1);
+    const only = instances[0] as FakeInstance;
+    expect(await record(id)).toEqual({
+      provider: "agent37",
+      state: "initialized",
+      provider_sandbox_id: only.id,
+    });
+    // Both run commands in that one instance.
+    await first.guest.commands.run("whoami");
+    await second.guest.commands.run("whoami");
+    expect(
+      only.execs.filter(({ command }) => command.includes("whoami")),
+    ).toHaveLength(2);
+  }, 30_000);
+
+  it("adopts the instance a cancelled create made instead of making another", async () => {
+    const id = "thr_00000000-0000-4000-8000-0000000037d2";
+    const opened = await ready(id);
+    // The early start claimed and reached Agent37, then its request ended.
+    await claim(id, "attempt-cancelled", new Date().toISOString());
+    const orphan = leftBehind(id, opened.template, {
+      dxThread: id,
+      dxAttempt: "attempt-cancelled",
+    });
+    const before = created();
+    await open(opened, id);
+    expect(created() - before).toBe(0);
+    expect(await record(id)).toMatchObject({
+      state: "initialized",
+      provider_sandbox_id: orphan.id,
+    });
+    expect(orphan.status).toBe("running");
+  }, 30_000);
+
+  it("takes over a claim whose holder never reached Agent37", async () => {
+    const id = "thr_00000000-0000-4000-8000-0000000037d3";
+    const opened = await ready(id);
+    await claim(
+      id,
+      "attempt-vanished",
+      new Date(Date.now() - 60_000).toISOString(),
+    );
+    const before = created();
+    await open(opened, id);
+    expect(created() - before).toBe(1);
+    const instances = [...world.instances.values()].filter(
+      ({ metadata }) => metadata.dxThread === id,
+    );
+    expect(instances).toHaveLength(1);
+    // Made under a new attempt, not the vanished holder's.
+    expect(instances[0]?.metadata.dxAttempt).not.toBe("attempt-vanished");
+    expect(await record(id)).toMatchObject({
+      state: "initialized",
+      provider_sandbox_id: instances[0]?.id,
+    });
+  }, 30_000);
+
+  it("waits on a fresh claim and adopts what its holder makes", async () => {
+    const id = "thr_00000000-0000-4000-8000-0000000037d4";
+    const opened = await ready(id);
+    await claim(id, "attempt-slow", new Date().toISOString());
+    const before = created();
+    const waiting = open(opened, id);
+    // The holder's create reaches Agent37 a moment later.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const made = leftBehind(id, opened.template, {
+      dxThread: id,
+      dxAttempt: "attempt-slow",
+    });
+    await waiting;
+    expect(created() - before).toBe(0);
+    expect(await record(id)).toMatchObject({
+      state: "initialized",
+      provider_sandbox_id: made.id,
+    });
+  }, 30_000);
+
+  it("lets the next activation create at once after a refused create", async () => {
+    const id = "thr_00000000-0000-4000-8000-0000000037d5";
+    const opened = await ready(id);
+    world.broke = true;
+    await expect(open(opened, id)).rejects.toMatchObject({
+      reason: expect.stringMatching(/^Agent37 needs more balance/),
+    });
+    expect(await record(id)).toMatchObject({ state: "uninitialized" });
+    world.broke = false;
+    const started = Date.now();
+    await open(opened, id);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(await record(id)).toMatchObject({ state: "initialized" });
+  }, 30_000);
+
+  it("deletes an instance left behind for the Thread when its own instance sleeps", async () => {
+    const id = "thr_00000000-0000-4000-8000-0000000037d6";
+    const other = "thr_00000000-0000-4000-8000-0000000037d7";
+    const opened = await ready(id);
+    const handle = await open(opened, id);
+    const own = [...world.instances.values()].find(
+      ({ metadata }) => metadata.dxThread === id,
+    ) as FakeInstance;
+    // From before creates were claimed: tagged with the Thread only.
+    const stray = leftBehind(id, opened.template, { dxThread: id });
+    const othersOwn = leftBehind(other, opened.template, { dxThread: other });
+    const now = Date.now();
+    await handle.setIdleDeadline(60_000);
+    expect(await sweep(now + 120_000)).toBe(1);
+    expect(own.status).toBe("sleeping");
+    expect(world.instances.has(stray.id)).toBe(false);
+    expect(world.deleted.map(({ id: deleted }) => deleted)).toContain(stray.id);
+    expect(world.instances.get(othersOwn.id)?.status).toBe("running");
+    expect(await record(id)).toMatchObject({ provider_sandbox_id: own.id });
+  }, 30_000);
+});

@@ -35,6 +35,21 @@ export interface ExecutionWorkspaceRecords {
   ) => Promise<boolean>;
   /** The provider no longer has the sandbox. */
   readonly markLost: (threadId: string) => Promise<void>;
+  /**
+   * Takes over a `provisioning` claim whose holder last wrote it before
+   * `staleBefore` (an ISO instant): the claim under a new attempt, or null
+   * when raced or still fresh.
+   */
+  readonly retake: (
+    threadId: string,
+    record: ExecutionWorkspaceRecord,
+    staleBefore: string,
+  ) => Promise<ExecutionWorkspaceRecord | null>;
+  /** Gives a claim back (`uninitialized`) after a create that made nothing. */
+  readonly release: (
+    threadId: string,
+    record: ExecutionWorkspaceRecord,
+  ) => Promise<void>;
 }
 
 export const executionWorkspaceRecords = (
@@ -113,6 +128,50 @@ export const executionWorkspaceRecords = (
       )
       .run();
     return result.meta.changes === 1;
+  },
+  async retake(threadId, record, staleBefore) {
+    const initializationAttemptId = crypto.randomUUID();
+    const result = await db
+      .prepare(
+        `UPDATE execution_workspace
+            SET initialization_attempt_id = ?, updated_at = ?
+          WHERE thread_id = ?
+            AND provider = ?
+            AND state = 'provisioning'
+            AND initialization_attempt_id IS ?
+            AND updated_at < ?`,
+      )
+      .bind(
+        initializationAttemptId,
+        new Date().toISOString(),
+        threadId,
+        providerId,
+        record.initializationAttemptId,
+        staleBefore,
+      )
+      .run();
+    return result.meta.changes === 1
+      ? { ...record, initializationAttemptId }
+      : null;
+  },
+  async release(threadId, record) {
+    await db
+      .prepare(
+        `UPDATE execution_workspace
+            SET state = 'uninitialized', initialization_attempt_id = NULL,
+                updated_at = ?
+          WHERE thread_id = ?
+            AND provider = ?
+            AND state = 'provisioning'
+            AND initialization_attempt_id IS ?`,
+      )
+      .bind(
+        new Date().toISOString(),
+        threadId,
+        providerId,
+        record.initializationAttemptId,
+      )
+      .run();
   },
   async markLost(threadId) {
     await db

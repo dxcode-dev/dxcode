@@ -485,3 +485,104 @@ describe("Lizard in a person's own project", () => {
     );
   });
 });
+
+/**
+ * One Thread, one sandbox. Ways it could fail, each covered below: two
+ * activations at once (a new Thread's early Orb start and its first run)
+ * each create a sandbox; an activation whose create reached Lizard but
+ * whose request was cancelled before recording it leaves that sandbox
+ * running and unrecorded while the next activation makes a second (Lizard
+ * lists sandboxes without their metadata, so dx must read each one).
+ */
+describe("Lizard creates one sandbox per Thread", () => {
+  const ready = async () => {
+    await connect({ apiKey: world.apiKey, projectId: world.projectId });
+    await prepare();
+    await pinThread("lz.small");
+    const target = await Effect.runPromise(
+      resolveExecutionTarget(bindings, threadId, { admission: false }),
+    );
+    if (target.credential.scope !== "personal") throw new Error("no account");
+    const context: ExecutionContext = {
+      account: {
+        scope: "personal",
+        userId: owner,
+        providerAccount: world.projectId,
+      },
+      credentials: target.credential.credentials,
+      profile: target.profile,
+    };
+    const provider = makeLizardExecutionProvider({ fetch: send });
+    return () =>
+      provider.workspace.create(
+        context,
+        { threadId: threadId as never },
+        { authorize: async () => {} },
+      );
+  };
+  const threadSandboxes = () =>
+    [...world.sandboxes.values()].filter(
+      ({ metadata, status }) =>
+        metadata.dxThread === threadId && status !== "stopped",
+    );
+  const record = () =>
+    env.DB.prepare(
+      "SELECT state, provider_sandbox_id FROM execution_workspace WHERE thread_id = ?",
+    )
+      .bind(threadId)
+      .first();
+
+  it("gives two activations at once the same sandbox", async () => {
+    const open = await ready();
+    await Promise.all([open(), open()]);
+    const sandboxes = threadSandboxes();
+    expect(sandboxes).toHaveLength(1);
+    expect(await record()).toEqual({
+      state: "initialized",
+      provider_sandbox_id: sandboxes[0]?.id,
+    });
+  }, 30_000);
+
+  it("adopts the sandbox a cancelled create made instead of making another", async () => {
+    const open = await ready();
+    // The early start claimed and reached Lizard, then its request ended.
+    await env.DB.prepare(
+      `UPDATE execution_workspace
+          SET state = 'provisioning', initialization_attempt_id = 'attempt-cancelled',
+              updated_at = ?
+        WHERE thread_id = ?`,
+    )
+      .bind(new Date().toISOString(), threadId)
+      .run();
+    const snapshot = [...world.snapshots.values()].find(
+      ({ status }) => status === "ready",
+    );
+    world.count += 1;
+    world.sandboxes.set(`sbx-${world.count}`, {
+      id: `sbx-${world.count}`,
+      size: "small",
+      template: null,
+      snapshotId: snapshot?.id ?? null,
+      timeoutMs: 0,
+      status: "running",
+      files: new Map(),
+      execs: [],
+      setupPolls: 0,
+      pauses: 0,
+      orb: true,
+      metadata: { dxThread: threadId, dxAttempt: "attempt-cancelled" },
+    });
+    const creates = world.calls.filter(
+      (line) => line === "POST /api/sandboxes",
+    ).length;
+    await open();
+    expect(
+      world.calls.filter((line) => line === "POST /api/sandboxes").length,
+    ).toBe(creates);
+    expect(threadSandboxes()).toHaveLength(1);
+    expect(await record()).toEqual({
+      state: "initialized",
+      provider_sandbox_id: `sbx-${world.count}`,
+    });
+  }, 30_000);
+});

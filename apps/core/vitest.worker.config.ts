@@ -180,6 +180,13 @@ export default defineConfig({
           ...(process.env.DX_TEST_SARVAM_API_KEY
             ? { DX_TEST_SARVAM_API_KEY: process.env.DX_TEST_SARVAM_API_KEY }
             : {}),
+          // Opt-in: Agent37 Orbs created and deleted on a real account.
+          ...(process.env.DX_TEST_AGENT37_API_KEY
+            ? { DX_TEST_AGENT37_API_KEY: process.env.DX_TEST_AGENT37_API_KEY }
+            : {}),
+          ...(process.env.DX_TEST_AGENT37_TEMPLATE
+            ? { DX_TEST_AGENT37_TEMPLATE: process.env.DX_TEST_AGENT37_TEMPLATE }
+            : {}),
         },
       },
     })),

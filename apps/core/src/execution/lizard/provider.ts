@@ -10,6 +10,7 @@ import type {
 } from "../../plugins/execution/provider.js";
 import { assertThreadLifecycleState } from "../activation.js";
 import { DEFAULT_WORKSPACE_INACTIVITY_MS } from "../activity.js";
+import { openClaimedSandbox } from "../claimed-sandbox.js";
 import { orbGuest, orbGuestSandbox } from "../guest/orb-guest-client.js";
 import {
   type DaemonGuestHandle,
@@ -36,7 +37,6 @@ const LIZARD = "lizard";
 const COMMAND_TIMEOUT_MS = 300_000;
 const MIN_INACTIVITY_MS = 60_000;
 const MAX_INACTIVITY_MS = 3_600_000;
-const STATE_RETRIES = 3;
 /** A create or resume waits this long for the sandbox to run commands. */
 const READY_TIMEOUT_MS = 180_000;
 const READY_POLL_MS = 1_000;
@@ -158,20 +158,40 @@ const handleFor = async (
   };
 };
 
+/** Sandbox metadata naming the Thread, and the claim attempt that made it. */
+const THREAD_TAG = "dxThread";
+const ATTEMPT_TAG = "dxAttempt";
+
+/** Creates the Thread's sandbox for claim `attempt`; returns its ID. */
 const createSandbox = async (
   api: LizardApi,
   profile: LizardRunnerProfileConfiguration,
   threadId: string,
+  attempt: string,
 ) => {
   if (profile.snapshot === undefined)
     throw unavailable("no prepared Orb snapshot");
   const created = await api.createSandbox({
     size: profile.size,
     snapshotId: profile.snapshot,
-    metadata: { dxThread: threadId },
+    metadata: { [THREAD_TAG]: threadId, [ATTEMPT_TAG]: attempt },
   });
-  return untilRunning(api, created.id);
+  return created.id;
 };
+
+/** The project's sandboxes made for the Thread. */
+const taggedSandboxes = async (api: LizardApi, threadId: string) =>
+  (await api.sandboxes())
+    .filter(
+      ({ metadata, status }) =>
+        metadata?.[THREAD_TAG] === threadId && !GONE.has(status),
+    )
+    .map(({ id, metadata }) => ({
+      id,
+      ...(metadata?.[ATTEMPT_TAG] === undefined
+        ? {}
+        : { attempt: metadata[ATTEMPT_TAG] }),
+    }));
 
 /**
  * Creates (on the first activation) or reconnects to the Thread's sandbox.
@@ -203,30 +223,32 @@ const openLizardWorkspace = async (
   const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
   const records = executionWorkspaceRecords(db, LIZARD);
   const id = Schema.decodeUnknownSync(ThreadId)(threadId);
-  for (let attempt = 0; attempt < STATE_RETRIES; attempt += 1) {
-    const record = await records.read(id);
-    if (record === null) throw unavailable("no workspace record");
-    if (record.state === "uninitialized") {
-      if (options.existingOnly) throw unavailable("not created");
-      await options.authorize();
-      await records.claim(id);
-      continue;
-    }
-    // Pinned to another provider: never reached through this one.
-    if (record.provider !== LIZARD) throw unavailable("other provider");
-    if (record.state === "provisioning") {
-      if (options.existingOnly) throw unavailable("not created");
-      await options.authorize();
-      const sandbox = await createSandbox(api, profile, id);
-      if (!(await records.initialize(id, record, sandbox.id))) {
-        await api.kill(sandbox.id).catch(() => undefined);
-        continue;
-      }
-      return handleFor(api, db, id, sandbox.id, idleMs);
-    }
-    return reconnect(api, db, records, id, record, idleMs, options);
-  }
-  throw unavailable("contended");
+  const opened = await openClaimedSandbox(
+    records,
+    id,
+    {
+      tagged: (thread) => taggedSandboxes(api, thread),
+      create: (thread, attempt) => createSandbox(api, profile, thread, attempt),
+      remove: (sandboxId) => api.kill(sandboxId),
+      // A refusal (limits, size, payment) makes nothing.
+      refused: (cause) =>
+        cause instanceof LizardWorkspaceUnavailable ||
+        (cause instanceof LizardApiError &&
+          cause.status >= 400 &&
+          cause.status < 500 &&
+          cause.status !== 408),
+    },
+    {
+      provider: LIZARD,
+      existingOnly: options.existingOnly,
+      authorize: options.authorize,
+      unavailable,
+    },
+  );
+  if (opened.kind === "recorded")
+    return reconnect(api, db, records, id, opened.record, idleMs, options);
+  await untilRunning(api, opened.sandboxId);
+  return handleFor(api, db, id, opened.sandboxId, idleMs);
 };
 
 const reconnect = async (

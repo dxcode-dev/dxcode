@@ -3,6 +3,11 @@ import {
   type ThreadQueuedMessage,
   withMessageAuthor,
 } from "@dx/api";
+import {
+  deriveTranscriptViewModel,
+  INBOUND_MESSAGE_PREFIX,
+  type TranscriptViewModel,
+} from "@dx/transcript";
 import type {
   FlueConversationFinalOutput,
   FlueConversationMessage,
@@ -14,11 +19,6 @@ import {
   withoutWithdrawn,
   withQueuedMessages,
 } from "./sent-messages.js";
-import { INBOUND_MESSAGE_PREFIX } from "./transcript-progress.js";
-import {
-  deriveTranscriptViewModel,
-  type TranscriptViewModel,
-} from "./transcript-view-model.js";
 
 /**
  * What a transcript shows, from a Flue agent snapshot and the dx data beside

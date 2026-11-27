@@ -1,4 +1,5 @@
 import { createAgentRouter } from "@flue/runtime/routing";
+import { createFlueClient, type FlueClient } from "@flue/sdk";
 import { Hono } from "hono";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { answerReadsWhileFirstMessagePending } from "../threads/initial-dispatch-delivery.js";
@@ -18,6 +19,19 @@ const pendingReads = answerReadsWhileFirstMessagePending(flue);
 dxAgentRoutes.use("/:threadId", pendingReads);
 dxAgentRoutes.use("/:threadId/:subpath{.+}", pendingReads);
 dxAgentRoutes.route("/", flue);
+
+/**
+ * A Flue SDK client for one Thread's conversation that reaches DxAgent's
+ * routes inside this Worker, without dx's admission: the caller authorized
+ * the Thread first. Core reads history pages and follows the live stream
+ * with it, as a browser does through `/v1/agents/dx`.
+ */
+export const threadFlueClient = (threadId: string, env: Bindings): FlueClient =>
+  createFlueClient({
+    url: `https://flue.internal/${encodeURIComponent(threadId)}`,
+    fetch: async (input, init) =>
+      flue.request(new Request(input, init), undefined, env),
+  });
 
 /**
  * Ends a Thread's running turn and every message queued behind it, as Stop

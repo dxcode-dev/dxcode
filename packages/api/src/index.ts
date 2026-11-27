@@ -230,5 +230,6 @@ export * from "./threads/thread-settlement-provenance.js";
 export * from "./threads/thread-sharing.js";
 export * from "./threads/thread-usage.js";
 export * from "./threads/thread-usage-endpoints.js";
+export * from "./threads/transcript-items.js";
 export * from "./threads/update-thread.js";
 export * from "./workload-identity.js";

@@ -10,6 +10,10 @@ import type {
 } from "../../plugins/execution/provider.js";
 import { assertThreadLifecycleState } from "../activation.js";
 import { DEFAULT_WORKSPACE_INACTIVITY_MS } from "../activity.js";
+import {
+  openClaimedSandbox,
+  removeStraySandboxes,
+} from "../claimed-sandbox.js";
 import { orbGuest, orbGuestSandbox } from "../guest/orb-guest-client.js";
 import {
   type DaemonGuestHandle,
@@ -36,7 +40,6 @@ const AGENT37 = "agent37";
 const COMMAND_TIMEOUT_MS = 300_000;
 const MIN_INACTIVITY_MS = 60_000;
 const MAX_INACTIVITY_MS = 3_600_000;
-const STATE_RETRIES = 3;
 /** A create, start, or wake waits this long for the instance to run. */
 const READY_TIMEOUT_MS = 180_000;
 const READY_POLL_MS = 1_000;
@@ -194,10 +197,16 @@ const handleFor = async (
   };
 };
 
+/** Instance metadata naming the Thread, and the claim attempt that made it. */
+const THREAD_TAG = "dxThread";
+const ATTEMPT_TAG = "dxAttempt";
+
+/** Creates the Thread's instance for claim `attempt`; returns its ID. */
 const createInstance = async (
   api: Agent37Api,
   profile: Agent37RunnerProfileConfiguration,
   threadId: string,
+  attempt: string,
 ) => {
   if (profile.template === undefined)
     throw unavailable("no prepared Orb template");
@@ -211,13 +220,27 @@ const createInstance = async (
       },
       name: `dx ${threadId}`,
       mountPath: AGENT37_MOUNT_PATH,
-      metadata: { dxThread: threadId },
+      metadata: { [THREAD_TAG]: threadId, [ATTEMPT_TAG]: attempt },
     })
     .catch((cause: unknown) => {
       throw refused(cause);
     });
-  return untilRunning(api, created.id);
+  return created.id;
 };
+
+/** The account's instances made for the Thread. */
+const taggedInstances = async (api: Agent37Api, threadId: string) =>
+  (await api.instances())
+    .filter(
+      ({ metadata, status }) =>
+        metadata?.[THREAD_TAG] === threadId && !GONE.has(status),
+    )
+    .map(({ id, metadata }) => ({
+      id,
+      ...(metadata?.[ATTEMPT_TAG] === undefined
+        ? {}
+        : { attempt: metadata[ATTEMPT_TAG] }),
+    }));
 
 /**
  * Creates (on the first activation) or reconnects to the Thread's
@@ -249,30 +272,33 @@ const openAgent37Workspace = async (
   const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
   const records = executionWorkspaceRecords(db, AGENT37);
   const id = Schema.decodeUnknownSync(ThreadId)(threadId);
-  for (let attempt = 0; attempt < STATE_RETRIES; attempt += 1) {
-    const record = await records.read(id);
-    if (record === null) throw unavailable("no workspace record");
-    if (record.state === "uninitialized") {
-      if (options.existingOnly) throw unavailable("not created");
-      await options.authorize();
-      await records.claim(id);
-      continue;
-    }
-    // Pinned to another provider: never reached through this one.
-    if (record.provider !== AGENT37) throw unavailable("other provider");
-    if (record.state === "provisioning") {
-      if (options.existingOnly) throw unavailable("not created");
-      await options.authorize();
-      const instance = await createInstance(api, profile, id);
-      if (!(await records.initialize(id, record, instance.id))) {
-        await api.deleteInstance(instance.id).catch(() => undefined);
-        continue;
-      }
-      return handleFor(api, db, id, instance.id, idleMs);
-    }
-    return reconnect(api, db, records, id, record, idleMs, options);
-  }
-  throw unavailable("contended");
+  const opened = await openClaimedSandbox(
+    records,
+    id,
+    {
+      tagged: (thread) => taggedInstances(api, thread),
+      create: (thread, attempt) =>
+        createInstance(api, profile, thread, attempt),
+      remove: (instanceId) => api.deleteInstance(instanceId),
+      // A refusal (no balance, no capacity, a bad template) makes nothing.
+      refused: (cause) =>
+        cause instanceof Agent37WorkspaceUnavailable ||
+        (cause instanceof Agent37ApiError &&
+          cause.status >= 400 &&
+          cause.status < 500 &&
+          cause.status !== 408),
+    },
+    {
+      provider: AGENT37,
+      existingOnly: options.existingOnly,
+      authorize: options.authorize,
+      unavailable,
+    },
+  );
+  if (opened.kind === "recorded")
+    return reconnect(api, db, records, id, opened.record, idleMs, options);
+  await untilRunning(api, opened.sandboxId);
+  return handleFor(api, db, id, opened.sandboxId, idleMs);
 };
 
 const reconnect = async (
@@ -336,7 +362,26 @@ export const pauseIdleAgent37Instance = async (
 ) => {
   const apiKey = (await idleOrbCredentials(bindings, threadId))?.apiKey;
   if (apiKey === undefined) throw unavailable("no Agent37 account");
-  await sleepAgent37Instance(agent37Api(apiKey, send), instanceId);
+  const api = agent37Api(apiKey, send);
+  await sleepAgent37Instance(api, instanceId);
+  // An instance an interrupted create left behind for this Thread, or one
+  // from before creates were claimed, is never slept here: it has no idle
+  // deadline. Delete it while its Thread's own instance is recorded.
+  const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
+  const record = await executionWorkspaceRecords(db, AGENT37).read(threadId);
+  if (
+    record?.state === "initialized" &&
+    record.providerSandboxId === instanceId
+  )
+    await removeStraySandboxes(
+      {
+        tagged: (thread) => taggedInstances(api, thread),
+        remove: (id) => api.deleteInstance(id),
+      },
+      AGENT37,
+      threadId,
+      instanceId,
+    );
 };
 
 /**
