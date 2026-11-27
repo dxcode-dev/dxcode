@@ -19,6 +19,13 @@ const token = {
   createdAt: "2026-08-23T12:00:00.000Z",
 } as const;
 
+// The token cache holds InfiniteData of pages; tests read and seed it whole.
+const pages = (items: ReadonlyArray<unknown>) =>
+  ({
+    pages: [{ items }],
+    pageParams: [undefined],
+  }) as never;
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("personal security query contracts", () => {
@@ -33,7 +40,7 @@ describe("personal security query contracts", () => {
       ),
     );
     const queryClient = new QueryClient();
-    queryClient.setQueryData(securityKeys.tokens(userId), []);
+    queryClient.setQueryData(securityKeys.tokens(userId), pages([]));
     let revealed: unknown;
     const mutation = queryClient.getMutationCache().build(
       queryClient,
@@ -54,9 +61,9 @@ describe("personal security query contracts", () => {
     expect(
       JSON.stringify(queryClient.getQueryData(securityKeys.tokens(userId))),
     ).not.toContain(plaintext);
-    expect(queryClient.getQueryData(securityKeys.tokens(userId))).toEqual([
-      result,
-    ]);
+    expect(queryClient.getQueryData(securityKeys.tokens(userId))).toEqual(
+      pages([result]),
+    );
   });
 
   it("cancels a stale token read before caching created metadata", async () => {
@@ -81,8 +88,8 @@ describe("personal security query contracts", () => {
     );
     const queryClient = new QueryClient();
     const query = personalApiTokensQueryOptions(userId);
-    queryClient.setQueryData(query.queryKey, []);
-    const stale = queryClient.fetchQuery({ ...query, staleTime: 0 });
+    queryClient.setQueryData(query.queryKey, pages([]));
+    const stale = queryClient.fetchInfiniteQuery({ ...query, staleTime: 0 });
     void stale.catch(() => undefined);
     await vi.waitFor(() => expect(readSignal).toBeDefined());
     const mutation = queryClient.getMutationCache().build(
@@ -96,7 +103,7 @@ describe("personal security query contracts", () => {
     });
 
     expect(readSignal?.aborted).toBe(true);
-    expect(queryClient.getQueryData(query.queryKey)).toEqual([metadata]);
+    expect(queryClient.getQueryData(query.queryKey)).toEqual(pages([metadata]));
   });
 
   it("leaves the in-flight token read to complete when caching a token while the tokens cache is undefined", async () => {
@@ -118,7 +125,7 @@ describe("personal security query contracts", () => {
     );
     const queryClient = new QueryClient();
     const query = personalApiTokensQueryOptions(userId);
-    const stale = queryClient.fetchQuery({ ...query, staleTime: 0 });
+    const stale = queryClient.fetchInfiniteQuery({ ...query, staleTime: 0 });
     void stale.catch(() => undefined);
     await vi.waitFor(() => expect(readSignal).toBeDefined());
     const mutation = queryClient.getMutationCache().build(
@@ -137,11 +144,11 @@ describe("personal security query contracts", () => {
     resolveRead(Response.json({ status: "success", data: { items: [] } }));
     const data = await stale;
 
-    expect(data).toEqual([]);
-    expect(queryClient.getQueryData(query.queryKey)).toEqual([]);
-    expect(queryClient.getQueryData(query.queryKey)).not.toContainEqual(
-      metadata,
-    );
+    expect(data).toEqual(pages([]));
+    expect(queryClient.getQueryData(query.queryKey)).toEqual(pages([]));
+    expect(
+      JSON.stringify(queryClient.getQueryData(query.queryKey)),
+    ).not.toContain(metadata.id);
   });
 
   it("replaces rotated token metadata without retaining either plaintext or the revoked ID", async () => {
@@ -156,7 +163,7 @@ describe("personal security query contracts", () => {
       ),
     );
     const queryClient = new QueryClient();
-    queryClient.setQueryData(securityKeys.tokens(userId), [token]);
+    queryClient.setQueryData(securityKeys.tokens(userId), pages([token]));
     let revealed: unknown;
     const mutation = queryClient.getMutationCache().build(
       queryClient,
@@ -174,7 +181,7 @@ describe("personal security query contracts", () => {
     expect(JSON.stringify(revealed)).toContain(plaintext);
     expect(JSON.stringify(mutation.state.data)).not.toContain(plaintext);
     expect(JSON.stringify(cached)).not.toContain(plaintext);
-    expect(cached).toMatchObject([{ id: replacement.id }]);
-    expect(cached).not.toMatchObject([{ id: token.id }]);
+    expect(cached).toMatchObject(pages([{ id: replacement.id }]));
+    expect(cached).not.toMatchObject(pages([{ id: token.id }]));
   });
 });

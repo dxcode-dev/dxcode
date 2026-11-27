@@ -8,6 +8,7 @@ import {
   CreatePersonalApiTokenEndpoint,
   ListBrowserSessionsEndpoint,
   ListPersonalApiTokensEndpoint,
+  RevokeAllPersonalApiTokensEndpoint,
   RevokeBrowserSessionEndpoint,
   RevokeOtherBrowserSessionsEndpoint,
   RevokePersonalApiTokenEndpoint,
@@ -15,10 +16,10 @@ import {
 } from "@dx/api";
 import type { BrowserSessionId, PersonalApiTokenId, UserId } from "@dx/domain";
 import {
+  type InfiniteData,
   infiniteQueryOptions,
   mutationOptions,
   type QueryClient,
-  queryOptions,
 } from "@tanstack/react-query";
 import { ApiError, dxClient } from "../../../shared/api/client.js";
 
@@ -27,11 +28,32 @@ interface BrowserSessionPage {
   readonly nextOffset?: number;
 }
 
+interface PersonalApiTokenPage {
+  readonly items: ReadonlyArray<PersonalApiTokenData>;
+  readonly nextOffset?: number;
+}
+
+type PersonalApiTokenPages = InfiniteData<
+  PersonalApiTokenPage,
+  number | undefined
+>;
+
 const listPersonalApiTokens = async (
+  offset?: number,
   signal?: AbortSignal,
-): Promise<ReadonlyArray<PersonalApiTokenData>> =>
-  (await dxClient.call(ListPersonalApiTokensEndpoint, {}, { signal })).data
-    .items;
+): Promise<PersonalApiTokenPage> =>
+  (
+    await dxClient.call(
+      ListPersonalApiTokensEndpoint,
+      {
+        query: {
+          limit: 25,
+          ...(offset === undefined ? {} : { offset }),
+        },
+      },
+      { signal },
+    )
+  ).data;
 
 const createPersonalApiToken = async (
   input: CreatePersonalApiTokenRequest,
@@ -53,6 +75,10 @@ const revokePersonalApiToken = async (
 ): Promise<PersonalApiTokenId> =>
   (await dxClient.call(RevokePersonalApiTokenEndpoint, { params: { tokenId } }))
     .data.revokedTokenId;
+
+const revokeAllPersonalApiTokens = async (): Promise<number> =>
+  (await dxClient.call(RevokeAllPersonalApiTokensEndpoint, { body: {} })).data
+    .revokedCount;
 
 const listBrowserSessions = async (
   offset?: number,
@@ -99,9 +125,12 @@ const securityFreshness = {
 };
 
 export const personalApiTokensQueryOptions = (userId: UserId) =>
-  queryOptions({
+  infiniteQueryOptions({
     queryKey: securityKeys.tokens(userId),
-    queryFn: ({ signal }) => listPersonalApiTokens(signal),
+    queryFn: ({ pageParam, signal }) =>
+      listPersonalApiTokens(pageParam, signal),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (page) => page.nextOffset,
     ...securityFreshness,
   });
 
@@ -129,19 +158,28 @@ const cacheToken = (
   replacedTokenId?: PersonalApiTokenId,
 ) => {
   const queryKey = securityKeys.tokens(userId);
+  const matches = ({ id }: PersonalApiTokenData) =>
+    id === token.id || id === replacedTokenId;
   const applyProjection = () =>
-    queryClient.setQueryData<ReadonlyArray<PersonalApiTokenData>>(
-      queryKey,
-      (current) =>
-        current === undefined
-          ? current
-          : current.some(({ id }) => id === token.id || id === replacedTokenId)
-            ? current.map((candidate) =>
-                candidate.id === token.id || candidate.id === replacedTokenId
-                  ? token
-                  : candidate,
-              )
-            : [token, ...current],
+    queryClient.setQueryData<PersonalApiTokenPages>(queryKey, (current) =>
+      current === undefined
+        ? current
+        : current.pages.some((page) => page.items.some(matches))
+          ? {
+              ...current,
+              pages: current.pages.map((page) => ({
+                ...page,
+                items: page.items.map((candidate) =>
+                  matches(candidate) ? token : candidate,
+                ),
+              })),
+            }
+          : {
+              ...current,
+              pages: current.pages.map((page, index) =>
+                index === 0 ? { ...page, items: [token, ...page.items] } : page,
+              ),
+            },
     );
   if (queryClient.getQueryData(queryKey) === undefined) {
     return applyProjection();
@@ -196,11 +234,34 @@ export const revokePersonalApiTokenMutationOptions = (
         queryKey: securityKeys.tokens(userId),
         exact: true,
       });
-      queryClient.setQueryData<ReadonlyArray<PersonalApiTokenData>>(
+      queryClient.setQueryData<PersonalApiTokenPages>(
         securityKeys.tokens(userId),
-        (current) => current?.filter(({ id }) => id !== tokenId),
+        (current) =>
+          current === undefined
+            ? current
+            : {
+                ...current,
+                pages: current.pages.map((page) => ({
+                  ...page,
+                  items: page.items.filter(({ id }) => id !== tokenId),
+                })),
+              },
       );
     },
+  });
+
+export const revokeAllPersonalApiTokensMutationOptions = (
+  queryClient: QueryClient,
+  userId: UserId,
+) =>
+  mutationOptions({
+    mutationKey: [...securityKeys.tokens(userId), "revoke-all"] as const,
+    mutationFn: revokeAllPersonalApiTokens,
+    onSuccess: () =>
+      queryClient.resetQueries({
+        queryKey: securityKeys.tokens(userId),
+        exact: true,
+      }),
   });
 
 export const revokeBrowserSessionMutationOptions = (

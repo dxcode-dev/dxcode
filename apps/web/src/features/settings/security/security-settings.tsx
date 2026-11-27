@@ -9,7 +9,6 @@ import { type PersonalApiTokenScope, personalApiTokenScopes } from "@dx/domain";
 import {
   useInfiniteQuery,
   useMutation,
-  useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
 import { DateTime } from "effect";
@@ -45,6 +44,7 @@ import {
   browserSessionsQueryOptions,
   createPersonalApiTokenMutationOptions,
   personalApiTokensQueryOptions,
+  revokeAllPersonalApiTokensMutationOptions,
   revokeBrowserSessionMutationOptions,
   revokeOtherBrowserSessionsMutationOptions,
   revokePersonalApiTokenMutationOptions,
@@ -327,7 +327,8 @@ function TokenRow({
 function TokenList() {
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
-  const tokens = useQuery(personalApiTokensQueryOptions(identity.id));
+  const tokens = useInfiniteQuery(personalApiTokensQueryOptions(identity.id));
+  const items = tokens.data?.pages.flatMap((page) => page.items) ?? [];
   const [createOpen, setCreateOpen] = React.useState(false);
   const [secret, setSecret] = React.useState<PersonalApiTokenSecretData>();
   const rotateToken = useMutation(
@@ -336,12 +337,19 @@ function TokenList() {
   const revokeToken = useMutation(
     revokePersonalApiTokenMutationOptions(queryClient, identity.id),
   );
-  const [action, setAction] = React.useState<{
-    readonly kind: "rotate" | "revoke";
-    readonly token: PersonalApiTokenData;
-  }>();
+  const revokeAll = useMutation(
+    revokeAllPersonalApiTokensMutationOptions(queryClient, identity.id),
+  );
+  const [action, setAction] = React.useState<
+    | {
+        readonly kind: "rotate" | "revoke";
+        readonly token: PersonalApiTokenData;
+      }
+    | { readonly kind: "revoke-all" }
+  >();
   const [error, setError] = React.useState<string>();
-  const busy = rotateToken.isPending || revokeToken.isPending;
+  const busy =
+    rotateToken.isPending || revokeToken.isPending || revokeAll.isPending;
   const closeAction = () => {
     setError(undefined);
     setAction(undefined);
@@ -350,7 +358,9 @@ function TokenList() {
     if (action === undefined || busy) return;
     setError(undefined);
     const outcome = await settle(async () => {
-      if (action.kind === "rotate") {
+      if (action.kind === "revoke-all") {
+        await revokeAll.mutateAsync();
+      } else if (action.kind === "rotate") {
         await rotateToken.mutateAsync(action.token.id);
       } else {
         await revokeToken.mutateAsync(action.token.id);
@@ -370,9 +380,24 @@ function TokenList() {
       title="Access tokens"
       description="Scoped tokens for scripts and tools that call the dx API."
       actions={
-        <Button size="xs" variant="outline" onClick={() => setCreateOpen(true)}>
-          <Plus aria-hidden="true" /> New token
-        </Button>
+        <div className="security-row-actions">
+          {items.length > 0 ? (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => setAction({ kind: "revoke-all" })}
+            >
+              Revoke all tokens
+            </Button>
+          ) : null}
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus aria-hidden="true" /> New token
+          </Button>
+        </div>
       }
     >
       {tokens.data !== undefined && tokens.isRefetchError ? (
@@ -387,16 +412,42 @@ function TokenList() {
           error={tokens.error}
           retry={() => void tokens.refetch()}
         />
-      ) : tokens.data.length === 0 ? (
+      ) : items.length === 0 ? (
         <p className="security-empty">No access tokens.</p>
       ) : (
-        tokens.data.map((token) => (
-          <TokenRow
-            key={token.id}
-            token={token}
-            act={(kind) => setAction({ kind, token })}
-          />
-        ))
+        <>
+          {items.map((token) => (
+            <TokenRow
+              key={token.id}
+              token={token}
+              act={(kind) => setAction({ kind, token })}
+            />
+          ))}
+          {tokens.isFetchNextPageError ? (
+            <p className="security-error" role="alert">
+              {securityErrorMessage(
+                tokens.error,
+                "More tokens could not be loaded.",
+              )}
+            </p>
+          ) : null}
+          {tokens.hasNextPage ? (
+            <div className="security-load-more">
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={tokens.isFetchingNextPage}
+                onClick={() => void tokens.fetchNextPage()}
+              >
+                {tokens.isFetchingNextPage
+                  ? "Loading…"
+                  : tokens.isFetchNextPageError
+                    ? "Retry"
+                    : "Load more"}
+              </Button>
+            </div>
+          ) : null}
+        </>
       )}
       <CreateTokenDialog
         open={createOpen}
@@ -411,13 +462,16 @@ function TokenList() {
         {action === undefined ? null : (
           <DialogContent size="md" className="security-dialog">
             <DialogTitle>
-              {action.kind === "rotate" ? "Rotate" : "Revoke"}{" "}
-              {action.token.name}?
+              {action.kind === "revoke-all"
+                ? "Revoke all tokens?"
+                : `${action.kind === "rotate" ? "Rotate" : "Revoke"} ${action.token.name}?`}
             </DialogTitle>
             <DialogDescription>
-              {action.kind === "rotate"
-                ? "The current token stops working now. dx shows its replacement once."
-                : "This token stops working now and cannot be restored."}
+              {action.kind === "revoke-all"
+                ? "Every access token stops working now and cannot be restored. Scripts and tools that use them lose access."
+                : action.kind === "rotate"
+                  ? "The current token stops working now. dx shows its replacement once."
+                  : "This token stops working now and cannot be restored."}
             </DialogDescription>
             {error === undefined ? null : (
               <p className="security-error" role="alert">
@@ -430,15 +484,17 @@ function TokenList() {
               </Button>
               <Button
                 size="sm"
-                variant={action.kind === "revoke" ? "destructive" : "default"}
+                variant={action.kind === "rotate" ? "default" : "destructive"}
                 disabled={busy}
                 onClick={() => void mutate()}
               >
                 {busy
                   ? "Working…"
-                  : action.kind === "rotate"
-                    ? "Rotate token"
-                    : "Revoke token"}
+                  : action.kind === "revoke-all"
+                    ? "Revoke all tokens"
+                    : action.kind === "rotate"
+                      ? "Rotate token"
+                      : "Revoke token"}
               </Button>
             </div>
           </DialogContent>

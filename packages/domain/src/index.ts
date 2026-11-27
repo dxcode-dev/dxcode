@@ -554,6 +554,7 @@ export {
   BrowserSession,
   BrowserSessionId,
   normalizePersonalApiTokenName,
+  PERSONAL_API_TOKEN_LIMIT,
   PersonalApiToken,
   PersonalApiTokenId,
   PersonalApiTokenName,

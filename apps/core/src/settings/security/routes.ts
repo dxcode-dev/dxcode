@@ -7,13 +7,16 @@ import {
   GetPersonalSecurityResponseSchema,
   ListBrowserSessionsQuerySchema,
   ListBrowserSessionsResponseSchema,
+  ListPersonalApiTokensQuerySchema,
   ListPersonalApiTokensResponseSchema,
+  PersonalApiTokenLimitReachedResponseSchema,
   PersonalApiTokenNotFoundResponseSchema,
   PersonalApiTokenParamsSchema,
   PersonalSecurityBrowserSessionRequiredResponseSchema,
   PersonalSecurityInvalidRequestResponseSchema,
   PersonalSecurityPersistenceUnavailableResponseSchema,
   PersonalSecurityScopeForbiddenResponseSchema,
+  RevokeAllPersonalApiTokensResponseSchema,
   RevokeBrowserSessionResponseSchema,
   RevokeOtherBrowserSessionsResponseSchema,
   RevokePersonalApiTokenResponseSchema,
@@ -22,6 +25,7 @@ import {
 } from "@dx/api";
 import {
   normalizePersonalApiTokenName,
+  PERSONAL_API_TOKEN_LIMIT,
   PersistenceUnavailable,
   PersonalApiToken,
   type PersonalApiTokenId,
@@ -75,6 +79,11 @@ class InvalidPersonalSecurityRequest extends Schema.TaggedError<InvalidPersonalS
 
 class PersonalApiTokenNotFound extends Schema.TaggedError<PersonalApiTokenNotFound>()(
   "PersonalApiTokenNotFound",
+  {},
+) {}
+
+class PersonalApiTokenLimitReached extends Schema.TaggedError<PersonalApiTokenLimitReached>()(
+  "PersonalApiTokenLimitReached",
   {},
 ) {}
 
@@ -163,6 +172,15 @@ const failureResponse = (context: Context<AppEnv>, failure: unknown) => {
       404,
       "PERSONAL_API_TOKEN_NOT_FOUND",
       "Personal API token not found.",
+    );
+  }
+  if (failure instanceof PersonalApiTokenLimitReached) {
+    return securityError(
+      context,
+      PersonalApiTokenLimitReachedResponseSchema,
+      409,
+      "PERSONAL_API_TOKEN_LIMIT_REACHED",
+      "You have 50 active tokens. Revoke one to create another.",
     );
   }
   if (failure instanceof BrowserSessionNotFound) {
@@ -331,6 +349,39 @@ const createToken = (
     };
   });
 
+/** The person's active personal API tokens, read straight from D1. */
+const activeTokenCount = (db: D1Database, principal: Principal) =>
+  Effect.tryPromise({
+    try: async () =>
+      (await db
+        .prepare(
+          `SELECT count(*) AS count FROM apikey
+            WHERE configId = ? AND referenceId = ?
+              AND (enabled IS NULL OR enabled = 1)`,
+        )
+        .bind(userKeyConfigId, principal.userId)
+        .first<number>("count")) ?? 0,
+    catch: () =>
+      new PersistenceUnavailable({ operation: "count personal API tokens" }),
+  });
+
+/** Deletes every personal API token of the person; daemon keys stay. */
+const deleteAllTokens = (db: D1Database, principal: Principal) =>
+  Effect.tryPromise({
+    try: async () =>
+      (
+        await db
+          .prepare(
+            `DELETE FROM apikey WHERE configId = ? AND referenceId = ?
+             RETURNING id, permissions`,
+          )
+          .bind(userKeyConfigId, principal.userId)
+          .all<{ id: string; permissions: string | null }>()
+      ).results,
+    catch: () =>
+      new PersistenceUnavailable({ operation: "revoke personal API tokens" }),
+  });
+
 const tokenNotFound = (error: unknown) =>
   error instanceof APIError && error.status === "NOT_FOUND";
 
@@ -393,23 +444,39 @@ personalSecurityRoutes.get("/", async (context) => {
 
 personalSecurityRoutes.get("/tokens", async (context) => {
   const operation = Effect.gen(function* () {
+    const query = yield* decode(ListPersonalApiTokensQuerySchema, {
+      limit: context.req.query("limit"),
+      offset: context.req.query("offset"),
+    });
     const { db, auth } = yield* dependencies(context);
     yield* authorizePersonal(db, context.get("principal"));
+    const limit = query.limit ?? 25;
+    const offset = query.offset ?? 0;
     const result = yield* provider(() =>
       auth.api.listApiKeys({
         headers: context.req.raw.headers,
         query: {
           configId: userKeyConfigId,
-          limit: 100,
+          limit,
+          offset,
           sortBy: "createdAt",
           sortDirection: "desc",
         },
       }),
     );
     const items = yield* Effect.all(result.apiKeys.map(tokenData));
+    const next = offset + items.length;
     return yield* Schema.encodeUnknownEffect(
       ListPersonalApiTokensResponseSchema,
-    )({ status: "success", data: { items } });
+    )({
+      status: "success",
+      data: {
+        items,
+        ...(items.length > 0 && next < result.total
+          ? { nextOffset: next }
+          : {}),
+      },
+    });
   });
   return run(context, operation);
 });
@@ -425,12 +492,21 @@ personalSecurityRoutes.post("/tokens", async (context) => {
     const { db, auth } = yield* dependencies(context);
     const principal = context.get("principal");
     yield* authorizePersonal(db, principal);
+    if ((yield* activeTokenCount(db, principal)) >= PERSONAL_API_TOKEN_LIMIT) {
+      return yield* new PersonalApiTokenLimitReached();
+    }
     const created = yield* createToken(
       auth,
       principal,
       input.name,
       input.scopes,
     );
+    // Two creates racing past the check above both find the overflow
+    // here; the new token goes, so the cap holds.
+    if ((yield* activeTokenCount(db, principal)) > PERSONAL_API_TOKEN_LIMIT) {
+      yield* deleteOwnedToken(auth, context.req.raw.headers, created.token.id);
+      return yield* new PersonalApiTokenLimitReached();
+    }
     yield* audit(db, {
       action: "personal_api_token.create",
       outcome: "success",
@@ -508,6 +584,37 @@ personalSecurityRoutes.delete("/tokens/:tokenId", async (context) => {
     return yield* Schema.encodeUnknownEffect(
       RevokePersonalApiTokenResponseSchema,
     )({ status: "success", data: { revokedTokenId: tokenId } });
+  });
+  return run(context, operation);
+});
+
+personalSecurityRoutes.post("/tokens/revoke-all", async (context) => {
+  const operation = Effect.gen(function* () {
+    yield* decodeJsonBody(
+      context.req,
+      Schema.Struct({}),
+      () => new InvalidPersonalSecurityRequest({ fieldErrors: [] }),
+    );
+    const { db } = yield* dependencies(context);
+    const principal = context.get("principal");
+    yield* authorizePersonal(db, principal);
+    const revoked = yield* deleteAllTokens(db, principal);
+    for (const token of revoked) {
+      const scopes = Schema.decodeUnknownOption(PersonalApiTokenScopes)(
+        (JSON.parse(token.permissions ?? "{}") as { readonly dx?: unknown }).dx,
+      );
+      yield* audit(db, {
+        action: "personal_api_token.revoke",
+        outcome: "success",
+        principal,
+        requestId: context.get("requestId"),
+        targetTokenId: token.id as PersonalApiTokenId,
+        ...(Option.isSome(scopes) ? { tokenScopes: scopes.value } : {}),
+      });
+    }
+    return yield* Schema.encodeUnknownEffect(
+      RevokeAllPersonalApiTokensResponseSchema,
+    )({ status: "success", data: { revokedCount: revoked.length } });
   });
   return run(context, operation);
 });

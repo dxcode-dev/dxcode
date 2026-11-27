@@ -42,8 +42,23 @@ export const GetPersonalSecurityResponseSchema = successResponse(
   }),
 );
 
+const SecurityPageOffsetQuerySchema = Schema.String.check(
+  Schema.isPattern(/^[0-9]+$/),
+).pipe(
+  Schema.decodeTo(Schema.FiniteFromString),
+  Schema.decodeTo(SecurityPageOffset),
+);
+
+export const ListPersonalApiTokensQuerySchema = Schema.Struct({
+  limit: Schema.optional(PageLimitQuerySchema),
+  offset: Schema.optional(SecurityPageOffsetQuerySchema),
+});
+
 export const ListPersonalApiTokensResponseSchema = successResponse(
-  Schema.Struct({ items: Schema.Array(PersonalApiTokenDataSchema) }),
+  Schema.Struct({
+    items: Schema.Array(PersonalApiTokenDataSchema),
+    nextOffset: Schema.optional(SecurityPageOffset),
+  }),
 );
 
 export const CreatePersonalApiTokenRequestSchema = Schema.Struct({
@@ -72,11 +87,10 @@ export const RevokePersonalApiTokenResponseSchema = successResponse(
   Schema.Struct({ revokedTokenId: PersonalApiTokenId }),
 );
 
-const SecurityPageOffsetQuerySchema = Schema.String.check(
-  Schema.isPattern(/^[0-9]+$/),
-).pipe(
-  Schema.decodeTo(Schema.FiniteFromString),
-  Schema.decodeTo(SecurityPageOffset),
+export const RevokeAllPersonalApiTokensResponseSchema = successResponse(
+  Schema.Struct({
+    revokedCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  }),
 );
 
 export const ListBrowserSessionsQuerySchema = Schema.Struct({
@@ -129,6 +143,11 @@ export const PersonalApiTokenNotFoundResponseSchema = errorResponse(
   "Personal API token not found.",
 );
 
+export const PersonalApiTokenLimitReachedResponseSchema = errorResponse(
+  "PERSONAL_API_TOKEN_LIMIT_REACHED",
+  "You have 50 active tokens. Revoke one to create another.",
+);
+
 export const BrowserSessionNotFoundResponseSchema = errorResponse(
   "BROWSER_SESSION_NOT_FOUND",
   "Browser session not found.",
@@ -151,6 +170,7 @@ export const PersonalSecurityErrorResponseSchema = Schema.Union([
   PersonalSecurityBrowserSessionRequiredResponseSchema,
   PersonalApiTokenNotFoundResponseSchema,
   BrowserSessionNotFoundResponseSchema,
+  PersonalApiTokenLimitReachedResponseSchema,
   CurrentBrowserSessionProtectedResponseSchema,
   PersonalSecurityPersistenceUnavailableResponseSchema,
 ]);
@@ -163,6 +183,8 @@ export type PersonalApiTokenSecretData =
   typeof PersonalApiTokenSecretDataSchema.Type;
 export type CreatePersonalApiTokenRequest =
   typeof CreatePersonalApiTokenRequestSchema.Type;
+export type PersonalApiTokenPageData =
+  typeof ListPersonalApiTokensResponseSchema.Type.data;
 export type BrowserSessionPageData =
   typeof ListBrowserSessionsResponseSchema.Type.data;
 
@@ -173,6 +195,7 @@ const personalSecurityRefusals = [
   { status: 403, schema: PersonalSecurityBrowserSessionRequiredResponseSchema },
   { status: 404, schema: PersonalApiTokenNotFoundResponseSchema },
   { status: 404, schema: BrowserSessionNotFoundResponseSchema },
+  { status: 409, schema: PersonalApiTokenLimitReachedResponseSchema },
   { status: 409, schema: CurrentBrowserSessionProtectedResponseSchema },
   { status: 503, schema: PersonalSecurityPersistenceUnavailableResponseSchema },
 ];
@@ -191,6 +214,7 @@ export const ListPersonalApiTokensEndpoint = defineEndpoint({
   summary: "List personal API tokens",
   method: "GET",
   path: "/v1/settings/personal/security/tokens",
+  query: ListPersonalApiTokensQuerySchema,
   success: ListPersonalApiTokensResponseSchema,
   refusals: personalSecurityRefusals,
 });
@@ -224,6 +248,16 @@ export const RevokePersonalApiTokenEndpoint = defineEndpoint({
   path: "/v1/settings/personal/security/tokens/:tokenId",
   params: PersonalApiTokenParamsSchema,
   success: RevokePersonalApiTokenResponseSchema,
+  refusals: personalSecurityRefusals,
+});
+
+export const RevokeAllPersonalApiTokensEndpoint = defineEndpoint({
+  id: "settings.personalSecurity.tokens.revokeAll",
+  summary: "Revoke every personal API token",
+  method: "POST",
+  path: "/v1/settings/personal/security/tokens/revoke-all",
+  body: Schema.Struct({}),
+  success: RevokeAllPersonalApiTokensResponseSchema,
   refusals: personalSecurityRefusals,
 });
 

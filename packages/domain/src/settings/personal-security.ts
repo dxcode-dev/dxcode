@@ -85,6 +85,9 @@ export const BrowserSession = Schema.Struct({
 
 export type BrowserSession = typeof BrowserSession.Type;
 
+/** Active personal API tokens one person may hold at once (#2590). */
+export const PERSONAL_API_TOKEN_LIMIT = 50;
+
 export const SecurityPageOffset = Schema.Int.check(
   Schema.isBetween({ minimum: 0, maximum: 10_000 }),
 );
