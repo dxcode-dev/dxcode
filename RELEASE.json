@@ -1,5 +1,5 @@
 {
-  "version": "0.2.194",
+  "version": "0.2.195",
   "license": "FSL-1.1-ALv2",
   "baselineSha256": "7847f65a9b20b366a60d52d19ca3cd6bdd1bb09b8cb506659a270f27a21d8877",
   "e2b": {
@@ -7,24 +7,24 @@
     "profileSha256": "414dbecee2d47de36016ea05c736e2edff3a0deb298babf923887ea184a01c10"
   },
   "dxd": {
-    "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.194/dxd-linux-x64",
+    "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.195/dxd-linux-x64",
     "sha256": "4c29b8a03f16693d3e64cca4d80949a70eeb84592a17d46e7c6ab8d50ef03298"
   },
   "runner": {
     "dxd-darwin-arm64": {
-      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.194/dxd-darwin-arm64",
-      "sha256": "244636ca4da30f4485e8d6f160bea1bf36104b4c6974e4cf2f576edce6a51a12"
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.195/dxd-darwin-arm64",
+      "sha256": "c59ee722c1a228d681792a1547a3230c3fa0cdbf98faa583f68ebf4f217d3d99"
     },
     "dxd-linux-arm64": {
-      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.194/dxd-linux-arm64",
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.195/dxd-linux-arm64",
       "sha256": "e7a883747a9da38db693164cfe0b4933fd4e0913ff2b496f9caa23dfb6a45b64"
     },
     "voxl-darwin-arm64": {
-      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.194/voxl-darwin-arm64",
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.195/voxl-darwin-arm64",
       "sha256": "b0785d81bdeb5e0d6639bac4a9ca1533db4e669f3eea08a2579043bc96d706e9"
     },
     "dx-desktop-darwin-arm64": {
-      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.194/dx-desktop-darwin-arm64",
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.195/dx-desktop-darwin-arm64",
       "sha256": "2c3ec56d9317bfb3d7053b4189ce5804284cee702a96c53ca42b1402cf0769aa"
     }
   },

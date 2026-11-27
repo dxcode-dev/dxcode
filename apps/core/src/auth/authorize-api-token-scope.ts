@@ -34,6 +34,11 @@ const requiredScope = (
   ) {
     return read ? "threads:read" : "threads:write";
   }
+  // The Realtime Hub's socket carries only content-free hints about Threads
+  // and what lists them (`thread.invalidated`, `sidebar.invalidated`); the
+  // hub checks each presence join against the Thread's own access. A native
+  // app keeps its sidebar and open Thread fresh with it.
+  if (path === "/v1/realtime") return "threads:read";
   if (path === "/v1/agents/dx" || path.startsWith("/v1/agents/dx/")) {
     return "agents:access";
   }

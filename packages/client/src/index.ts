@@ -25,6 +25,7 @@ export * from "./transcript/shell-command-operation.js";
 export * from "./transcript/skill-activation.js";
 export * from "./transcript/subagent-view.js";
 export * from "./transcript/transcript-activity-projection.js";
+export * from "./transcript/transcript-derivation.js";
 export * from "./transcript/transcript-progress.js";
 export * from "./transcript/transcript-view-model.js";
 export * from "./transcript/withdrawn-sends.js";

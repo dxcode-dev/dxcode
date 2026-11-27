@@ -1,12 +1,7 @@
+import { type ThreadDetailData, threadSettlementProvenance } from "@dx/api";
 import {
-  type ThreadDetailData,
-  type ThreadQueuedMessage,
-  threadSettlementProvenance,
-  withMessageAuthor,
-} from "@dx/api";
-import {
-  deriveTranscriptViewModel,
-  INBOUND_MESSAGE_PREFIX,
+  createTranscriptDerivation,
+  historyWindowView,
   keptSends,
   NO_LOCAL_SUBMISSIONS,
   retryFailedSend,
@@ -14,12 +9,12 @@ import {
   sameLocalSubmissions,
   stopSend,
   submitSend,
+  type TranscriptDerivation,
+  type TranscriptView,
   type TranscriptViewModel,
   waitingSubmissionOf,
   withoutDroppedSends,
-  withoutUnsentEchoes,
   withoutWithdrawn,
-  withQueuedMessages,
 } from "@dx/client";
 import {
   type ClaudePlanLimit,
@@ -1412,179 +1407,6 @@ function useImageActions(
 }
 
 /**
- * A message another Thread sent while this one worked reaches Flue's history
- * only when it joins the turn. Until then a row shows that one is on its way
- * from its source Thread, after the history; its text arrives with Flue.
- */
-/** Stands in for a pending message's text, which only Flue holds. */
-const PENDING_INBOUND_TEXT = "…";
-
-const withInboundMessages = (
-  messages: PanelAgent["messages"],
-  inbound: AgentPanelOptions["inboundMessages"],
-  olderHistory: boolean,
-): PanelAgent["messages"] => {
-  if (inbound === undefined || inbound.length === 0) return messages;
-  const joined = new Set(
-    messages.flatMap(({ submissionId }) =>
-      submissionId === undefined ? [] : [submissionId],
-    ),
-  );
-  // Flue joins waiting messages in order. One older than the oldest loaded
-  // prompt has joined already, into history not loaded yet.
-  const oldestLoadedPrompt = olderHistory
-    ? Math.min(
-        ...messages.flatMap((message) => {
-          const at = Date.parse(
-            String(message.timestamp ?? message.metadata?.timestamp ?? ""),
-          );
-          return message.role === "user" &&
-            message.submissionId !== undefined &&
-            !Number.isNaN(at)
-            ? [at]
-            : [];
-        }),
-      )
-    : Number.NEGATIVE_INFINITY;
-  const pending = inbound.filter(
-    ({ submissionId, createdAt }) =>
-      !joined.has(submissionId) && Date.parse(createdAt) >= oldestLoadedPrompt,
-  );
-  if (pending.length === 0) return messages;
-  return [
-    ...messages,
-    ...pending.map(
-      ({ submissionId, sourceThreadId }) =>
-        ({
-          id: `${INBOUND_MESSAGE_PREFIX}${submissionId}`,
-          role: "user",
-          purpose: "user",
-          display: "visible",
-          parts: [
-            {
-              type: "text",
-              text: withMessageAuthor(
-                {
-                  author: { role: "owner", userId: "thread", name: "Thread" },
-                  sourceThreadId,
-                },
-                PENDING_INBOUND_TEXT,
-              ),
-              state: "done",
-            },
-          ],
-        }) as PanelAgent["messages"][number],
-    ),
-  ];
-};
-
-/** What the transcript leaves out or adds to Flue's history. */
-interface TranscriptView {
-  readonly discardedSends: ReadonlySet<string>;
-  /** The latest send is not confirmed; its echo stays in the composer. */
-  readonly unconfirmed: boolean;
-  readonly inboundMessages: AgentPanelOptions["inboundMessages"];
-  /** The viewer's own messages waiting in the queue, from the server. */
-  readonly queuedMessages: ReadonlyArray<ThreadQueuedMessage> | undefined;
-  readonly chatEcho: ((text: string) => boolean) | undefined;
-  readonly admittedMessageId:
-    | ((submissionId: string) => string | undefined)
-    | undefined;
-}
-
-interface ShownTranscript {
-  readonly agent: PanelAgent;
-  readonly model: TranscriptViewModel;
-}
-
-const EMPTY_TRANSCRIPT = deriveTranscriptViewModel({
-  messages: [],
-  settlements: [],
-});
-
-/**
- * Derives the shown transcript once per Flue snapshot and view, shared by
- * the transcript and the run state. Each derivation reuses the previous
- * model's unchanged turns and rows, so a streamed frame rebuilds only what
- * changed; `current` reads the latest model for an export.
- */
-const createTranscriptDerivation = () => {
-  let last:
-    | {
-        readonly agent: PanelAgent;
-        readonly view: TranscriptView;
-        readonly shown: ShownTranscript;
-      }
-    | undefined;
-  let model: TranscriptViewModel | undefined;
-  let modelInputs: ReadonlyArray<unknown> = [];
-  const sameView = (previous: TranscriptView, next: TranscriptView) =>
-    previous.discardedSends === next.discardedSends &&
-    previous.unconfirmed === next.unconfirmed &&
-    previous.inboundMessages === next.inboundMessages &&
-    previous.queuedMessages === next.queuedMessages &&
-    previous.chatEcho === next.chatEcho &&
-    previous.admittedMessageId === next.admittedMessageId;
-  const derive = (observed: PanelAgent, view: TranscriptView) => {
-    if (
-      last !== undefined &&
-      last.agent === observed &&
-      sameView(last.view, view)
-    )
-      return last.shown;
-    const agent = withoutUnsentEchoes(
-      withoutDroppedSends(observed, view.discardedSends),
-      view.unconfirmed,
-    );
-    const inputs = [
-      agent.messages,
-      agent.settlements,
-      agent.finalOutputs,
-      agent.historyReady,
-      agent.hasMore,
-      view.inboundMessages,
-      view.queuedMessages,
-      agent.localSubmissions,
-      view.chatEcho,
-      view.admittedMessageId,
-    ];
-    if (
-      model === undefined ||
-      inputs.some((input, index) => input !== modelInputs[index])
-    ) {
-      model = deriveTranscriptViewModel(
-        {
-          // After history loads: a pending message ahead of it would move
-          // once history arrives.
-          messages: agent.historyReady
-            ? withQueuedMessages(
-                withInboundMessages(
-                  agent.messages,
-                  view.inboundMessages,
-                  agent.hasMore === true,
-                ),
-                view.queuedMessages,
-                agent.localSubmissions,
-              )
-            : agent.messages,
-          // A withdrawn message ran nothing; it shows no stopped turn.
-          settlements: withoutWithdrawn(agent).settlements,
-          finalOutputs: agent.finalOutputs,
-          chatEcho: view.chatEcho,
-          admittedMessageId: view.admittedMessageId,
-        },
-        model,
-      );
-      modelInputs = inputs;
-    }
-    const shown = { agent, model };
-    last = { agent: observed, view, shown };
-    return shown;
-  };
-  return { derive, current: () => model ?? EMPTY_TRANSCRIPT };
-};
-
-/**
  * Only chat is on its way and nothing runs: the agent is not working. The
  * composer's pending message has no row yet, so its own mode counts.
  */
@@ -1596,8 +1418,8 @@ const sendingOnlyChat = (model: TranscriptViewModel, admittingChat: boolean) =>
   ) &&
   !model.turns.some((turn) => turn.status === "active");
 
-const NO_DISCARDED_SENDS: ReadonlySet<string> = new Set();
 const noMoreHistory = () => Promise.resolve();
+const createPanelTranscripts = () => createTranscriptDerivation<PanelAgent>();
 const noWindow = () => {};
 
 /**
@@ -1647,7 +1469,7 @@ function AgentConversation({
   /** Reads the Thread's full prompt list, for the outline. */
   readonly readPrompts?: FlueClient["prompts"];
   readonly source: AgentSource<PanelAgent>;
-  readonly transcripts: ReturnType<typeof createTranscriptDerivation>;
+  readonly transcripts: TranscriptDerivation<PanelAgent>;
   readonly view: TranscriptView;
   readonly archived: boolean;
   readonly active: boolean;
@@ -1668,7 +1490,7 @@ function AgentConversation({
   const { agent, model: liveModel } = transcripts.derive(observed, view);
   // History opened at an older prompt shows instead of the live
   // conversation once its first page arrives, until it joins the live pages.
-  const [windowTranscripts] = React.useState(createTranscriptDerivation);
+  const [windowTranscripts] = React.useState(createPanelTranscripts);
   const historyWindow =
     agent.historyWindow !== undefined && agent.historyWindow.messages.length > 0
       ? agent.historyWindow
@@ -1685,14 +1507,7 @@ function AgentConversation({
             failedSends: [],
             hasMore: historyWindow.hasOlder,
           },
-          {
-            discardedSends: NO_DISCARDED_SENDS,
-            unconfirmed: false,
-            inboundMessages: undefined,
-            queuedMessages: undefined,
-            chatEcho: view.chatEcho,
-            admittedMessageId: view.admittedMessageId,
-          },
+          historyWindowView(view),
         ).model;
   const promptList = usePromptList(readPrompts);
   const initialSubmissionObserved =
@@ -1962,7 +1777,7 @@ export function AgentPanel({
             mentions.conversationMode,
           ) === "chat"
       : undefined;
-  const [transcripts] = React.useState(createTranscriptDerivation);
+  const [transcripts] = React.useState(createPanelTranscripts);
   const retainedThread = React.useContext(ThreadPresentationContext);
   // The reader is stable for the panel's lifetime; hand it over once mounted.
   const provideTranscriptAccess = (node: HTMLDivElement | null) => {

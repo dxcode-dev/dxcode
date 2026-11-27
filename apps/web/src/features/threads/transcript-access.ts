@@ -1,12 +1,4 @@
-import {
-  deriveTranscriptViewModel,
-  type TranscriptViewModel,
-} from "@dx/client";
-
-const EMPTY_TRANSCRIPT = deriveTranscriptViewModel({
-  messages: [],
-  settlements: [],
-});
+import { EMPTY_TRANSCRIPT, type TranscriptViewModel } from "@dx/client";
 
 /**
  * Reads the shown transcript on demand, for the title bar's export. The page
