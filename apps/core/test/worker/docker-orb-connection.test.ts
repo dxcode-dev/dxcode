@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { DOCKER_ORB_SIZES, Principal, type UserId } from "@dx/domain";
 import { Effect, Redacted, Schema } from "effect";
 import { Hono } from "hono";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import publicImage from "../../../../deploy/orb/public-image.json" with {
   type: "json",
 };
@@ -17,6 +17,8 @@ import { makePersonalOrbProviderRoutes } from "../../src/plugins/execution/orb-p
 import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-providers.js";
 import { advanceConnection } from "../../src/plugins/execution/preparation.js";
 import type { ExecutionContext } from "../../src/plugins/execution/provider.js";
+import { ORB_PROVIDER_CONNECTION_BUDGET } from "../../src/settings/orb-provider-connection-budget.js";
+import { settingsRoutes } from "../../src/settings/routes.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
 import { setBetaOrbProviders } from "./beta-orb-providers.js";
 
@@ -914,4 +916,76 @@ describe("Docker Cloud Sandboxes in a person's own account", () => {
     expect(world.logins).toBeGreaterThan(0);
     expect(world.sandboxes.size).toBe(0);
   }, 30_000);
+
+  it("stops checking a person's guesses with Docker Hub once they spend the hour's connection budget", async () => {
+    // #2623: each save answers whether Docker took the pair, so without a
+    // limit dx is a Docker Hub credential checker. The real settings
+    // routes, with Docker Hub's token exchange limited as it is in
+    // production, so every guess goes to its password login.
+    world.exchangeRateLimited = true;
+    const docker = fakeDocker(world);
+    let loginAttempts = 0;
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      if (new Request(input, init).url.endsWith("/v2/users/login"))
+        loginAttempts += 1;
+      return docker(input, init);
+    });
+    const settings = new Hono<AppEnv>();
+    settings.use("*", requestId);
+    settings.use("*", async (context, next) => {
+      context.set(
+        "principal",
+        Schema.decodeUnknownSync(Principal)({
+          userId: solo,
+          credentialScopes: ["personal", "workspace"],
+        }),
+      );
+      await next();
+    });
+    settings.route("/v1/settings", settingsRoutes);
+    settings.onError(errorHandler);
+    const guess = async (accessToken: string) => {
+      const response = await settings.request(
+        "/v1/settings/personal/orb-providers/docker/connection",
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ credentials: { dockerId, accessToken } }),
+        },
+        bindings,
+      );
+      return {
+        status: response.status,
+        retryAfter: response.headers.get("retry-after"),
+        // biome-ignore lint/suspicious/noExplicitAny: asserted below.
+        code: ((await response.json()) as any).data.code,
+      };
+    };
+
+    for (
+      let attempt = 0;
+      attempt < ORB_PROVIDER_CONNECTION_BUDGET.maximum;
+      attempt++
+    )
+      expect(await guess(`dckr_pat_wrong_${attempt}`)).toEqual({
+        status: 400,
+        retryAfter: null,
+        code: "ORB_PROVIDER_CREDENTIALS_REJECTED",
+      });
+    expect(loginAttempts).toBe(ORB_PROVIDER_CONNECTION_BUDGET.maximum);
+
+    // A wrong guess and the right token now get the same answer, and
+    // neither reaches Docker Hub.
+    for (const accessToken of ["dckr_pat_wrong_next", "dckr_pat_one"])
+      expect(await guess(accessToken)).toEqual({
+        status: 429,
+        retryAfter: "3600",
+        code: "ORB_PROVIDER_RATE_LIMITED",
+      });
+    expect(loginAttempts).toBe(ORB_PROVIDER_CONNECTION_BUDGET.maximum);
+  }, 30_000);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });

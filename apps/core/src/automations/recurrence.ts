@@ -88,30 +88,52 @@ const PARTS = new Set([
   "WKST",
 ]);
 
-const formatters = new Map<string, Intl.DateTimeFormat>();
+/** Most formatters one cache keeps; more than there are distinct zones. */
+const ZONE_FORMATTER_LIMIT = 1_000;
 
-const formatter = (timeZone: string) => {
-  let format = formatters.get(timeZone);
-  if (format === undefined) {
-    format = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hourCycle: "h23",
-      year: "numeric",
-      month: "numeric",
-      day: "numeric",
-      hour: "numeric",
-      minute: "numeric",
-      second: "numeric",
-    });
-    formatters.set(timeZone, format);
-  }
-  return format;
+/**
+ * A cache of `Intl.DateTimeFormat`s with `options`, one per time zone. Intl
+ * takes a zone name in any letter case, so a formatter is kept under the
+ * zone's canonical name (`America/New_York`, not `aMeRiCa/nEw_YoRk`), and
+ * the cache drops its oldest formatter past `limit`. Throws for an unknown
+ * zone, as `Intl.DateTimeFormat` does.
+ */
+export const zoneFormatterCache = (
+  options: Omit<Intl.DateTimeFormatOptions, "timeZone">,
+  limit = ZONE_FORMATTER_LIMIT,
+) => {
+  const cache = new Map<string, Intl.DateTimeFormat>();
+  return (timeZone: string) => {
+    const cached = cache.get(timeZone);
+    if (cached !== undefined) return cached;
+    const format = new Intl.DateTimeFormat("en-US", { ...options, timeZone });
+    const zone = format.resolvedOptions().timeZone;
+    const known = cache.get(zone);
+    if (known !== undefined) return known;
+    if (cache.size >= limit) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+    cache.set(zone, format);
+    return format;
+  };
 };
+
+const formatter = zoneFormatterCache({
+  hourCycle: "h23",
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "numeric",
+  minute: "numeric",
+  second: "numeric",
+});
 
 /** Whether the runtime knows an IANA time zone. */
 export const isTimeZone = (timeZone: string) => {
   try {
-    formatter(timeZone);
+    // Checked without caching a formatter for whatever spelling arrived.
+    new Intl.DateTimeFormat("en-US", { timeZone });
     return true;
   } catch {
     return false;

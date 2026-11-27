@@ -738,6 +738,130 @@ describe("workspace external API applications in workerd with real D1", () => {
     ).toBe(401);
   });
 
+  it("lets only the owner rotate, widen, or re-enable an app, so an admin cannot act as its owner (#2633)", async () => {
+    const { application, clientSecret } = (
+      await createApplication(owner, {
+        name: "Owner's app",
+        scopes: ["projects:read", "projects:write"],
+      })
+    ).data;
+    const path = `/settings/workspaces/${workspaceSlug}/applications/${application.id}`;
+    const patch = (userId: UserId, scopes: ReadonlyArray<string>) =>
+      settingsApp(userId).request(
+        path,
+        {
+          method: "PATCH",
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            name: "Renamed app",
+            scopes,
+            rateLimitPerMinute: 30,
+          }),
+        },
+        { DB: env.DB },
+      );
+    const post = (userId: UserId, action: string, body: object = {}) =>
+      settingsApp(userId).request(
+        `${path}/${action}`,
+        { method: "POST", headers: jsonHeaders, body: JSON.stringify(body) },
+        { DB: env.DB },
+      );
+    const forbidden = { data: { code: "WORKSPACE_PERMISSION_FORBIDDEN" } };
+
+    // An admin cannot mint a secret for the owner's app.
+    const rotation = await post(admin, "rotate", { overlapSeconds: 0 });
+    expect(rotation.status).toBe(403);
+    const rotationText = await rotation.text();
+    expect(JSON.parse(rotationText)).toMatchObject(forbidden);
+    expect(rotationText).not.toContain("dxs_");
+    const credentials = await env.DB.prepare(
+      "SELECT expires_at, revoked_at FROM external_api_application_credential WHERE application_id = ?",
+    )
+      .bind(application.id)
+      .all();
+    expect(credentials.results).toEqual([
+      { expires_at: null, revoked_at: null },
+    ]);
+    expect(
+      (await productRequest(application, clientSecret, "/v1/projects")).status,
+    ).toBe(200);
+
+    // Nor widen its scopes, even while narrowing others.
+    const widened = await patch(admin, ["projects:read", "threads:read"]);
+    expect(widened.status).toBe(403);
+    await expect(widened.json()).resolves.toMatchObject(forbidden);
+
+    // Renaming and narrowing stay open to every manager.
+    const narrowed = await patch(admin, ["projects:read"]);
+    expect(narrowed.status).toBe(200);
+    await expect(narrowed.json()).resolves.toMatchObject({
+      data: { name: "Renamed app", scopes: ["projects:read"] },
+    });
+
+    // An admin may disable it but not turn the owner's credential back on.
+    expect((await post(admin, "disable")).status).toBe(200);
+    const enabled = await post(admin, "enable");
+    expect(enabled.status).toBe(403);
+    await expect(enabled.json()).resolves.toMatchObject(forbidden);
+    expect(
+      (await productRequest(application, clientSecret, "/v1/projects")).status,
+    ).toBe(401);
+
+    // The owner keeps every action on their own app.
+    expect((await post(owner, "enable")).status).toBe(200);
+    expect((await patch(owner, ["projects:read", "threads:read"])).status).toBe(
+      200,
+    );
+    const ownerRotation = await post(owner, "rotate", { overlapSeconds: 0 });
+    expect(ownerRotation.status).toBe(200);
+    const rotated = (await ownerRotation.json()) as {
+      data: ExternalApiApplicationSecretData;
+    };
+    expect(
+      (
+        await productRequest(
+          application,
+          rotated.data.clientSecret,
+          "/v1/projects",
+        )
+      ).status,
+    ).toBe(200);
+
+    // And an admin may still revoke it.
+    const revoke = await settingsApp(admin).request(
+      path,
+      { method: "DELETE" },
+      { DB: env.DB },
+    );
+    expect(revoke.status).toBe(200);
+    expect(
+      (
+        await productRequest(
+          application,
+          rotated.data.clientSecret,
+          "/v1/projects",
+        )
+      ).status,
+    ).toBe(401);
+
+    const actions = await env.DB.prepare(
+      `SELECT actor_id, action FROM external_api_application_audit
+        WHERE application_id = ? AND actor_type = 'user'
+        ORDER BY created_at, rowid`,
+    )
+      .bind(application.id)
+      .all();
+    expect(actions.results).toEqual([
+      { actor_id: owner, action: "external_api_application.create" },
+      { actor_id: admin, action: "external_api_application.update" },
+      { actor_id: admin, action: "external_api_application.disable" },
+      { actor_id: owner, action: "external_api_application.enable" },
+      { actor_id: owner, action: "external_api_application.update" },
+      { actor_id: owner, action: "external_api_application.rotate" },
+      { actor_id: admin, action: "external_api_application.revoke" },
+    ]);
+  });
+
   it("enforces an atomic per-app rate limit and records last-used and immutable request attribution", async () => {
     // The limit counts requests per calendar minute of Date.now(). On the real
     // clock the eleven requests could straddle a minute boundary (likelier
@@ -831,7 +955,7 @@ describe("workspace external API applications in workerd with real D1", () => {
     ).rejects.toBeDefined();
   });
 
-  it("throttles and audits wrong secrets for a known client id (#2424)", async () => {
+  it("throttles and audits wrong secrets without spending the app's own budget (#2424)", async () => {
     vi.useFakeTimers({
       now: Math.floor(Date.now() / 60_000) * 60_000 + 65_000,
       toFake: ["Date"],
@@ -877,6 +1001,12 @@ describe("workspace external API applications in workerd with real D1", () => {
     }
     expect(await audited()).toHaveLength(10);
 
+    // The real secret keeps its whole budget in the same window: wrong
+    // secrets cannot lock the integration out.
+    for (let index = 31; index <= 40; index += 1)
+      expect((await attempt(clientSecret, index)).status).toBe(200);
+    expect((await attempt(clientSecret, 41)).status).toBe(429);
+
     // An unknown client id is refused like a wrong secret.
     const unknown = await productRequest(
       { ...application, clientId: `dxa_${"u".repeat(24)}` as never },
@@ -887,6 +1017,6 @@ describe("workspace external API applications in workerd with real D1", () => {
 
     // The next window admits the real secret again.
     vi.setSystemTime(Date.now() + 60_000);
-    expect((await attempt(clientSecret, 31)).status).toBe(200);
+    expect((await attempt(clientSecret, 42)).status).toBe(200);
   });
 });

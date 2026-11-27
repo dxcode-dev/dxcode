@@ -1,6 +1,7 @@
 import {
   type BrowserSessionBinding,
   closeForEndedSession,
+  SESSION_ENDED_CLOSE_CODE,
 } from "../auth/session-sockets.js";
 import {
   DXD_PROXY_KIND_BYTES,
@@ -195,8 +196,18 @@ interface BrowserWindow {
   queuedBytes: number;
 }
 
+/**
+ * The guest's close code as the browser may see it. Codes a browser cannot
+ * send become 1000. The guest picks every other code, so the one Core
+ * reserves for a browser session that ended (which signs the web app out)
+ * becomes 1011.
+ */
 const closeCodeForBrowser = (code: number) =>
-  code === 1005 || code === 1006 || code === 1015 ? 1000 : code;
+  code === 1005 || code === 1006 || code === 1015
+    ? 1000
+    : code === SESSION_ENDED_CLOSE_CODE
+      ? 1011
+      : code;
 
 const truncateReason = (reason: string) => {
   const encoder = new TextEncoder();

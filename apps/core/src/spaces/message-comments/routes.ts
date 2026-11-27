@@ -15,7 +15,6 @@ import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv } from "../../http/types.js";
 import { spaceLogger } from "../../logging.js";
 import { scheduleRealtimeInvalidation } from "../../realtime/publication.js";
-import { threadReaders } from "../../thread-artifacts/ask-effects.js";
 import { announcePosts } from "../posts/effects.js";
 import { readSpacePost } from "../posts/store.js";
 import { messageCommented } from "./effects.js";
@@ -153,44 +152,28 @@ const createMessageCommentRoutes = () => {
         const threadId = param(context, "threadId");
         // The person acting, not the owner a Contribute member acts as.
         const actor = context.get("actor") ?? context.get("principal");
-        // A message's author is someone who can open the Space, or no one.
-        const authorUserId = input.message.authorUserId;
-        const { readers } =
-          authorUserId === undefined
-            ? { readers: new Set<string>() }
-            : await threadReaders(db, threadId);
-        // A post is quoted as it is, whatever the client says of it.
+        // Only a Space's posts take comments, quoted as the server reads
+        // them: a client never says what a message said, who sent it, or when.
         const post = SPACE_POST_ID_PATTERN.test(messageId)
           ? await readSpacePost(db, threadId, messageId)
-          : undefined;
+          : null;
         if (post === null) return refuse(context, "POST_NOT_FOUND");
         const added = await addMessageComment(db, {
           threadId,
           messageId,
           authorUserId: actor.userId,
           body: input.body,
-          message:
-            post !== undefined
-              ? {
-                  // A person's post is quoted by its words, not its files.
-                  excerpt:
-                    post.author_kind === "user"
-                      ? parseMessageAttachments(post.text).text
-                      : post.text,
-                  ...(post.author_user_id === null
-                    ? {}
-                    : { authorUserId: post.author_user_id }),
-                  sentAt: post.created_at,
-                }
-              : {
-                  excerpt: input.message.excerpt,
-                  ...(authorUserId !== undefined && readers.has(authorUserId)
-                    ? { authorUserId }
-                    : {}),
-                  ...(input.message.sentAt === undefined
-                    ? {}
-                    : { sentAt: input.message.sentAt }),
-                },
+          message: {
+            // A person's post is quoted by its words, not its files.
+            excerpt:
+              post.author_kind === "user"
+                ? parseMessageAttachments(post.text).text
+                : post.text,
+            ...(post.author_user_id === null
+              ? {}
+              : { authorUserId: post.author_user_id }),
+            sentAt: post.created_at,
+          },
         });
         if (added.kind === "limit")
           return refuse(context, "MESSAGE_COMMENT_LIMIT");
@@ -203,7 +186,7 @@ const createMessageCommentRoutes = () => {
           "comments.invalidated",
         );
         // A post's replies row counts its comments.
-        if (post !== undefined) await announcePosts(context.env, threadId);
+        await announcePosts(context.env, threadId);
         // Awaited: by the 201 a comment that asks dx is in the agent's
         // queue, so the main chat shows it working right away.
         await messageCommented(

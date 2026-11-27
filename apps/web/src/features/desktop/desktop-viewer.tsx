@@ -5,7 +5,7 @@ import { Monitor, Play, RefreshCw } from "lucide-react";
 import * as React from "react";
 import {
   isSessionEndedClose,
-  reportSessionEnded,
+  reportSessionEndedIfConfirmed,
 } from "../../shared/auth/session-ended.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { Button } from "../../shared/ui/button.js";
@@ -383,11 +383,9 @@ function DesktopSession({
             watchedStream = undefined;
           }
           if (disposed() || recovering) return;
-          if (isSessionEndedClose(event.code)) {
-            session?.disconnect();
-            reportSessionEnded();
-            return;
-          }
+          // The Orb can send this code too; otherwise it counts as any close.
+          if (isSessionEndedClose(event.code))
+            void reportSessionEndedIfConfirmed(() => session?.disconnect());
           if (openedAt !== undefined) {
             if (Date.now() - openedAt >= STABLE_SOCKET_MS) recoveries = 0;
             return;

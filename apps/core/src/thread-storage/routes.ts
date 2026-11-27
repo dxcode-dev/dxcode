@@ -1,4 +1,8 @@
-import type { ThreadStorageError, ThreadStorageListResponse } from "@dx/api";
+import type {
+  ThreadReadOnlyResponseSchema,
+  ThreadStorageErrorResponse,
+  ThreadStorageListResponse,
+} from "@dx/api";
 import { type Context, Hono } from "hono";
 import {
   attachmentOrigin,
@@ -18,9 +22,26 @@ import {
 
 const LIST_LIMIT = 200;
 
-const refuse = (context: Context<AppEnv>, error: string, status: 404 | 503) => {
+const REFUSALS = {
+  THREAD_STORAGE_FILE_NOT_FOUND: [404, "File not found."],
+  THREAD_STORAGE_UNAVAILABLE: [503, "Thread storage is unavailable."],
+  THREAD_STORAGE_REQUEST_FAILED: [503, "The storage request failed."],
+} as const satisfies Record<
+  ThreadStorageErrorResponse["data"]["code"],
+  readonly [404 | 503, ThreadStorageErrorResponse["data"]["message"]]
+>;
+
+/** The refusals of `ThreadStorageErrorResponseSchema` in @dx/api. */
+const refuse = (context: Context<AppEnv>, code: keyof typeof REFUSALS) => {
+  const [status, message] = REFUSALS[code];
   context.header("Cache-Control", "no-store");
-  return context.json<ThreadStorageError>({ error }, status);
+  return context.json(
+    {
+      status: "error",
+      data: { code, message, requestId: context.get("requestId") },
+    } as ThreadStorageErrorResponse,
+    status,
+  );
 };
 
 const handle =
@@ -37,7 +58,7 @@ const handle =
         errorMessage:
           cause instanceof Error ? cause.message.slice(0, 500) : "unknown",
       });
-      return refuse(context, "The storage request failed.", 503);
+      return refuse(context, "THREAD_STORAGE_REQUEST_FAILED");
     }
   };
 
@@ -57,7 +78,7 @@ export const threadStorageRoutes = new Hono<AppEnv>()
     handle("list", async (context) => {
       const db = context.env.DB;
       if (db === undefined)
-        return refuse(context, "Thread storage is unavailable.", 503);
+        return refuse(context, "THREAD_STORAGE_UNAVAILABLE");
       const { results } = await db
         .prepare(
           `SELECT * FROM thread_storage_files
@@ -83,7 +104,7 @@ export const threadStorageRoutes = new Hono<AppEnv>()
       const db = context.env.DB;
       const transfer = attachmentTransfer(context.env);
       if (db === undefined || transfer === undefined)
-        return refuse(context, "Thread storage is unavailable.", 503);
+        return refuse(context, "THREAD_STORAGE_UNAVAILABLE");
       const row = isThreadStorageFileId(fileId)
         ? await findThreadStorageFile(db, fileId)
         : null;
@@ -93,11 +114,18 @@ export const threadStorageRoutes = new Hono<AppEnv>()
         !isReadableThreadStorageFile(row, now) ||
         row.thread_id !== context.req.param("threadId")
       )
-        return refuse(context, "File not found.", 404);
+        return refuse(context, "THREAD_STORAGE_FILE_NOT_FOUND");
       if (!mayReadStoredFile(row, context.get("threadAccess"))) {
         context.header("Cache-Control", "no-store");
-        return context.json<ThreadStorageError>(
-          { error: "Only contributors can open the Orb's rescued work." },
+        return context.json(
+          {
+            status: "error",
+            data: {
+              code: "THREAD_READ_ONLY",
+              message: "Only contributors can open the Orb's rescued work.",
+              requestId: context.get("requestId"),
+            },
+          } satisfies typeof ThreadReadOnlyResponseSchema.Type,
           403,
         );
       }

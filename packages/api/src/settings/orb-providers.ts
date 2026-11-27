@@ -196,6 +196,15 @@ export const OrbProviderUnavailableResponseSchema = errorResponse(
   "Orb provider settings are temporarily unavailable.",
 );
 
+/**
+ * Saving a connection checks its credentials with the provider, so each
+ * person may save only so many an hour (#2623).
+ */
+export const OrbProviderRateLimitedResponseSchema = errorResponse(
+  "ORB_PROVIDER_RATE_LIMITED",
+  "Too many Orb provider connection attempts. Try again later.",
+);
+
 export const OrbProviderErrorResponseSchema = Schema.Union([
   OrbProviderInvalidRequestResponseSchema,
   OrbProviderCredentialsRejectedResponseSchema,

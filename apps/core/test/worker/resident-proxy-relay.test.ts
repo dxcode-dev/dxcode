@@ -67,3 +67,42 @@ describe("Resident proxy stream budget", () => {
     relay.daemonUnavailable();
   });
 });
+
+/**
+ * #2634: dxd forwards a guest app's own close codes, and the web app signs
+ * out on 4401 (the code Core uses when a browser session ends). A guest's
+ * 4401 must reach the browser as another code; every other code passes.
+ */
+describe("Resident proxy close codes", () => {
+  it("never passes a guest's session-ended code to the browser", () => {
+    const closed: Array<readonly [number, string]> = [];
+    const daemon = { send: () => undefined } as unknown as WebSocket;
+    const browser = {
+      close: (code: number, reason: string) => closed.push([code, reason]),
+    } as unknown as WebSocket;
+    const relay = new ResidentProxyRelay({
+      daemon: () => ({ socket: daemon, nonce: "daemon" }),
+      acceptBrowser: () => undefined,
+      browsers: () => [browser],
+      activity: () => undefined,
+    });
+    for (const [streamId, code] of [
+      [1, 4401],
+      [2, 4000],
+      [3, 1000],
+      [4, 1006],
+    ] as const)
+      relay.receiveDaemonMessage(daemon, {
+        type: "proxy.closed",
+        streamId,
+        code,
+        reason: "bye",
+      });
+    expect(closed).toEqual([
+      [1011, "bye"],
+      [4000, "bye"],
+      [1000, "bye"],
+      [1000, "bye"],
+    ]);
+  });
+});

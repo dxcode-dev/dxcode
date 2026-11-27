@@ -26,9 +26,10 @@ export {
   type UnauthenticatedResponse,
   UnauthenticatedResponseSchema,
 } from "./auth/unauthenticated-response.js";
+export * from "./avatars/avatar-endpoints.js";
+export * from "./bug-reports/bug-report-access-endpoints.js";
 export * from "./bug-reports/bug-reports.js";
 export * from "./bug-reports/bug-reports-endpoints.js";
-export * from "./bug-reports/bug-report-access-endpoints.js";
 export * from "./bug-reports/intake.js";
 export * from "./deployment-admin/refusals.js";
 export * from "./deployment-admin/status-endpoints.js";
@@ -115,16 +116,17 @@ export * from "./settings/personal-security.js";
 export * from "./settings/personal-usage.js";
 // Plugin views.
 export * from "./settings/plugin-apps.js";
+export * from "./settings/plugin-bundle-endpoints.js";
 export * from "./settings/plugin-bundle-file-endpoints.js";
 export * from "./settings/plugin-bundles.js";
 export * from "./settings/plugin-catalogs.js";
+export * from "./settings/plugin-catalogs-endpoints.js";
 export * from "./settings/plugin-data-view-endpoints.js";
 export * from "./settings/plugin-data-views.js";
-export * from "./settings/plugin-bundle-endpoints.js";
-export * from "./settings/plugin-catalogs-endpoints.js";
 export * from "./settings/plugin-host-usage.js";
 export * from "./settings/plugin-icons.js";
 export * from "./settings/plugin-icons-endpoints.js";
+export * from "./settings/plugin-lucide-icon-endpoints.js";
 export * from "./settings/plugin-orb.js";
 export * from "./settings/plugin-orb-endpoints.js";
 export * from "./settings/plugin-triggers.js";
@@ -153,13 +155,14 @@ export * from "./spaces/posts.js";
 export * from "./spaces/progress.js";
 export * from "./spaces/space-agent-model.js";
 export * from "./spaces/space-agent-model-endpoints.js";
-export * from "./spaces/space-coordinator-orb.js";
-export * from "./spaces/space-coordinator-orb-endpoints.js";
 export * from "./spaces/space-artifacts.js";
 export * from "./spaces/space-cards.js";
+export * from "./spaces/space-coordinator-orb.js";
+export * from "./spaces/space-coordinator-orb-endpoints.js";
 export * from "./spaces/space-data.js";
 export * from "./spaces/space-endpoints.js";
 export * from "./thread-storage/index.js";
+export * from "./thread-storage/thread-storage-endpoints.js";
 export * from "./threads/agent-history.js";
 export * from "./threads/archive-thread.js";
 export * from "./threads/artifacts.js";

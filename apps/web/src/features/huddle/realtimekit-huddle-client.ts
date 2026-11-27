@@ -363,6 +363,13 @@ export class RealtimeKitHuddleClient implements HuddleClient {
     if (this.state.status === "left") this.set(IDLE_HUDDLE);
   }
 
+  reset() {
+    this.discard(this.prepared);
+    this.prepared = undefined;
+    this.avatars.clear();
+    return this.leave();
+  }
+
   private async media(change: (meeting: Meeting) => unknown) {
     this.audio.unlock();
     const meeting = this.meeting;

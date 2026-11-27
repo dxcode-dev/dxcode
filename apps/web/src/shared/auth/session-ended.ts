@@ -17,6 +17,18 @@ export const reportSessionEnded = () => {
   for (const listener of [...listeners]) listener();
 };
 
+/**
+ * Reports the session ended only when the session check says nobody is
+ * signed in. A socket closed with `SESSION_ENDED_CLOSE_CODE` asks this when
+ * its close code may come from elsewhere: dxd forwards a guest app's own
+ * close codes to the Desktop. A failed check is not an ended session.
+ */
+export const reportSessionEndedIfConfirmed = async (onEnded?: () => void) => {
+  if ((await getBrowserSession().catch(() => undefined)) !== null) return;
+  onEnded?.();
+  reportSessionEnded();
+};
+
 /** One session check shared by every request refused at once. */
 let confirming: Promise<void> | undefined;
 

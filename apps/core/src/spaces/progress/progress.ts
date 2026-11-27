@@ -5,6 +5,7 @@ import type {
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { DateTime } from "effect";
+import { zoneFormatterCache } from "../../automations/recurrence.js";
 
 const DAY_MS = 86_400_000;
 /** A Space's chart reads at most this many pull requests and pushes. */
@@ -96,20 +97,15 @@ const readChanges = async (
   };
 };
 
-const dayFormatters = new Map<string, Intl.DateTimeFormat>();
+const dayFormatter = zoneFormatterCache({
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
 
 /** `YYYY-MM-DD` of an instant in a time zone. */
 const dayOf = (instant: number, timeZone: string) => {
-  let format = dayFormatters.get(timeZone);
-  if (format === undefined) {
-    format = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    dayFormatters.set(timeZone, format);
-  }
+  const format = dayFormatter(timeZone);
   const parts = Object.fromEntries(
     format
       .formatToParts(new Date(instant))

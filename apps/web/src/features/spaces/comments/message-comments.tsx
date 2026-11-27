@@ -315,14 +315,12 @@ const TYPING_EVERY_MS = 2_000;
 function CommentComposer({
   threadId,
   messageId,
-  message,
   people,
   dictation,
   onTyping,
 }: {
   readonly threadId: ThreadId;
   readonly messageId: string;
-  readonly message: CommentedMessage | undefined;
   readonly people: ReturnType<typeof useMembers>;
   readonly dictation: DictationSlot | undefined;
   readonly onTyping: (scope: string) => void;
@@ -365,16 +363,7 @@ function CommentComposer({
     add.mutate(
       {
         messageId,
-        request: {
-          body: posted,
-          message: {
-            excerpt: (message?.excerpt ?? "").slice(0, 32_000),
-            ...(message?.author == null
-              ? {}
-              : { authorUserId: message.author.userId }),
-            ...(message?.sentAt == null ? {} : { sentAt: message.sentAt }),
-          },
-        },
+        request: { body: posted },
       },
       {
         onError: () => {
@@ -701,7 +690,6 @@ function OpenComments({
       <CommentComposer
         threadId={threadId}
         messageId={messageId}
-        message={message}
         people={members}
         dictation={dictation}
         onTyping={onTyping}

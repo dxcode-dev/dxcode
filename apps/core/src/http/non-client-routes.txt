@@ -57,9 +57,17 @@ GET /v1/settings/personal/mcp-servers/oauth/callback
 # answers SETTINGS_SCOPE_FORBIDDEN and no UI calls it.
 PATCH /v1/settings/personal/mcp-servers/policy
 
-# Attachment HEAD answers: no dx UI asks for one; the web reads with GET.
+# Attachment and Thread storage HEAD answers: no dx UI asks for one; the web
+# reads with GET.
 HEAD /v1/attachments/:id
 HEAD /v1/attachments/:id/:filename
+HEAD /v1/threads/:threadId/storage/:fileId
+HEAD /v1/threads/:threadId/storage/:fileId/:name
+
+# Branch previews only: Orb fault injection for internal/orb-wake/wake-proof.mjs,
+# which sets and clears a fault plan; no UI calls it.
+DELETE /v1/threads/:threadId/orb/fault
+POST /v1/threads/:threadId/orb/fault
 # The skills router is shared by both scopes; the personal policy route always
 # answers SETTINGS_SCOPE_FORBIDDEN and no UI calls it.
 PATCH /v1/settings/personal/skills/policy

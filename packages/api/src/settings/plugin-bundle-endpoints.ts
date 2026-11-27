@@ -1,10 +1,11 @@
-import { WorkspaceSlug } from "@dx/domain";
+import { PluginBundleSource, PluginIntegrity, WorkspaceSlug } from "@dx/domain";
 import { Schema } from "effect";
 import { defineEndpoint, FileAnswerSchema } from "../http/endpoint.js";
 import {
   ApprovePluginProposalRequestSchema,
   CreatePluginShareLinkResponseSchema,
   DecidePluginProposalResponseSchema,
+  InstallPluginBundleResponseSchema,
   ListPluginBundlesResponseSchema,
   ListPluginBundleUpdatesResponseSchema,
   PluginBundleIntegrityConflictResponseSchema,
@@ -17,12 +18,15 @@ import {
   PluginBundlesUnavailableResponseSchema,
   PluginProposalDecidedResponseSchema,
   PluginProposalParamsSchema,
+  PreviewPluginBundleResponseSchema,
+  PreviewPluginBundleUpdateResponseSchema,
   RemovePluginBundleResponseSchema,
   RevokePluginShareLinksResponseSchema,
   SetPluginBundlePolicyRequestSchema,
   UpdatePluginBundleRequestSchema,
   UpdatePluginBundleResponseSchema,
   UpdatePluginBundleSettingsRequestSchema,
+  UpdatePluginBundleSourceResponseSchema,
 } from "./plugin-bundles.js";
 import { PluginHostUsageResponseSchema } from "./plugin-host-usage.js";
 
@@ -335,5 +339,232 @@ export const ExportWorkspacePluginBundleEndpoint = defineEndpoint({
   query: ExportPluginBundleQuerySchema,
   success: FileAnswerSchema,
   answer: "file",
+  refusals: pluginBundleRefusals,
+});
+
+/** A plugin from GitHub by URL, or a share link's token, to preview. */
+export const PreviewPluginBundleRequestSchema = Schema.Union([
+  Schema.Struct({ url: Schema.String }),
+  /** A share link's token. */
+  Schema.Struct({ share: Schema.String }),
+]);
+
+/** Installs a share link's plugin as the person reviewed it. */
+export const InstallSharedPluginBundleRequestSchema = Schema.Struct({
+  share: Schema.String,
+  reviewedIntegrity: PluginIntegrity,
+});
+
+/** Installs or updates from the previewed source, pinned to its commit. */
+export const InstallPluginBundleSourceRequestSchema = Schema.Struct({
+  source: PluginBundleSource,
+  reviewedIntegrity: PluginIntegrity,
+  /** An update only: the person accepted the wider grants it asks for. */
+  acceptPermissions: Schema.optional(Schema.Boolean),
+});
+
+export const InstallPluginBundleRequestSchema = Schema.Union([
+  InstallSharedPluginBundleRequestSchema,
+  InstallPluginBundleSourceRequestSchema,
+]);
+
+/** A ZIP upload is the request body, named by `?name=`. */
+export const PluginBundleZipPreviewQuerySchema = Schema.Struct({
+  name: Schema.optional(Schema.String),
+});
+
+/**
+ * Installing a ZIP repeats the upload with the integrity the person
+ * reviewed; `acceptPermissions=1` accepts an update's wider grants.
+ */
+export const PluginBundleZipInstallQuerySchema = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  integrity: PluginIntegrity,
+  acceptPermissions: Schema.optional(Schema.Literal("1")),
+});
+
+/*
+ * Preview, install, update preview, and update each take JSON (a GitHub URL,
+ * a share link, or a pinned source) or a ZIP's bytes on the same route, so
+ * each route has a JSON endpoint and a `…Zip` one with `upload: "bytes"`.
+ */
+
+export const PreviewPersonalPluginBundleEndpoint = defineEndpoint({
+  id: "pluginBundles.personal.preview",
+  method: "POST",
+  path: `${PluginBundlesPersonalPath}/preview`,
+  body: PreviewPluginBundleRequestSchema,
+  success: PreviewPluginBundleResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const PreviewPersonalPluginBundleZipEndpoint = defineEndpoint({
+  id: "pluginBundles.personal.previewZip",
+  method: "POST",
+  path: `${PluginBundlesPersonalPath}/preview`,
+  query: PluginBundleZipPreviewQuerySchema,
+  upload: "bytes",
+  success: PreviewPluginBundleResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const InstallPersonalPluginBundleEndpoint = defineEndpoint({
+  id: "pluginBundles.personal.install",
+  method: "POST",
+  path: `${PluginBundlesPersonalPath}`,
+  body: InstallPluginBundleRequestSchema,
+  success: InstallPluginBundleResponseSchema,
+  successStatus: 201,
+  refusals: pluginBundleRefusals,
+});
+
+export const InstallPersonalPluginBundleZipEndpoint = defineEndpoint({
+  id: "pluginBundles.personal.installZip",
+  method: "POST",
+  path: `${PluginBundlesPersonalPath}`,
+  query: PluginBundleZipInstallQuerySchema,
+  upload: "bytes",
+  success: InstallPluginBundleResponseSchema,
+  successStatus: 201,
+  refusals: pluginBundleRefusals,
+});
+
+export const PreviewPersonalPluginBundleUpdateEndpoint = defineEndpoint({
+  id: "pluginBundles.personal.previewUpdate",
+  method: "POST",
+  path: `${PluginBundlesPersonalPath}/:pluginId/update/preview`,
+  params: PluginBundleParamsSchema,
+  body: PluginBundleEmptyRequestSchema,
+  success: PreviewPluginBundleUpdateResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const PreviewPersonalPluginBundleUpdateZipEndpoint = defineEndpoint({
+  id: "pluginBundles.personal.previewUpdateZip",
+  method: "POST",
+  path: `${PluginBundlesPersonalPath}/:pluginId/update/preview`,
+  params: PluginBundleParamsSchema,
+  query: PluginBundleZipPreviewQuerySchema,
+  upload: "bytes",
+  success: PreviewPluginBundleUpdateResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const UpdatePersonalPluginBundleEndpoint = defineEndpoint({
+  id: "pluginBundles.personal.update",
+  method: "POST",
+  path: `${PluginBundlesPersonalPath}/:pluginId/update`,
+  params: PluginBundleParamsSchema,
+  body: InstallPluginBundleRequestSchema,
+  success: UpdatePluginBundleSourceResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const UpdatePersonalPluginBundleZipEndpoint = defineEndpoint({
+  id: "pluginBundles.personal.updateZip",
+  method: "POST",
+  path: `${PluginBundlesPersonalPath}/:pluginId/update`,
+  params: PluginBundleParamsSchema,
+  query: PluginBundleZipInstallQuerySchema,
+  upload: "bytes",
+  success: UpdatePluginBundleSourceResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const PreviewWorkspacePluginBundleEndpoint = defineEndpoint({
+  id: "pluginBundles.workspace.preview",
+  method: "POST",
+  path: `${PluginBundlesWorkspacePath}/preview`,
+  params: WorkspacePluginBundlesParamsSchema,
+  body: PreviewPluginBundleRequestSchema,
+  success: PreviewPluginBundleResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const PreviewWorkspacePluginBundleZipEndpoint = defineEndpoint({
+  id: "pluginBundles.workspace.previewZip",
+  method: "POST",
+  path: `${PluginBundlesWorkspacePath}/preview`,
+  params: WorkspacePluginBundlesParamsSchema,
+  query: PluginBundleZipPreviewQuerySchema,
+  upload: "bytes",
+  success: PreviewPluginBundleResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const InstallWorkspacePluginBundleEndpoint = defineEndpoint({
+  id: "pluginBundles.workspace.install",
+  method: "POST",
+  path: `${PluginBundlesWorkspacePath}`,
+  params: WorkspacePluginBundlesParamsSchema,
+  body: InstallPluginBundleRequestSchema,
+  success: InstallPluginBundleResponseSchema,
+  successStatus: 201,
+  refusals: pluginBundleRefusals,
+});
+
+export const InstallWorkspacePluginBundleZipEndpoint = defineEndpoint({
+  id: "pluginBundles.workspace.installZip",
+  method: "POST",
+  path: `${PluginBundlesWorkspacePath}`,
+  params: WorkspacePluginBundlesParamsSchema,
+  query: PluginBundleZipInstallQuerySchema,
+  upload: "bytes",
+  success: InstallPluginBundleResponseSchema,
+  successStatus: 201,
+  refusals: pluginBundleRefusals,
+});
+
+export const PreviewWorkspacePluginBundleUpdateEndpoint = defineEndpoint({
+  id: "pluginBundles.workspace.previewUpdate",
+  method: "POST",
+  path: `${PluginBundlesWorkspacePath}/:pluginId/update/preview`,
+  params: Schema.Struct({
+    ...WorkspacePluginBundlesParamsSchema.fields,
+    ...PluginBundleParamsSchema.fields,
+  }),
+  body: PluginBundleEmptyRequestSchema,
+  success: PreviewPluginBundleUpdateResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const PreviewWorkspacePluginBundleUpdateZipEndpoint = defineEndpoint({
+  id: "pluginBundles.workspace.previewUpdateZip",
+  method: "POST",
+  path: `${PluginBundlesWorkspacePath}/:pluginId/update/preview`,
+  params: Schema.Struct({
+    ...WorkspacePluginBundlesParamsSchema.fields,
+    ...PluginBundleParamsSchema.fields,
+  }),
+  query: PluginBundleZipPreviewQuerySchema,
+  upload: "bytes",
+  success: PreviewPluginBundleUpdateResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const UpdateWorkspacePluginBundleEndpoint = defineEndpoint({
+  id: "pluginBundles.workspace.update",
+  method: "POST",
+  path: `${PluginBundlesWorkspacePath}/:pluginId/update`,
+  params: Schema.Struct({
+    ...WorkspacePluginBundlesParamsSchema.fields,
+    ...PluginBundleParamsSchema.fields,
+  }),
+  body: InstallPluginBundleRequestSchema,
+  success: UpdatePluginBundleSourceResponseSchema,
+  refusals: pluginBundleRefusals,
+});
+
+export const UpdateWorkspacePluginBundleZipEndpoint = defineEndpoint({
+  id: "pluginBundles.workspace.updateZip",
+  method: "POST",
+  path: `${PluginBundlesWorkspacePath}/:pluginId/update`,
+  params: Schema.Struct({
+    ...WorkspacePluginBundlesParamsSchema.fields,
+    ...PluginBundleParamsSchema.fields,
+  }),
+  query: PluginBundleZipInstallQuerySchema,
+  upload: "bytes",
+  success: UpdatePluginBundleSourceResponseSchema,
   refusals: pluginBundleRefusals,
 });

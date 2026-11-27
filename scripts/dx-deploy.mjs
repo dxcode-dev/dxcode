@@ -662,6 +662,30 @@ export const collectDeploymentConfig = async ({
   });
 };
 
+/**
+ * `--rotate`: offers a new value for every secret setting this deployment
+ * uses, read from the settings registry so a new integration's secret is
+ * never skipped and its value always reaches its environment variable
+ * (#2627).
+ */
+export const collectRotatedSecrets = async ({
+  config,
+  settings = SELFHOST_SETTINGS,
+  yes,
+  secret,
+  environment,
+}) => {
+  for (const setting of settings) {
+    if (setting.kind !== "secret" || setting.when?.(config) === false) continue;
+    if (typeof setting.env !== "string" || setting.env === "")
+      throw new Error(
+        `The ${setting.id} secret names no environment variable, so --rotate cannot rotate it.`,
+      );
+    if (await yes(`Rotate the ${setting.label}`))
+      environment[setting.env] = await secret(`New ${setting.label}`);
+  }
+};
+
 export const assertInstallerDefaults = (config, defaults) => {
   for (const key of ["name", "domain", "zone", "authEmailFrom"])
     if (defaults[key] !== undefined && config[key] !== defaults[key])
@@ -1050,32 +1074,8 @@ export const runDxDeploy = async ({
       cloudflareAuth: cloudflareAuthChoice.record,
       portals: portalsWanted ? choosePortalDomain : undefined,
     });
-  else if (flags.has("--rotate")) {
-    if (config.orbProviders.includes("e2b"))
-      environment.E2B_API_KEY = await secret(
-        "New E2B API key, or Ctrl-C to cancel",
-      );
-    for (const integration of config.integrations) {
-      const variable = {
-        github: "DX_INTEGRATION_GITHUB_APP",
-        bitbucket: "DX_INTEGRATION_BITBUCKET_OAUTH",
-        sarvam: "SARVAM_API_KEY",
-        exa: "EXA_API_KEY",
-        boat: "BOAT_API_KEY",
-        bugReportForwarding: "DX_BUG_REPORT_DESTINATION_KEY",
-        bugReportIntake: "DX_BUG_REPORT_INTAKE_SECRET",
-      }[integration];
-      if (await yes(`Rotate ${integration}`))
-        environment[variable] = await secret(`New ${integration} secret`);
-    }
-    if (
-      config.signIn.providers.includes("google") &&
-      (await yes("Rotate the Google OAuth client secret"))
-    )
-      environment.DX_GOOGLE_CLIENT_SECRET = await secret(
-        "New Google OAuth client secret",
-      );
-  }
+  else if (flags.has("--rotate"))
+    await collectRotatedSecrets({ config, settings, yes, secret, environment });
   // `--portals` turns Portals on, moves them to another zone, or turns them
   // off (redeploying without portalDomain removes the Portal resources).
   if (existing !== undefined && portalsFlag) {

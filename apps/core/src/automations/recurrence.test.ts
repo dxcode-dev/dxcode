@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  isTimeZone,
   nextOccurrence,
   parseRecurrence,
   RecurrenceInvalid,
+  zoneFormatterCache,
 } from "./recurrence.js";
 
 /*
@@ -275,5 +277,42 @@ describe("nextOccurrence", () => {
     expect(
       nextOccurrence(rule, at("2026-10-24T12:30:00Z"), 0)?.toISOString(),
     ).toBe("2026-10-25T03:30:00.000Z");
+  });
+});
+
+/*
+ * Ways a time-zone formatter cache can grow without bound, which these cases
+ * pin down: each letter-case spelling of one zone gets its own formatter;
+ * checking a zone with `isTimeZone` caches one; the cache never drops one.
+ */
+describe("time-zone formatter cache", () => {
+  it("keeps one formatter per zone, however its name is spelled", () => {
+    const formatter = zoneFormatterCache({ hour: "numeric" });
+    const canonical = formatter("America/New_York");
+    for (const spelling of [
+      "america/new_york",
+      "AMERICA/NEW_YORK",
+      "aMeRiCa/nEw_YoRk",
+    ])
+      expect(formatter(spelling)).toBe(canonical);
+    expect(formatter("aMeRiCa/nEw_YoRk").resolvedOptions().timeZone).toBe(
+      "America/New_York",
+    );
+    expect(() => formatter("Not/A_Zone")).toThrow(RangeError);
+  });
+
+  it("drops its oldest formatter past the limit", () => {
+    const formatter = zoneFormatterCache({ hour: "numeric" }, 2);
+    const first = formatter("Europe/Paris");
+    formatter("Asia/Kolkata");
+    expect(formatter("Europe/Paris")).toBe(first);
+    formatter("America/Chicago");
+    expect(formatter("Europe/Paris")).not.toBe(first);
+  });
+
+  it("accepts a known zone in any letter case and refuses an unknown one", () => {
+    expect(isTimeZone("aMeRiCa/nEw_YoRk")).toBe(true);
+    expect(isTimeZone("UTC")).toBe(true);
+    expect(isTimeZone("Not/A_Zone")).toBe(false);
   });
 });

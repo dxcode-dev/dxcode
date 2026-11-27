@@ -199,6 +199,11 @@ function ApplicationEditorDialog({
     application?.rateLimitPerMinute ?? 60,
   );
   const [error, setError] = React.useState<string>();
+  // The app acts as its creator, so only they may add scopes (#2633).
+  const granted =
+    application === undefined || application.owner.userId === identity.id
+      ? undefined
+      : new Set(application.scopes);
   const selected = new Set(scopes);
   const toggle = (scope: ExternalApiApplicationScope) =>
     setScopes(
@@ -265,6 +270,7 @@ function ApplicationEditorDialog({
                 <Checkbox
                   id={`${choiceId}-${scope}`}
                   checked={selected.has(scope)}
+                  disabled={granted !== undefined && !granted.has(scope)}
                   onChange={() => toggle(scope)}
                 />
                 {scopeLabels[scope]}
@@ -520,6 +526,7 @@ function AuditDialog({
 function ApplicationMenu({
   application,
   canManage,
+  isOwner,
   edit,
   act,
   audit,
@@ -528,6 +535,8 @@ function ApplicationMenu({
 }: {
   readonly application: ExternalApiApplicationData;
   readonly canManage: boolean;
+  /** Only the creator may rotate or re-enable: the app acts as them. */
+  readonly isOwner: boolean;
   readonly edit: () => void;
   readonly act: (kind: ApplicationAction["kind"]) => void;
   readonly audit: () => void;
@@ -554,14 +563,18 @@ function ApplicationMenu({
             <MenuItem onClick={edit}>Edit</MenuItem>
             {application.status === "active" ? (
               <>
-                <MenuItem onClick={() => act("rotate")}>Rotate Secret</MenuItem>
+                {isOwner ? (
+                  <MenuItem onClick={() => act("rotate")}>
+                    Rotate Secret
+                  </MenuItem>
+                ) : null}
                 <MenuItem onClick={() => act("disable")}>Disable</MenuItem>
               </>
-            ) : (
+            ) : isOwner ? (
               <MenuItem disabled={enabling} onClick={enable}>
                 {enabling ? "Enabling…" : "Enable"}
               </MenuItem>
-            )}
+            ) : null}
           </>
         ) : null}
         <MenuItem onClick={audit}>View Audit</MenuItem>
@@ -713,6 +726,7 @@ function WorkspaceApplications({
                 <ApplicationMenu
                   application={application}
                   canManage={canManage}
+                  isOwner={application.owner.userId === identity.id}
                   edit={() => setEditor(application)}
                   audit={() => setAudit(application)}
                   act={(kind) => setAction({ kind, application })}

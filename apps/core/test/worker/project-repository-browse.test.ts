@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { deflateSync } from "node:zlib";
+import type { Principal } from "@dx/domain";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Bindings } from "../../src/http/types.js";
@@ -17,6 +18,7 @@ import {
 import {
   createProductApp,
   createProjectViaApi,
+  jsonHeaders,
   otherPrincipal,
   owner,
   principal,
@@ -96,8 +98,18 @@ const seedConnectedProject = async (
   return projectId;
 };
 
-const seedPublicProject = async (name: string, fullName: string) => {
-  const project = await createProjectViaApi(name);
+const seedPublicProject = async (
+  name: string,
+  fullName: string,
+  requestPrincipal = principal,
+) => {
+  const project = (await (
+    await createProductApp(requestPrincipal).request(
+      "/projects",
+      { method: "POST", headers: jsonHeaders, body: JSON.stringify({ name }) },
+      bindings,
+    )
+  ).json()) as { readonly data: { readonly id: string } };
   const now = new Date().toISOString();
   await env.DB.prepare(`
     INSERT INTO project_repository (
@@ -874,6 +886,83 @@ describe("Project repository Commits and Files", () => {
       data: { state: "unavailable", reason: "unsupported" },
     });
   });
+
+  it("limits each viewer's uncached public Git reads, never cached views, and not other viewers", async () => {
+    // Hold the clock inside one ten-minute budget window, two days back so
+    // the spent budget has expired for the tests after this one.
+    const window = 10 * 60 * 1000;
+    const start =
+      Math.floor(Date.now() / window) * window - 2 * 24 * 60 * 60 * 1000;
+    vi.useFakeTimers({ now: start + 5_000, toFake: ["Date"] });
+    // A viewer of its own, whose budget no other test spends.
+    const heavyViewer = {
+      ...otherPrincipal,
+      userId: "budget-viewer",
+    } as Principal;
+    try {
+      const heavy = await seedPublicProject(
+        "Browse-budget",
+        "acme/budget-app",
+        heavyViewer,
+      );
+      const requests = fakeGitHub(gitHost("acme/budget-app"));
+      const read = async (
+        projectId: string,
+        path: string,
+        viewer = principal,
+      ) =>
+        (
+          (await browse(projectId, path, viewer)).body as {
+            readonly data: { readonly state: string; readonly reason?: string };
+          }
+        ).data;
+      // Repeat views come from cache and spend nothing.
+      for (let index = 0; index < 100; index += 1)
+        expect(await read(heavy, "", heavyViewer)).toMatchObject({
+          state: "ready",
+        });
+      // A person opening a new folder every few seconds is never limited.
+      for (let index = 0; index < 100; index += 1)
+        expect(await read(heavy, `folder-${index}`, heavyViewer)).toEqual(
+          expect.objectContaining({ state: "path-not-found" }),
+        );
+      // A script reading fresh paths is.
+      let limited: { readonly state: string } | undefined;
+      for (let index = 100; index < 200 && limited === undefined; index += 1) {
+        const answer = await read(heavy, `folder-${index}`, heavyViewer);
+        if (answer.state !== "path-not-found") limited = answer;
+      }
+      expect(limited).toEqual({
+        state: "unavailable",
+        repository: expect.anything(),
+        reason: "rate-limited",
+      });
+      // Over budget, the Git host hears nothing more.
+      requests.length = 0;
+      expect(await read(heavy, "folder-999", heavyViewer)).toMatchObject({
+        state: "unavailable",
+        reason: "rate-limited",
+      });
+      expect(requests).toEqual([]);
+
+      // Another viewer reading the same host still reads.
+      const light = await seedPublicProject(
+        "Browse-budget-other",
+        "acme/budget-app",
+      );
+      expect(await read(light, "folder-999")).toMatchObject({
+        state: "path-not-found",
+      });
+
+      // The next window restores the budget.
+      vi.setSystemTime(start + window + 5_000);
+      expect(await read(heavy, "folder-1000", heavyViewer)).toMatchObject({
+        state: "path-not-found",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 60_000);
 
   it("normalizes a trailing slash and rejects encoded traversal before any provider call", async () => {
     const projectId = await seedConnectedProject("Browse-encoded", "bg-8");

@@ -130,6 +130,31 @@ export class ExternalApiApplicationsService extends Context.Service<
         },
       );
 
+      // An app's credential acts as its owner (authenticate-application.ts),
+      // so only the owner may mint a secret, widen its scopes, or turn it
+      // back on. Other managers may still rename, narrow, disable, or revoke.
+      const requireOwner = Effect.fn(
+        "ExternalApiApplicationsService.requireOwner",
+      )(function* (
+        principal: Principal,
+        workspaceId: WorkspaceId,
+        applicationId: ExternalApiApplicationId,
+        allowed?: (application: ExternalApiApplication) => boolean,
+      ) {
+        const application = yield* repository.findById(
+          workspaceId,
+          applicationId,
+        );
+        if (
+          application.owner.userId !== principal.userId &&
+          !(allowed?.(application) ?? false)
+        ) {
+          return yield* new WorkspacePermissionForbidden({
+            permission: "applications:manage",
+          });
+        }
+      });
+
       const audit = Effect.fn("ExternalApiApplicationsService.audit")(
         function* (input: AuditInput) {
           const auditId = yield* Schema.decodeUnknownEffect(
@@ -232,6 +257,13 @@ export class ExternalApiApplicationsService extends Context.Service<
               workspaceSlug,
               "applications:manage",
             );
+            yield* requireOwner(
+              principal,
+              membership.workspace.id,
+              applicationId,
+              (current) =>
+                input.scopes.every((scope) => current.scopes.includes(scope)),
+            );
             const now = DateTime.toEpochMillis(yield* DateTime.now);
             const application = yield* repository.update(
               membership.workspace.id,
@@ -262,6 +294,11 @@ export class ExternalApiApplicationsService extends Context.Service<
               principal,
               workspaceSlug,
               "applications:manage",
+            );
+            yield* requireOwner(
+              principal,
+              membership.workspace.id,
+              applicationId,
             );
             const now = DateTime.toEpochMillis(yield* DateTime.now);
             const credentialId = yield* Schema.decodeUnknownEffect(
@@ -303,6 +340,13 @@ export class ExternalApiApplicationsService extends Context.Service<
               workspaceSlug,
               "applications:manage",
             );
+            if (status === "active") {
+              yield* requireOwner(
+                principal,
+                membership.workspace.id,
+                applicationId,
+              );
+            }
             const now = DateTime.toEpochMillis(yield* DateTime.now);
             const application = yield* repository.setStatus(
               membership.workspace.id,

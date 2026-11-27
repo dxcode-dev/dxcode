@@ -15,7 +15,10 @@ import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
  * - the app's session is the browser's own, so signing out of one signs out
  *   the other;
  * - the redeemed cookie doesn't actually authenticate;
- * - a malformed challenge is stored.
+ * - a malformed challenge is stored;
+ * - a page or link outside the app sends someone to redeem an attacker's
+ *   code and verifier, signing them in to the attacker's account (login
+ *   CSRF), or the refusal spends the code.
  */
 
 const origin = "http://dx.test";
@@ -79,10 +82,11 @@ const create = (cookie: string | undefined, challenge: string) =>
     bindings,
   );
 
-const redeem = (code: string, verifier: string) =>
+// The app's web view loads the link itself: `Sec-Fetch-Site: none`.
+const redeem = (code: string, verifier: string, fetchSite = "none") =>
   app.request(
     `/api/auth/native-handoff/redeem?code=${encodeURIComponent(code)}&verifier=${encodeURIComponent(verifier)}`,
-    { headers: { origin } },
+    { headers: { "sec-fetch-site": fetchSite } },
     bindings,
   );
 
@@ -144,5 +148,24 @@ describe("native sign-in handoff", () => {
 
     // Used once.
     expect((await redeem(second, verifier)).status).toBe(400);
+  });
+
+  it("refuses a redeem another page or link started, without spending the code", async () => {
+    const attacker = await signUp();
+    const { verifier, challenge } = await pkce();
+    const created = await create(attacker, challenge);
+    const { code } = (await created.json()) as { code: string };
+
+    // evil.example redirects the victim here, or a link in dx itself does.
+    for (const site of ["cross-site", "same-site", "same-origin"]) {
+      const forged = await redeem(code, verifier, site);
+      expect(forged.status).toBe(403);
+      expect(sessionCookie(forged)).toBeUndefined();
+    }
+
+    // The app's own load still redeems the same code.
+    const redeemed = await redeem(code, verifier);
+    expect(redeemed.status).toBe(302);
+    expect(sessionCookie(redeemed)).toBeDefined();
   });
 });

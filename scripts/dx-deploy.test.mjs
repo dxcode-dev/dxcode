@@ -16,6 +16,7 @@ import {
   collectOrbProviders,
   collectPluginChoices,
   collectPortalDomain,
+  collectRotatedSecrets,
   collectSenderUpgrade,
   E2B_ORB_PROMPT,
   EMAIL_SENDING_PROMPT,
@@ -799,5 +800,95 @@ describe("attachment R2 credentials", () => {
       }),
     ).resolves.toEqual(config);
     expect(answer).not.toHaveBeenCalled();
+  });
+});
+
+describe("--rotate", () => {
+  const rotate = async (input) => {
+    const environment = {};
+    const secret = vi.fn(async (label) => `new value for ${label}`);
+    const yes = vi.fn(async () => true);
+    await collectRotatedSecrets({
+      config: validateSelfhostConfig({
+        name: "acme",
+        adminEmail: "owner@example.com",
+        signIn: { providers: ["email-password"], admission: "invite" },
+        ...input,
+      }),
+      yes,
+      secret,
+      environment,
+    });
+    return { environment, asked: yes.mock.calls.map(([label]) => label) };
+  };
+
+  it("puts every rotated secret, the Huddle token included, in its own variable", async () => {
+    // #2627: the Huddle token was asked for and then written to
+    // `environment.undefined`, so the deploy kept the old one.
+    const { environment, asked } = await rotate({
+      cloudflareAuth: "alchemy-oauth",
+      orbProviders: ["e2b"],
+      plugins: ["search", "speech"],
+      integrations: [
+        "github",
+        "bitbucket",
+        "sarvam",
+        "exa",
+        "boat",
+        "huddle",
+        "bugReportForwarding",
+        "bugReportIntake",
+      ],
+      bugReportDestination: "https://dx.example.com",
+      signIn: {
+        providers: ["google"],
+        admission: "invite",
+        googleClientId: "client.apps.googleusercontent.com",
+      },
+    });
+    expect(Object.keys(environment).sort()).toEqual(
+      [
+        "BOAT_API_KEY",
+        "DX_BUG_REPORT_DESTINATION_KEY",
+        "DX_BUG_REPORT_INTAKE_SECRET",
+        "DX_GOOGLE_CLIENT_SECRET",
+        "DX_INTEGRATION_BITBUCKET_OAUTH",
+        "DX_INTEGRATION_GITHUB_APP",
+        "DX_REALTIMEKIT_API_TOKEN",
+        "E2B_API_KEY",
+        "EXA_API_KEY",
+        "SARVAM_API_KEY",
+      ].sort(),
+    );
+    expect(environment.DX_REALTIMEKIT_API_TOKEN).toBe(
+      "new value for New Cloudflare API token for Huddle",
+    );
+    expect(asked).toContain("Rotate the Cloudflare API token for Huddle");
+  });
+
+  it("asks only for the secrets the deployment uses", async () => {
+    // An API-token deployment's Huddle uses that token; nothing else is on.
+    const { environment, asked } = await rotate({
+      cloudflareAuth: "api-token",
+      orbProviders: [],
+      integrations: ["huddle"],
+    });
+    expect(asked).toEqual([]);
+    expect(environment).toEqual({});
+  });
+
+  it("refuses a secret setting that names no variable instead of dropping its value", async () => {
+    await expect(
+      collectRotatedSecrets({
+        config: validateSelfhostConfig({
+          name: "acme",
+          adminEmail: "owner@example.com",
+        }),
+        settings: [{ id: "newIntegrationKey", kind: "secret", label: "Key" }],
+        yes: async () => true,
+        secret: async () => "value",
+        environment: {},
+      }),
+    ).rejects.toThrow("newIntegrationKey");
   });
 });

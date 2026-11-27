@@ -60,7 +60,15 @@ const discardUnsavedThreadDrafts = () =>
     drafts.discardUnsavedThreadDrafts(),
   );
 
+// A huddle runs outside React and outlives the session: end it so the mic
+// stops and the next account in this tab doesn't inherit the call.
+const endHuddle = () =>
+  void import("./features/huddle/huddle-session.js").then((huddle) =>
+    huddle.endHuddleOnSignOut(),
+  );
+
 const clearDraftsBeforeSignOut = (userId: UserId) => {
+  endHuddle();
   forgetRouters();
   forgetShellPrefetch();
   queryClient.clear();
@@ -78,6 +86,7 @@ onSessionEnded(() => {
   const userId = queryClient.getQueryData(sessionQueryOptions.queryKey)?.user
     .id;
   if (userId === undefined) return;
+  endHuddle();
   forgetRouters();
   forgetShellPrefetch();
   queryClient.setQueryData(sessionQueryOptions.queryKey, null);

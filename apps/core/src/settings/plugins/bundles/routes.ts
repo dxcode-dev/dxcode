@@ -2,6 +2,7 @@ import {
   ApprovePluginProposalRequestSchema,
   CreatePluginShareLinkResponseSchema,
   DecidePluginProposalResponseSchema,
+  InstallPluginBundleRequestSchema,
   InstallPluginBundleResponseSchema,
   ListPluginBundlesResponseSchema,
   ListPluginBundleUpdatesResponseSchema,
@@ -20,6 +21,7 @@ import {
   PluginProposalDecidedResponseSchema,
   PluginProposalParamsSchema,
   PreviewPluginBundleFilesRequestSchema,
+  PreviewPluginBundleRequestSchema,
   PreviewPluginBundleResponseSchema,
   PreviewPluginBundleUpdateResponseSchema,
   RemovePluginBundleResponseSchema,
@@ -39,7 +41,6 @@ import {
   type McpServerTarget,
   PersistenceUnavailable,
   PluginBundleRepository,
-  PluginBundleSource,
   type PluginId,
   PluginIntegrity,
   PluginIntegrityConflict,
@@ -361,24 +362,6 @@ const isZip = (context: Context<AppEnv>) =>
     context.req.header("content-type") ?? "",
   );
 
-const PreviewGitHubRequest = Schema.Union([
-  Schema.Struct({ url: Schema.String }),
-  /** A share link's token. */
-  Schema.Struct({ share: Schema.String }),
-]);
-
-const InstallShareRequest = Schema.Struct({
-  share: Schema.String,
-  reviewedIntegrity: PluginIntegrity,
-});
-
-const InstallGitHubRequest = Schema.Struct({
-  source: PluginBundleSource,
-  reviewedIntegrity: PluginIntegrity,
-  /** An update only: the person accepted the wider grants it asks for. */
-  acceptPermissions: Schema.optional(Schema.Boolean),
-});
-
 /**
  * A ZIP upload is the request body, named by `?name=`; a GitHub URL is JSON.
  * Installing a ZIP repeats the upload with `?integrity=`, and installing from
@@ -395,7 +378,7 @@ const previewInput = (context: Context<AppEnv>) =>
           }),
         ),
       )
-    : decodeJsonBody(context.req, PreviewGitHubRequest, () =>
+    : decodeJsonBody(context.req, PreviewPluginBundleRequestSchema, () =>
         rejected("Send a ZIP archive, a GitHub URL, or a share link."),
       ).pipe(
         Effect.map(
@@ -421,10 +404,8 @@ const installInput = (context: Context<AppEnv>, updating = false) =>
           acceptPermissions: context.req.query("acceptPermissions") === "1",
         };
       })
-    : decodeJsonBody(
-        context.req,
-        Schema.Union([InstallShareRequest, InstallGitHubRequest]),
-        () => rejected("Preview the plugin before installing it."),
+    : decodeJsonBody(context.req, InstallPluginBundleRequestSchema, () =>
+        rejected("Preview the plugin before installing it."),
       ).pipe(
         Effect.flatMap((body) => {
           if ("share" in body)

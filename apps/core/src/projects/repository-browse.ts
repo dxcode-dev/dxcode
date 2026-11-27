@@ -21,6 +21,10 @@ import { decodeRequestInput } from "../http/request-decoding.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { projectPersistenceLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import {
+  type RequestBudget,
+  takeRequestBudget,
+} from "../security/request-budget.js";
 import { readProjectRepository } from "../source-control/admission.js";
 import { BitbucketProviderError } from "../source-control/bitbucket/provider-http.js";
 import {
@@ -176,15 +180,45 @@ const cacheKey = (cloneUrl: string, head: string, path: string) =>
 const TIP_CACHE_SECONDS = 30;
 
 /**
+ * Anonymous reads that miss the cache, each a ref advertisement or two
+ * upload-pack POSTs to whatever host the Project's URL names. Budgets per
+ * viewer and per clone host stop anyone using dx to flood a Git server; a
+ * person opening a new folder every few seconds stays well under them.
+ */
+const PUBLIC_GIT_READ_BUDGETS = {
+  viewer: { maximum: 120, windowMs: 10 * 60 * 1000 },
+  host: { maximum: 1_200, windowMs: 10 * 60 * 1000 },
+} as const satisfies Record<string, RequestBudget>;
+
+/** Spends one uncached public read; false when the viewer or host is out. */
+const spendPublicGitRead = async (
+  db: D1Database,
+  userId: string,
+  host: string,
+) =>
+  (await takeRequestBudget(
+    db,
+    `public-git-read:viewer:${userId}`,
+    PUBLIC_GIT_READ_BUDGETS.viewer,
+  )) &&
+  takeRequestBudget(
+    db,
+    `public-git-read:host:${host}`,
+    PUBLIC_GIT_READ_BUDGETS.host,
+  );
+
+/**
  * A public repository's tip, from the colo's cache for 30 seconds so repeat
- * views skip the ref advertisement; `undefined` when the host refuses.
+ * views skip the ref advertisement; `undefined` when the host refuses, and
+ * `rate-limited` when a fresh read is over budget.
  */
 const cachedTip = async (
   cloneUrl: string,
   fetcher: typeof fetch,
   cache: Cache | undefined,
   waitUntil: ((promise: Promise<unknown>) => void) | undefined,
-): Promise<PublicGitTip | undefined> => {
+  spend: () => Promise<boolean>,
+): Promise<PublicGitTip | undefined | "rate-limited"> => {
   const key = new Request(
     `${CACHE_ORIGIN}/v1/tip/${encodeURIComponent(cloneUrl)}`,
   );
@@ -205,6 +239,7 @@ const cachedTip = async (
       // A tip cached before servers were told apart had used filters.
       filter: !("filter" in cached) || cached.filter === true,
     };
+  if (!(await spend())) return "rate-limited";
   const tip = await readPublicGitTip(cloneUrl, fetcher).catch(() => undefined);
   if (tip !== undefined && cache !== undefined) {
     const stored = cache
@@ -235,6 +270,8 @@ const browseAnonymous = async (input: {
   readonly cloneUrl: string;
   readonly path: string;
   readonly fetcher: typeof fetch;
+  readonly db: D1Database;
+  readonly userId: string;
   /** The viewer's own GitHub user token, when they connected GitHub. */
   readonly viewerToken?: () => Promise<string | undefined>;
   readonly cache?: Cache;
@@ -256,14 +293,30 @@ const browseAnonymous = async (input: {
   }
   const fullName = input.host.fullName;
   const github = cloneHost === "github.com" && GITHUB_FULL_NAME.test(fullName);
+  const spend = () => spendPublicGitRead(input.db, input.userId, cloneHost);
+  const limited = () => {
+    projectPersistenceLogger.warn("Public Git read was rate limited.", {
+      event: "public_git_read_rate_limited",
+      userId: input.userId,
+      cloneHost,
+    });
+    return unavailable("rate-limited");
+  };
   const [tip, token] = await Promise.all([
-    cachedTip(input.cloneUrl, input.fetcher, input.cache, input.waitUntil),
+    cachedTip(
+      input.cloneUrl,
+      input.fetcher,
+      input.cache,
+      input.waitUntil,
+      spend,
+    ),
     github && input.viewerToken !== undefined
       ? input.viewerToken().catch(() => undefined)
       : Promise.resolve(undefined),
   ]);
   // A host that refuses an anonymous clone holds no public repository there.
   if (tip === undefined) return unavailable("access-removed");
+  if (tip === "rate-limited") return limited();
   const head = tip.head;
   if (head === undefined) return { state: "empty", repository: input.host };
   // A read with someone's credential is theirs alone: it is never cached.
@@ -290,6 +343,7 @@ const browseAnonymous = async (input: {
       .catch(() => undefined);
     if (decoded !== undefined) return decoded.data;
   }
+  if (!(await spend())) return limited();
   let answer: Browse;
   try {
     answer = await browse(
@@ -371,6 +425,8 @@ export const readProjectRepositoryBrowse = async (input: {
       cloneUrl: read.cloneUrl,
       path: input.path,
       fetcher,
+      db: input.db,
+      userId: input.userId,
       viewerToken:
         input.viewerToken ??
         (() =>

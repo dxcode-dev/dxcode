@@ -103,19 +103,15 @@ export type MessageCommentListResponse =
   typeof MessageCommentListResponseSchema.Type;
 
 /**
- * `POST /v1/threads/:threadId/message-comments/:messageId`: a comment. The
- * message's text, author, and time are recorded with the first comment.
+ * `POST /v1/threads/:threadId/message-comments/:messageId`: a comment on a
+ * Space post. The server records the post's text, author, and time with the
+ * first comment, read from the post itself.
  */
 export const CreateMessageCommentRequestSchema = Schema.Struct({
   body: Schema.String.check(
     Schema.isMinLength(1),
     Schema.isMaxLength(MESSAGE_COMMENT_MAX_LENGTH),
   ),
-  message: Schema.Struct({
-    excerpt: Schema.String.check(Schema.isMaxLength(32_000)),
-    authorUserId: Schema.optional(UserId),
-    sentAt: Schema.optional(Schema.Number),
-  }),
 });
 export type CreateMessageCommentRequest =
   typeof CreateMessageCommentRequestSchema.Type;

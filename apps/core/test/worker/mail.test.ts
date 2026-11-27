@@ -116,6 +116,42 @@ const message = (to: string) => {
   };
 };
 
+/**
+ * A message Acme signed with DKIM, as Cloudflare accepts it: DMARC and the
+ * aligned signature pass, and the signature covers the headers in `signs`.
+ */
+const signed = (
+  envelopeTo: string,
+  headers: {
+    readonly to: string;
+    readonly cc?: string;
+    readonly signs: string;
+  },
+) => {
+  const raw = [
+    "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=acme.test header.s=s1 header.b=abc; spf=pass smtp.mailfrom=noreply@acme.test; dmarc=pass header.from=acme.test policy.dmarc=reject",
+    `DKIM-Signature: v=1; a=rsa-sha256; d=acme.test; s=s1; h=${headers.signs}; bh=abc; b=abc`,
+    "From: Acme <noreply@acme.test>",
+    `To: ${headers.to}`,
+    ...(headers.cc === undefined ? [] : [`Cc: ${headers.cc}`]),
+    "Subject: Your sign-in link",
+    `Message-ID: <${crypto.randomUUID()}@acme.test>`,
+    "",
+    "Sign in: https://acme.test/magic/482913",
+    "",
+  ].join("\r\n");
+  return {
+    from: "noreply@acme.test",
+    to: envelopeTo,
+    raw: new Blob([raw]).stream(),
+    rawSize: raw.length,
+    headers: new Headers(),
+    setReject: () => undefined,
+    forward: async () => ({ messageId: "" }),
+    reply: async () => ({ messageId: "" }),
+  } as unknown as ForwardableEmailMessage;
+};
+
 const context = {
   waitUntil: () => undefined,
   passThroughOnException: () => undefined,
@@ -233,6 +269,61 @@ describe("dx Mailbox", () => {
     ).toBe(before);
     expect(await stored(owner.userId)).toBe(0);
   });
+  it("verifies signed mail only when a header it signs names this mailbox, so a replay to another person stays unverified", async () => {
+    const owner = await signUp();
+    const address = `${owner.username}@${MAIL_DOMAIN}`;
+    const deliveries = [
+      // Acme sent it to this mailbox and signed To.
+      { to: address, signs: "from:to:subject:message-id" },
+      // Sent to the tagged address, or with this mailbox on Cc.
+      { to: `${owner.username}+work@${MAIL_DOMAIN}`, signs: "from:to:subject" },
+      {
+        to: "team@acme.test",
+        cc: address,
+        signs: "from:to:cc:subject",
+      },
+      // #2635: Acme signed it for someone else; it was replayed here.
+      { to: "attacker@evil.test", signs: "from:to:subject" },
+      // It names this mailbox, but the signature does not cover To.
+      { to: address, signs: "from:subject" },
+      // Cc names this mailbox, but only To is signed.
+      { to: "team@acme.test", cc: address, signs: "from:to:subject" },
+    ];
+    for (const headers of deliveries)
+      await email(signed(address, headers), on, context);
+    const rows = await env.DB.prepare(
+      `SELECT to_addresses, cc_addresses, folder, authenticated FROM mail_item
+        WHERE owner_user_id = ? AND direction = 'in' ORDER BY rowid`,
+    )
+      .bind(owner.userId)
+      .all<{
+        to_addresses: string;
+        cc_addresses: string;
+        folder: string;
+        authenticated: number;
+      }>();
+    expect(
+      rows.results.map(({ to_addresses, folder, authenticated }) => ({
+        to: JSON.parse(to_addresses)[0],
+        folder,
+        authenticated,
+      })),
+    ).toEqual([
+      { to: address, folder: "inbox", authenticated: 1 },
+      {
+        to: `${owner.username}+work@${MAIL_DOMAIN}`,
+        folder: "inbox",
+        authenticated: 1,
+      },
+      { to: "team@acme.test", folder: "inbox", authenticated: 1 },
+      // Unverified mail still reaches the Inbox: lists and forwards fail
+      // this check legitimately.
+      { to: "attacker@evil.test", folder: "inbox", authenticated: 0 },
+      { to: address, folder: "inbox", authenticated: 0 },
+      { to: "team@acme.test", folder: "inbox", authenticated: 0 },
+    ]);
+  });
+
   it("lets only a deployment admin pause a person's sending, and a paused person can't send", async () => {
     const admin = await signUp();
     const person = await signUp();

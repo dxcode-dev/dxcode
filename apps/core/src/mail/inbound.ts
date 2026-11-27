@@ -1,5 +1,6 @@
 import {
   dkimAligned,
+  dkimSignsHeader,
   mailAuthenticated,
   mailHeaderAddresses,
   mailHtmlToText,
@@ -191,11 +192,15 @@ const sha256Hex = async (bytes: Uint8Array) =>
  * How much an email can be trusted, from its headers and Cloudflare's own
  * first `Authentication-Results` (RFC 8601):
  *
- *   verified     DMARC passed with a DKIM signature aligned with `From:`
+ *   verified     DMARC passed with a DKIM signature aligned with `From:`,
+ *                and `To:` or `Cc:` names this mailbox under that
+ *                signature, so mail signed for someone else and replayed
+ *                here is not verified
  *   unverified   no DMARC verdict, but SPF passed for an envelope aligned
  *                with the `From:` domain, or an aligned DKIM signature
  *                passed: the domain's own servers sent it, it just doesn't
- *                publish DMARC (common for company domains)
+ *                publish DMARC (common for company domains); or it is
+ *                verified mail not addressed here (a list, a forward, Bcc)
  *   spam         repeated or malformed headers (`header`); DMARC failed,
  *                so the domain itself says it is forged (`dmarc_fail`); or
  *                nothing ties it to the domain it claims (`unauthenticated`)
@@ -203,6 +208,7 @@ const sha256Hex = async (bytes: Uint8Array) =>
 export const mailTrust = (
   parsed: ParsedMail,
   envelopeFrom: string,
+  mailbox: { readonly username: string; readonly domain: string },
 ):
   | { readonly trust: "verified" | "unverified" }
   | {
@@ -234,10 +240,23 @@ export const mailTrust = (
     return { trust: "spam", reason: "header" };
   const address = from[0] ?? "";
   const authentication = readMailAuthentication(parsed.headers);
-  if (mailAuthenticated(authentication, address)) return { trust: "verified" };
+  const domain = address.slice(address.lastIndexOf("@") + 1).toLowerCase();
+  // `to` and `cc` appear at most once (checked above), so the header read
+  // here is the one the signature covers.
+  const addressedHere = (name: "to" | "cc") =>
+    dkimSignsHeader(parsed.headers, authentication, domain, name) &&
+    mailHeaderAddresses(parsed.header(name) ?? "").some(
+      (recipient) =>
+        mailRecipientOn(recipient, mailbox.domain)?.username ===
+        mailbox.username,
+    );
+  if (
+    mailAuthenticated(authentication, address) &&
+    (addressedHere("to") || addressedHere("cc"))
+  )
+    return { trust: "verified" };
   if (authentication.trusted && authentication.dmarc === "fail")
     return { trust: "spam", reason: "dmarc_fail" };
-  const domain = address.slice(address.lastIndexOf("@") + 1).toLowerCase();
   if (
     mailSpfAligned(authentication, address) ||
     (authentication.trusted &&
@@ -255,11 +274,12 @@ const deliver = async (
   mail: InboundMail,
   parsed: ParsedMail,
   owner: MailboxOwner,
+  recipient: { readonly username: string; readonly domain: string },
   tag: string | undefined,
   waitUntil: (promise: Promise<unknown>) => void,
 ): Promise<InboundOutcome> => {
   const db = bindings.DB as D1Database;
-  const filing = mailTrust(parsed, mail.from);
+  const filing = mailTrust(parsed, mail.from, recipient);
   // Verified mail counts apart from the rest for flood caps and duplicates.
   const trusted = filing.trust === "verified";
   const inbox = filing.trust !== "spam";
@@ -435,8 +455,20 @@ export const handleInboundMail = async (
   } catch (cause) {
     return drop("unparseable", { cause });
   }
+  const mailbox = {
+    username: recipient.username,
+    domain: configuration.domain,
+  };
   if (owner !== undefined)
-    return deliver(bindings, mail, parsed, owner, recipient.tag, waitUntil);
+    return deliver(
+      bindings,
+      mail,
+      parsed,
+      owner,
+      mailbox,
+      recipient.tag,
+      waitUntil,
+    );
   let last: InboundOutcome = { kind: "dropped", reason: "unknown_recipient" };
   for (const operator of operators)
     last = await deliver(
@@ -444,6 +476,7 @@ export const handleInboundMail = async (
       mail,
       parsed,
       operator,
+      mailbox,
       undefined,
       waitUntil,
     );

@@ -3,7 +3,10 @@ import {
   GetPersonalPluginHostUsageEndpoint,
   GetWorkspacePluginBundleSettingsEndpoint,
   GetWorkspacePluginHostUsageEndpoint,
-  InstallPluginBundleResponseSchema,
+  InstallPersonalPluginBundleEndpoint,
+  InstallPersonalPluginBundleZipEndpoint,
+  InstallWorkspacePluginBundleEndpoint,
+  InstallWorkspacePluginBundleZipEndpoint,
   ListPersonalPluginBundlesEndpoint,
   ListPersonalPluginBundleUpdatesEndpoint,
   ListWorkspacePluginBundlesEndpoint,
@@ -12,15 +15,24 @@ import {
   type PluginBundleListData,
   type PluginBundlePreviewData,
   type PluginBundleUpdatePreviewData,
-  PreviewPluginBundleResponseSchema,
-  PreviewPluginBundleUpdateResponseSchema,
+  PreviewPersonalPluginBundleEndpoint,
+  PreviewPersonalPluginBundleUpdateEndpoint,
+  PreviewPersonalPluginBundleUpdateZipEndpoint,
+  PreviewPersonalPluginBundleZipEndpoint,
+  PreviewWorkspacePluginBundleEndpoint,
+  PreviewWorkspacePluginBundleUpdateEndpoint,
+  PreviewWorkspacePluginBundleUpdateZipEndpoint,
+  PreviewWorkspacePluginBundleZipEndpoint,
   RemovePersonalPluginBundleEndpoint,
   RemoveWorkspacePluginBundleEndpoint,
   SetPersonalPluginBundleEnabledEndpoint,
   SetPersonalPluginBundleSettingsEndpoint,
   SetWorkspacePluginBundleEnabledEndpoint,
   SetWorkspacePluginBundleSettingsEndpoint,
-  UpdatePluginBundleSourceResponseSchema,
+  UpdatePersonalPluginBundleEndpoint,
+  UpdatePersonalPluginBundleZipEndpoint,
+  UpdateWorkspacePluginBundleEndpoint,
+  UpdateWorkspacePluginBundleZipEndpoint,
 } from "@dx/api";
 import type { PluginCatalogId, PluginId, UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
@@ -28,18 +40,12 @@ import {
   ApiError,
   dxClient,
   type PluginsTarget,
-  request,
 } from "../../../shared/api/client.js";
 
 export type { PluginBundleData, PluginBundleListData };
 
 // The plugin bundle API lives with the Plugins settings, not in the shared
 // client, so the Thread page's first load doesn't carry its schemas.
-/** Plugin bundles in the Agent Plugins or Claude Code format: skills and MCP servers. */
-const pluginBundlesBase = (target: PluginsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/plugin-bundles"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/plugin-bundles`;
 
 export type PluginBundleUpload =
   | { readonly type: "zip"; readonly file: File }
@@ -70,62 +76,72 @@ export const listPluginBundles = async (
       )
   ).data;
 
-const zipInit = (file: File): RequestInit => ({
-  method: "POST",
-  body: file,
-  headers: { "content-type": "application/zip" },
-});
+/** A ZIP goes as its bytes, typed so Core reads it as an archive. */
+const zipBody = (file: File) => new Blob([file], { type: "application/zip" });
 
 export const previewPluginBundle = async (
   target: PluginsTarget,
   upload: Exclude<PluginBundleUpload, { type: "catalog" }>,
-) =>
-  (
-    await request(
-      upload.type === "zip"
-        ? `${pluginBundlesBase(target)}/preview?name=${encodeURIComponent(upload.file.name)}`
-        : `${pluginBundlesBase(target)}/preview`,
-      PreviewPluginBundleResponseSchema,
-      upload.type === "zip"
-        ? zipInit(upload.file)
-        : {
-            method: "POST",
-            body: JSON.stringify(
-              upload.type === "share"
-                ? { share: upload.token }
-                : { url: upload.url },
-            ),
-          },
-    )
+) => {
+  if (upload.type === "zip") {
+    const input = {
+      query: { name: upload.file.name },
+      body: zipBody(upload.file),
+    };
+    return (
+      target.scope === "personal"
+        ? await dxClient.call(PreviewPersonalPluginBundleZipEndpoint, input)
+        : await dxClient.call(PreviewWorkspacePluginBundleZipEndpoint, {
+            ...input,
+            params: workspace(target),
+          })
+    ).data;
+  }
+  const body =
+    upload.type === "share" ? { share: upload.token } : { url: upload.url };
+  return (
+    target.scope === "personal"
+      ? await dxClient.call(PreviewPersonalPluginBundleEndpoint, { body })
+      : await dxClient.call(PreviewWorkspacePluginBundleEndpoint, {
+          params: workspace(target),
+          body,
+        })
   ).data;
+};
 
 /** Installs what the person reviewed: the same ZIP, or the pinned commit. */
 export const installPluginBundle = async (
   target: PluginsTarget,
   upload: PluginBundleUpload,
   preview: PluginBundlePreviewData,
-) =>
-  (
-    await request(
-      upload.type === "zip"
-        ? `${pluginBundlesBase(target)}?name=${encodeURIComponent(upload.file.name)}&integrity=${preview.integrity}`
-        : pluginBundlesBase(target),
-      InstallPluginBundleResponseSchema,
-      upload.type === "zip"
-        ? zipInit(upload.file)
-        : {
-            method: "POST",
-            body: JSON.stringify(
-              upload.type === "share"
-                ? { share: upload.token, reviewedIntegrity: preview.integrity }
-                : {
-                    source: preview.source,
-                    reviewedIntegrity: preview.integrity,
-                  },
-            ),
-          },
-    )
+) => {
+  if (upload.type === "zip") {
+    const input = {
+      query: { name: upload.file.name, integrity: preview.integrity },
+      body: zipBody(upload.file),
+    };
+    return (
+      target.scope === "personal"
+        ? await dxClient.call(InstallPersonalPluginBundleZipEndpoint, input)
+        : await dxClient.call(InstallWorkspacePluginBundleZipEndpoint, {
+            ...input,
+            params: workspace(target),
+          })
+    ).data;
+  }
+  const body =
+    upload.type === "share"
+      ? { share: upload.token, reviewedIntegrity: preview.integrity }
+      : { source: preview.source, reviewedIntegrity: preview.integrity };
+  return (
+    target.scope === "personal"
+      ? await dxClient.call(InstallPersonalPluginBundleEndpoint, { body })
+      : await dxClient.call(InstallWorkspacePluginBundleEndpoint, {
+          params: workspace(target),
+          body,
+        })
   ).data;
+};
 
 /** The install-time settings a plugin's code declares, with saved values. */
 export const getPluginBundleSettings = async (
@@ -171,18 +187,34 @@ export const previewPluginBundleUpdate = async (
   target: PluginsTarget,
   pluginId: PluginId,
   file?: File,
-) =>
-  (
-    await request(
-      file === undefined
-        ? `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update/preview`
-        : `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update/preview?name=${encodeURIComponent(file.name)}`,
-      PreviewPluginBundleUpdateResponseSchema,
-      file === undefined
-        ? { method: "POST", body: JSON.stringify({}) }
-        : zipInit(file),
-    )
+) => {
+  const params = { pluginId };
+  if (file !== undefined) {
+    const input = { query: { name: file.name }, body: zipBody(file) };
+    return (
+      target.scope === "personal"
+        ? await dxClient.call(PreviewPersonalPluginBundleUpdateZipEndpoint, {
+            ...input,
+            params,
+          })
+        : await dxClient.call(PreviewWorkspacePluginBundleUpdateZipEndpoint, {
+            ...input,
+            params: { ...workspace(target), ...params },
+          })
+    ).data;
+  }
+  return (
+    target.scope === "personal"
+      ? await dxClient.call(PreviewPersonalPluginBundleUpdateEndpoint, {
+          params,
+          body: {},
+        })
+      : await dxClient.call(PreviewWorkspacePluginBundleUpdateEndpoint, {
+          params: { ...workspace(target), ...params },
+          body: {},
+        })
   ).data;
+};
 
 /** Installs the reviewed update: the same ZIP, or the previewed commit. */
 export const updatePluginBundle = async (
@@ -192,25 +224,46 @@ export const updatePluginBundle = async (
   file?: File,
   /** The person reviewed and accepted the wider grants the preview lists. */
   acceptPermissions = false,
-) =>
-  (
-    await request(
-      file === undefined
-        ? `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update`
-        : `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update?name=${encodeURIComponent(file.name)}&integrity=${preview.integrity}${acceptPermissions ? "&acceptPermissions=1" : ""}`,
-      UpdatePluginBundleSourceResponseSchema,
-      file === undefined
-        ? {
-            method: "POST",
-            body: JSON.stringify({
-              source: preview.source,
-              reviewedIntegrity: preview.integrity,
-              ...(acceptPermissions ? { acceptPermissions: true } : {}),
-            }),
-          }
-        : zipInit(file),
-    )
+) => {
+  const params = { pluginId };
+  if (file !== undefined) {
+    const input = {
+      query: {
+        name: file.name,
+        integrity: preview.integrity,
+        ...(acceptPermissions ? { acceptPermissions: "1" as const } : {}),
+      },
+      body: zipBody(file),
+    };
+    return (
+      target.scope === "personal"
+        ? await dxClient.call(UpdatePersonalPluginBundleZipEndpoint, {
+            ...input,
+            params,
+          })
+        : await dxClient.call(UpdateWorkspacePluginBundleZipEndpoint, {
+            ...input,
+            params: { ...workspace(target), ...params },
+          })
+    ).data;
+  }
+  const body = {
+    source: preview.source,
+    reviewedIntegrity: preview.integrity,
+    ...(acceptPermissions ? { acceptPermissions: true } : {}),
+  };
+  return (
+    target.scope === "personal"
+      ? await dxClient.call(UpdatePersonalPluginBundleEndpoint, {
+          params,
+          body,
+        })
+      : await dxClient.call(UpdateWorkspacePluginBundleEndpoint, {
+          params: { ...workspace(target), ...params },
+          body,
+        })
   ).data;
+};
 
 export const setPluginBundleEnabled = async (
   target: PluginsTarget,

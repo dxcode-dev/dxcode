@@ -1,6 +1,5 @@
 {
   "apps/web/src/features/settings/model-routing/provider-key-presentation.ts": 1,
-  "apps/web/src/features/settings/plugins/plugin-bundle-queries.ts": 2,
   "apps/web/src/features/threads/changes/changes-api.ts": 1,
   "apps/web/src/prototypes/sidebar-states/fixtures.ts": 1,
   "apps/web/src/prototypes/workspace-demo/data.ts": 1,

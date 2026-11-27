@@ -84,6 +84,18 @@ export const joinHuddle = (
   return huddleClient.join(place.scope, options);
 };
 
+/**
+ * Sign-out ends the call: the call runs outside React and its token is not
+ * tied to the dx session, so otherwise the mic would keep publishing as the
+ * person who left and the next account in the tab would inherit the call.
+ */
+export const endHuddleOnSignOut = () => {
+  view.popout?.close();
+  view = { mode: "expanded", corner: view.corner };
+  for (const listener of viewListeners) listener();
+  return huddleClient.reset();
+};
+
 export const leaveHuddle = () => {
   view.popout?.close();
   setView({ popout: undefined, mode: "expanded" });

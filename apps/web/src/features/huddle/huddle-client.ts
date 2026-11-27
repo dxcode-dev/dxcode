@@ -100,6 +100,12 @@ export interface HuddleClient {
   prepare(scope: HuddleScope): void;
   join(scope: HuddleScope, options: HuddleJoinOptions): Promise<void>;
   leave(): Promise<void>;
+  /**
+   * Sign-out: leaves the call, releases a prepared meeting, and forgets
+   * what the client kept about the signed-in person, so nothing carries over
+   * to the next account in the tab.
+   */
+  reset(): Promise<void>;
   setAudioMuted(muted: boolean): Promise<void>;
   setVideoOn(on: boolean): Promise<void>;
   setScreenSharing(on: boolean): Promise<void>;

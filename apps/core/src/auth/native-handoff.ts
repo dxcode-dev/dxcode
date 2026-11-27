@@ -18,6 +18,10 @@ import { encodeBase64Url } from "../encoding/base64.js";
  * - The code lives two minutes, works once, and is stored hashed.
  * - Only the app that made the challenge holds the verifier, so another app
  *   that registered the same URL scheme can't redeem an intercepted code.
+ * - Only the app's own load redeems (`Sec-Fetch-Site: none`). The code is
+ *   bound to its challenge, not to a browser, so a page or link that sends
+ *   someone here with an attacker's code and verifier would otherwise sign
+ *   them in to the attacker's account (login CSRF).
  */
 
 const PREFIX = "native-handoff:";
@@ -69,6 +73,11 @@ export const nativeHandoff = (): BetterAuthPlugin => ({
         }),
       },
       async (context) => {
+        const site = context.headers?.get("sec-fetch-site");
+        if (site !== null && site !== undefined && site !== "none")
+          throw context.error("FORBIDDEN", {
+            message: "Open this sign-in link from the dx app.",
+          });
         const { code, verifier } = context.query;
         const stored =
           await context.context.internalAdapter.consumeVerificationValue(

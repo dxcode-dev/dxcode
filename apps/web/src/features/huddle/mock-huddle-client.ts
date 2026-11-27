@@ -375,6 +375,10 @@ export class MockHuddleClient implements HuddleClient {
     if (this.state.status === "left") this.set(IDLE_HUDDLE);
   }
 
+  reset() {
+    return this.leave();
+  }
+
   async setAudioMuted(muted: boolean) {
     if (!muted && this.local.audio === undefined) {
       try {

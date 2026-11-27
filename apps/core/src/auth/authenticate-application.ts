@@ -6,12 +6,17 @@ import {
   ExternalApiApplicationRateLimited,
   ExternalApiApplicationRepository,
   type ExternalApiApplicationScope,
+  PersistenceUnavailable,
   type Principal,
 } from "@dx/domain";
 import { Effect, Layer, Option, Schema } from "effect";
 import { applicationAuditLogger } from "../logging.js";
+import { takeRequestBudget } from "../security/request-budget.js";
 import { ExternalApiApplicationCredentials } from "../settings/applications/credentials.js";
 import { ExternalApiApplicationRepositoryD1 } from "../settings/applications/repository-d1.js";
+
+/** Wrong secrets refused (and audited) per app per minute before 429s. */
+const FAILED_AUTHENTICATION_BUDGET = { maximum: 10, windowMs: 60_000 } as const;
 
 const layerFor = (db: D1Database) =>
   Layer.merge(
@@ -62,22 +67,38 @@ export const authenticateExternalApiApplication = (
     const repository = yield* ExternalApiApplicationRepository;
     const credentials = yield* ExternalApiApplicationCredentials;
     const now = Date.now();
-    // The budget is claimed before the secret is checked, so wrong secrets
-    // against a known client id are throttled and audited like any request.
     const known = yield* repository.findActiveByClientId(input.clientId);
     if (Option.isNone(known)) return Option.none<Principal>();
     const windowStartedAt = Math.floor(now / 60_000) * 60_000;
-    const claimed = yield* repository.claimRateLimit(
-      known.value.applicationId,
-      known.value.rateLimitPerMinute,
-      windowStartedAt,
-    );
     const secretHash = yield* credentials.hash(input.clientSecret);
     const authenticated = yield* repository.authenticate(
       input.clientId,
       secretHash,
       now,
     );
+    // Only verified callers spend the app's own budget. Wrong secrets spend
+    // a separate per-app failure budget, so anyone who knows a client id can
+    // no longer lock the real integration out (#2424).
+    const claimed = Option.isNone(authenticated)
+      ? yield* Effect.tryPromise({
+          try: () =>
+            takeRequestBudget(
+              db,
+              `external-api-application-auth-failure:${known.value.applicationId}`,
+              FAILED_AUTHENTICATION_BUDGET,
+              now,
+            ),
+          catch: (cause) =>
+            PersistenceUnavailable.new(
+              { operation: "settings.applications.authFailureBudget" },
+              cause,
+            ),
+        })
+      : yield* repository.claimRateLimit(
+          known.value.applicationId,
+          known.value.rateLimitPerMinute,
+          windowStartedAt,
+        );
     const rejected = (
       credentialId?: typeof ExternalApiApplicationCredentialId.Type,
     ) =>
@@ -106,8 +127,8 @@ export const authenticateExternalApiApplication = (
       ),
     });
     if (Option.isNone(authenticated)) {
-      // Past the budget, a wrong secret writes no row: the audit stays
-      // bounded by the application's own rate limit.
+      // Past the failure budget, a wrong secret writes no row: the audit
+      // stays bounded by that budget.
       if (!claimed) return yield* rateLimited;
       yield* rejected();
       return Option.none<Principal>();

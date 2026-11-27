@@ -104,7 +104,7 @@ const STORAGE_PATH =
   /^\/v1\/threads\/([^/]+)\/storage\/(tsf_[0-9a-f]{32})(?:\/([^/?#]*))?$/;
 
 export interface ThreadStorageLocation {
-  readonly threadId: string;
+  readonly threadId: ThreadId;
   readonly id: string;
   /** The file name the URL ends with, decoded; empty when it has none. */
   readonly name: string;

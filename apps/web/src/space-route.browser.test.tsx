@@ -515,14 +515,8 @@ it("opens a post's comments from Comment, posts one, and counts it under the pos
   expect(server.posted).toEqual([
     {
       messageId: postId(1),
-      body: {
-        body: "People-only note: checking how comments look.",
-        message: {
-          excerpt: expect.stringContaining("Start two small threads"),
-          authorUserId: viewer,
-          sentAt: expect.any(Number),
-        },
-      },
+      // Only the comment: Core quotes the post itself (#2619).
+      body: { body: "People-only note: checking how comments look." },
     },
   ]);
   await page.screenshot({ path: `${SHOTS}/space-comments-open-1440.png` });

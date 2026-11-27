@@ -75,16 +75,23 @@ export const parseMailHeaderBlock = (
 };
 
 /**
- * Whether every DKIM signature aligned with the `From:` domain signs the
- * named header (lists it in `h=`), and at least one exists. Requiring every
- * one means a forged extra signature cannot help an attacker: only headers
- * the sender's own signer covered can be trusted not to have been changed.
+ * Whether every DKIM signature aligned with the `From:` domain whose domain
+ * passed in Cloudflare's results signs the named header (lists it in `h=`),
+ * and at least one exists. Requiring every one means a forged extra
+ * signature cannot help an attacker: only headers the sender's own signer
+ * covered can be trusted not to have been changed.
  */
 export const dkimSignsHeader = (
   headers: ReadonlyArray<MailHeader>,
+  authentication: MailAuthentication,
   fromDomain: string,
   headerName: string,
 ) => {
+  const passed = authentication.trusted
+    ? authentication.dkimPassDomains.filter((signer) =>
+        dkimAligned(fromDomain, signer),
+      )
+    : [];
   const aligned = headers
     .filter(({ name }) => name === "dkim-signature")
     .map(({ value }) => {
@@ -100,14 +107,14 @@ export const dkimSignsHeader = (
           }) as Array<[string, string]>,
       );
       return {
-        domain: (tags.get("d") ?? "").toLowerCase(),
+        domain: (tags.get("d") ?? "").toLowerCase().replace(/\.$/, ""),
         signed: (tags.get("h") ?? "")
           .toLowerCase()
           .split(":")
           .filter((name) => name.length > 0),
       };
     })
-    .filter(({ domain }) => domain !== "" && dkimAligned(fromDomain, domain));
+    .filter(({ domain }) => passed.includes(domain));
   return (
     aligned.length > 0 &&
     aligned.every(({ signed }) => signed.includes(headerName.toLowerCase()))

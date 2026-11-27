@@ -42,7 +42,10 @@
 //   person has to keep pressing, its "Open on your Mac" reaches no route or
 //   the wrong pane, a Mac offline goes unsaid, it never notices the grant
 //   (or opens a socket before it), or a missing Accessibility blocks the
-//   stream.
+//   stream;
+// - a 4401 close the Orb chose (dxd forwards guest close codes) signs the
+//   person out and wipes their drafts while their session is still valid,
+//   or Core's own 4401 for a session that really ended does not.
 
 import type {
   DesktopWindow,
@@ -64,6 +67,7 @@ import {
 } from "vitest";
 import { userEvent } from "vitest/browser";
 import "../../styles.css";
+import { onSessionEnded } from "../../shared/auth/session-ended.js";
 import { PaneTreeHarness } from "../../testing/pane-tree-harness.js";
 import { DesktopViewer } from "./desktop-viewer.js";
 
@@ -85,6 +89,23 @@ vi.mock("sonner", async (importOriginal) => {
     }),
   };
 });
+
+// The browser session check the viewer asks before signing out.
+const browserSession = vi.hoisted(() => ({
+  current: { user: { id: "usr_1", name: "Alice", email: "a@x.test" } } as {
+    user: { id: string; name: string; email: string };
+  } | null,
+  checks: 0,
+}));
+vi.mock("../../shared/auth/auth-client.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../shared/auth/auth-client.js")
+  >()),
+  getBrowserSession: async () => {
+    browserSession.checks += 1;
+    return browserSession.current;
+  },
+}));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -1102,6 +1123,45 @@ describe("DesktopViewer", () => {
 
     await React.act(async () => button(container, "Retry")?.click());
     await connected();
+    await React.act(() => root.unmount());
+  });
+
+  it("signs out on a session-ended close only when the session check agrees", async () => {
+    const ended = vi.fn();
+    const stop = onSessionEnded(ended);
+    browserSession.checks = 0;
+    browserSession.current = {
+      user: { id: "usr_1", name: "Alice", email: "a@x.test" },
+    };
+    const { container, root } = await render(
+      <DesktopViewer active threadId={threadA} />,
+    );
+    await connected();
+    const first = await live();
+    // #2634: the Orb closed the stream with 4401 while Alice is still signed
+    // in. She stays signed in and the viewer reconnects.
+    await React.act(async () => {
+      first.readyState = FakeSocket.CLOSED;
+      first.dispatchEvent(new CloseEvent("close", { code: 4401 }));
+    });
+    await vi.waitFor(() => expect(browserSession.checks).toBe(1));
+    await settle();
+    expect(ended).not.toHaveBeenCalled();
+    expect(text(container)).toContain("Reconnecting");
+    await vi.waitFor(() => expect(openSockets()).toHaveLength(1), {
+      timeout: 5_000,
+    });
+
+    // Core's own 4401 after her session really ended signs her out.
+    browserSession.current = null;
+    const second = desktopSocket();
+    await React.act(async () => {
+      second.open();
+      second.readyState = FakeSocket.CLOSED;
+      second.dispatchEvent(new CloseEvent("close", { code: 4401 }));
+    });
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
+    stop();
     await React.act(() => root.unmount());
   });
 

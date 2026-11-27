@@ -1,6 +1,8 @@
 import { env } from "cloudflare:test";
 import {
   type CreateThreadStorageFileResponse,
+  type Endpoint,
+  GetNamedThreadStorageFileEndpoint,
   THREAD_STORAGE_PART_BYTES,
   THREAD_STORAGE_TEMPORARY_TTL_MS,
   type ThreadStorageFile,
@@ -12,7 +14,7 @@ import {
   ThreadRepository,
   UserId,
 } from "@dx/domain";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { authorizeThread } from "../../src/auth/authorize-thread.js";
@@ -137,6 +139,20 @@ const daemon = (
     threadId,
     path,
   );
+
+/**
+ * The code of the refusal `endpoint` lists for this answer, as a client
+ * reads it; undefined when the endpoint lists none that matches.
+ */
+const refusalCode = async (endpoint: Endpoint, response: Response) => {
+  const body: unknown = await response.json();
+  return endpoint.refusals
+    .filter(({ status }) => status === response.status)
+    .flatMap(({ schema }) =>
+      Option.toArray(Schema.decodeUnknownOption(schema)(body)),
+    )
+    .at(0)?.data.code;
+};
 
 const json = (body: unknown): RequestInit => ({
   method: "POST",
@@ -350,7 +366,9 @@ describe("Thread storage", () => {
       `/v1/threads/${siblingThread.id}/storage/${file.id}/x.png`,
     );
     expect(borrowed.status).toBe(404);
-    await borrowed.arrayBuffer();
+    expect(await refusalCode(GetNamedThreadStorageFileEndpoint, borrowed)).toBe(
+      "THREAD_STORAGE_FILE_NOT_FOUND",
+    );
 
     // The listing names the finished files, newest first.
     const listed = await asOwner(`/v1/threads/${threadEntity.id}/storage`);
@@ -373,7 +391,9 @@ describe("Thread storage", () => {
       `/v1/threads/${threadEntity.id}/storage/${pending.id}/pending.png`,
     );
     expect(pendingRead.status).toBe(404);
-    await pendingRead.arrayBuffer();
+    expect(
+      await refusalCode(GetNamedThreadStorageFileEndpoint, pendingRead),
+    ).toBe("THREAD_STORAGE_FILE_NOT_FOUND");
     const pendingDescribe = await daemon(threadEntity.id, `/${pending.id}`, {});
     expect(pendingDescribe.status).toBe(404);
     await pendingDescribe.arrayBuffer();
@@ -608,7 +628,9 @@ describe("Thread storage", () => {
       .run();
     const expired = await asOwner(new URL(temporary.url).pathname);
     expect(expired.status).toBe(404);
-    await expired.arrayBuffer();
+    expect(await refusalCode(GetNamedThreadStorageFileEndpoint, expired)).toBe(
+      "THREAD_STORAGE_FILE_NOT_FOUND",
+    );
     const expiredFetch = await daemon(
       siblingThread.id,
       `/${temporary.id}`,

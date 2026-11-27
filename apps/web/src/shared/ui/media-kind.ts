@@ -1,4 +1,8 @@
-import { parseThreadStorageUrl } from "@dx/api";
+import {
+  GetNamedThreadStorageFileEndpoint,
+  parseThreadStorageUrl,
+} from "@dx/api";
+import { endpointPath } from "@dx/client";
 import type { MarkdownMediaSource } from "./markdown-file-link-context.js";
 
 const IMAGE_EXTENSIONS = new Set([
@@ -68,7 +72,17 @@ export const storedMediaSource = (
 ): MarkdownMediaSource | undefined => {
   const stored = parseThreadStorageUrl(src.trim(), origin);
   const kind = stored === undefined ? undefined : fileMediaKind(stored.name);
-  return stored === undefined || kind === undefined || kind === "pdf"
-    ? undefined
-    : { url: stored.path, kind, downloadUrl: `${stored.path}?download=1` };
+  if (stored === undefined || kind === undefined || kind === "pdf")
+    return undefined;
+  // A media kind comes from the name, so the URL names the file.
+  const file = (download?: "1") =>
+    endpointPath(GetNamedThreadStorageFileEndpoint, {
+      params: {
+        threadId: stored.threadId,
+        fileId: stored.id,
+        name: stored.name,
+      },
+      query: { download },
+    });
+  return { url: file(), kind, downloadUrl: file("1") };
 };

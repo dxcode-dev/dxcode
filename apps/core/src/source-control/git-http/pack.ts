@@ -123,12 +123,18 @@ export interface UnpackLimits {
   /** All inflated and resolved bytes together. */
   readonly maxTotalBytes: number;
   readonly maxObjects: number;
+  /**
+   * Reference deltas held at once for a base later in the pack. Git writes a
+   * base before its deltas, so a real pack holds none.
+   */
+  readonly maxWaitingDeltas: number;
 }
 
 export const DEFAULT_UNPACK_LIMITS: UnpackLimits = {
   maxObjectBytes: 8 * 1024 * 1024,
   maxTotalBytes: 32 * 1024 * 1024,
   maxObjects: 100_000,
+  maxWaitingDeltas: 10_000,
 };
 
 /** Bytes drawn from one pack's budget; exceeding it is `too-large`. */
@@ -233,7 +239,9 @@ const inflateExactly = (bytes: Uint8Array, size: number) => {
 /**
  * Every object a version-2 packfile holds, deltas resolved, by SHA-1, within
  * `limits`. A delta whose base never arrives, including a cycle of reference
- * deltas, makes the pack `malformed`.
+ * deltas, makes the pack `malformed`. A reference delta whose base comes later
+ * waits under that base's id and resolves when it arrives, so each object is
+ * built once and the work stays linear in the pack.
  */
 export const unpack = (
   pack: Uint8Array,
@@ -248,11 +256,30 @@ export const unpack = (
   const budget = new Budget(limits);
   const byOffset = new Map<number, GitObject>();
   const byId = new Map<string, GitObject>();
-  const pendingRef: Array<{
-    readonly base: string;
-    readonly delta: Uint8Array;
-    readonly offset: number;
-  }> = [];
+  const waiting = new Map<
+    string,
+    Array<{ readonly delta: Uint8Array; readonly offset: number }>
+  >();
+  let waitingCount = 0;
+  /** Records `object`, then resolves every delta waiting on it, and on those. */
+  const add = (offset: number, object: GitObject) => {
+    const stack = [{ offset, object }];
+    for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
+      const { type, data } = next.object;
+      const id = objectId(type, data);
+      byOffset.set(next.offset, next.object);
+      byId.set(id, next.object);
+      const waiters = waiting.get(id);
+      if (waiters === undefined) continue;
+      waiting.delete(id);
+      waitingCount -= waiters.length;
+      for (const waiter of waiters)
+        stack.push({
+          offset: waiter.offset,
+          object: { type, data: applyDelta(data, waiter.delta, budget) },
+        });
+    }
+  };
   let position = 12;
   for (let index = 0; index < count; index += 1) {
     const start = position;
@@ -296,32 +323,19 @@ export const unpack = (
     } else if (baseId !== undefined) {
       const base = byId.get(baseId);
       if (base === undefined) {
-        pendingRef.push({ base: baseId, delta: data, offset: start });
+        if (++waitingCount > limits.maxWaitingDeltas)
+          throw new GitWireError("too-large");
+        const waiters = waiting.get(baseId);
+        if (waiters === undefined)
+          waiting.set(baseId, [{ delta: data, offset: start }]);
+        else waiters.push({ delta: data, offset: start });
         continue;
       }
       object = { type: base.type, data: applyDelta(base.data, data, budget) };
     } else object = { type: TYPES[typeCode] as GitObjectType, data };
-    byOffset.set(start, object);
-    byId.set(objectId(object.type, object.data), object);
+    add(start, object);
   }
-  // A reference delta may name a base that comes later in the pack.
-  for (let progress = true; pendingRef.length > 0 && progress; ) {
-    progress = false;
-    for (let index = pendingRef.length - 1; index >= 0; index -= 1) {
-      const entry = pendingRef[index];
-      const base = entry === undefined ? undefined : byId.get(entry.base);
-      if (entry === undefined || base === undefined) continue;
-      const object = {
-        type: base.type,
-        data: applyDelta(base.data, entry.delta, budget),
-      };
-      byOffset.set(entry.offset, object);
-      byId.set(objectId(object.type, object.data), object);
-      pendingRef.splice(index, 1);
-      progress = true;
-    }
-  }
-  if (pendingRef.length > 0) throw new GitWireError("malformed");
+  if (waitingCount > 0) throw new GitWireError("malformed");
   return byId;
 };
 

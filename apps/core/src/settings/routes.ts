@@ -64,6 +64,7 @@ import {
   workspaceModelRoutingRoutes,
 } from "./model-routing/routes.js";
 import { personalModelSubscriptionRoutes } from "./model-subscriptions/routes.js";
+import { limitOrbProviderConnectionSaves } from "./orb-provider-connection-budget.js";
 import {
   personalPluginBundleRoutes,
   workspacePluginBundleRoutes,
@@ -259,6 +260,11 @@ settingsRoutes.route(
   "/personal/first-party-plugins",
   personalFirstPartyPluginRoutes,
 );
+// Before the Orb provider routes, so a refused save never reaches them.
+settingsRoutes.put(
+  "/personal/orb-providers/:providerId/connection",
+  limitOrbProviderConnectionSaves,
+);
 settingsRoutes.route("/personal/orb-providers", personalOrbProviderRoutes);
 settingsRoutes.route("/personal/runners", personalRunnerRoutes);
 settingsRoutes.route("/personal/plugin-bundles", personalPluginBundleRoutes);
@@ -304,6 +310,10 @@ settingsRoutes.route(
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/first-party-plugins",
   workspaceFirstPartyPluginRoutes,
+);
+settingsRoutes.put(
+  "/workspaces/:workspaceSlug/orb-providers/:providerId/connection",
+  limitOrbProviderConnectionSaves,
 );
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/orb-providers",

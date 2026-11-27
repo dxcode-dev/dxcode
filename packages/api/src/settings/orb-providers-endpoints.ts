@@ -7,6 +7,7 @@ import {
   OrbProviderListQuerySchema,
   OrbProviderListResponseSchema,
   OrbProviderParamsSchema,
+  OrbProviderRateLimitedResponseSchema,
   OrbProviderUnavailableResponseSchema,
   SetOrbProviderConnectionRequestSchema,
   SetOrbProviderPolicyRequestSchema,
@@ -24,6 +25,12 @@ const orbProviderRefusals = [
   { status: 400, schema: OrbProviderCredentialsRejectedResponseSchema },
   { status: 403, schema: OrbProviderForbiddenResponseSchema },
   { status: 503, schema: OrbProviderUnavailableResponseSchema },
+];
+
+/** Saving a connection checks its credentials with the provider. */
+const connectionSaveRefusals = [
+  ...orbProviderRefusals,
+  { status: 429, schema: OrbProviderRateLimitedResponseSchema },
 ];
 
 const OrbProvidersPersonalPath = "/v1/settings/personal/orb-providers";
@@ -56,7 +63,7 @@ export const SetPersonalOrbProviderConnectionEndpoint = defineEndpoint({
   params: OrbProviderParamsSchema,
   body: SetOrbProviderConnectionRequestSchema,
   success: OrbProviderListResponseSchema,
-  refusals: orbProviderRefusals,
+  refusals: connectionSaveRefusals,
 });
 
 export const SetWorkspaceOrbProviderConnectionEndpoint = defineEndpoint({
@@ -69,7 +76,7 @@ export const SetWorkspaceOrbProviderConnectionEndpoint = defineEndpoint({
   }),
   body: SetOrbProviderConnectionRequestSchema,
   success: OrbProviderListResponseSchema,
-  refusals: orbProviderRefusals,
+  refusals: connectionSaveRefusals,
 });
 
 export const RetryPersonalOrbProviderConnectionEndpoint = defineEndpoint({

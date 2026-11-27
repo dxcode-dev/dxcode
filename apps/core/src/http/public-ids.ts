@@ -24,14 +24,28 @@ const ID_POSITIONS: ReadonlyArray<ReadonlyArray<string>> = [
   ["v1", "spaces"],
 ];
 
+/**
+ * A segment as routes see it: Hono decodes the path before routing, so
+ * `/v1/%61gents/dx/%74-<uuid>` reaches them, and Flue's Durable Object
+ * name, as `/v1/agents/dx/t-<uuid>` (#2622).
+ */
+const decodedSegment = (segment: string) => {
+  if (!segment.includes("%")) return segment;
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+};
+
 /** The path with public IDs in the stored form; the same path when none. */
 export const storedIdPath = (pathname: string) => {
   const segments = pathname.split("/");
+  const decoded = segments.map(decodedSegment);
   for (const prefix of ID_POSITIONS) {
     const index = prefix.length + 1;
-    if (!prefix.every((part, offset) => segments[offset + 1] === part))
-      continue;
-    const match = PUBLIC_ID.exec(segments[index] ?? "");
+    if (!prefix.every((part, offset) => decoded[offset + 1] === part)) continue;
+    const match = PUBLIC_ID.exec(decoded[index] ?? "");
     if (match?.[1] === undefined || match[2] === undefined) continue;
     segments[index] =
       `${match[1].toLowerCase() === "t" ? "thr" : "prj"}_${match[2].toLowerCase()}`;
@@ -46,8 +60,6 @@ type FetchLike = (request: Request, ...rest: any[]) => unknown;
 export const withStoredIds = <F extends FetchLike>(fetch: F): F =>
   ((request: Request, ...rest: unknown[]) => {
     const url = new URL(request.url);
-    if (!url.pathname.startsWith("/v1/"))
-      return fetch(request, ...(rest as []));
     const pathname = storedIdPath(url.pathname);
     if (pathname === url.pathname) return fetch(request, ...(rest as []));
     url.pathname = pathname;

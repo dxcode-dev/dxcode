@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { deflateSync, inflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_UNPACK_LIMITS,
   GitWireError,
   unpack,
 } from "../../src/source-control/git-http/pack.js";
@@ -56,6 +58,36 @@ const pack = (entries: ReadonlyArray<Uint8Array>, count = entries.length) => {
 const blob = (content: Uint8Array) =>
   concat([objectHeader(3, content.length), deflateSync(content)]);
 
+/**
+ * A chain of `length` four-byte blobs where each is a reference delta on the
+ * one before, written with the base last, so every delta waits for a later
+ * base. Rescanning the waiting deltas for each base takes quadratic time.
+ */
+const backwardChain = (length: number) => {
+  const content = (index: number) => {
+    const bytes = new Uint8Array(4);
+    new DataView(bytes.buffer).setUint32(0, index);
+    return bytes;
+  };
+  const id = (data: Uint8Array) =>
+    Uint8Array.from(
+      createHash("sha1").update(`blob ${data.length}\0`).update(data).digest(),
+    );
+  const entries = Array.from({ length: length - 1 }, (_, index) => {
+    const delta = concat([Uint8Array.from([4, 4, 4]), content(index + 1)]);
+    return concat([
+      objectHeader(7, delta.length),
+      id(content(index)),
+      deflateSync(delta),
+    ]);
+  });
+  return {
+    pack: pack([...entries, blob(content(0))]),
+    lastId: Buffer.from(id(content(length - 1))).toString("hex"),
+    last: content(length - 1),
+  };
+};
+
 const failure = (run: () => unknown) => {
   try {
     run();
@@ -97,6 +129,7 @@ describe("pack parser limits", () => {
       maxObjectBytes: 1024 * 1024,
       maxTotalBytes: 4 * 1024 * 1024,
       maxObjects: 100,
+      maxWaitingDeltas: 100,
     };
     const entries = Array.from({ length: 5 }, (_, index) => {
       const content = megabyte.slice();
@@ -140,6 +173,22 @@ describe("pack parser limits", () => {
         unpack(pack([reference("a".repeat(40)), reference("b".repeat(40))])),
       ),
     ).toBe("malformed");
+  });
+
+  it("resolves a backward reference-delta chain in linear time", () => {
+    const chain = backwardChain(50_000);
+    const limits = { ...DEFAULT_UNPACK_LIMITS, maxWaitingDeltas: 50_000 };
+    const started = performance.now();
+    const objects = unpack(chain.pack, limits);
+    // Rescanning the waiting deltas took about 28 s here; resolving each once
+    // takes under 1 s.
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(objects.size).toBe(50_000);
+    expect(objects.get(chain.lastId)?.data).toEqual(chain.last);
+  });
+
+  it("refuses more reference deltas waiting on later bases than the cap", () => {
+    expect(failure(() => unpack(backwardChain(20_000).pack))).toBe("too-large");
   });
 
   it("refuses a pack that claims more objects than the cap", () => {
