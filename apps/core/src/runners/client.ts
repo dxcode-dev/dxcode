@@ -1,5 +1,6 @@
 import type { Bindings } from "../http/types.js";
 import { type RunnerOperation, RunnerOperationError } from "./protocol.js";
+import { machineRemoved as removedAt } from "./repository.js";
 import type { RunnerStatus } from "./session-object.js";
 
 const session = (bindings: Bindings, machineId: string) => {
@@ -44,12 +45,7 @@ export const runnerCall = async <Result>(
 const machineRemoved = async (bindings: Bindings, machineId: string) => {
   if (bindings.DB === undefined) return false;
   try {
-    const row = await bindings.DB.prepare(
-      "SELECT revoked_at FROM runner_machine WHERE id = ?",
-    )
-      .bind(machineId)
-      .first<{ revoked_at: number | null }>();
-    return row === null || row.revoked_at !== null;
+    return await removedAt(bindings.DB, machineId);
   } catch {
     return false;
   }

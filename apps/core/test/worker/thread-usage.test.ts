@@ -465,19 +465,25 @@ describe("Thread Cost & Usage in workerd with real D1", () => {
 
   /**
    * The D1 reads of opening the dialog. The dx models' configuration it
-   * names models by is an isolate cache rechecked at most every few seconds
-   * (dx-models/source.ts), not a read per request, so it is warmed first:
-   * otherwise a slow run that spends longer than that between two reads
-   * counts the recheck as the route's.
+   * names models by is an isolate cache rechecked at most every 5 s
+   * (dx-models/source.ts), not a read per request, so it is warmed first,
+   * and the clock holds still until the response: a loaded machine can
+   * spend longer than that between the warm read and the route's, and
+   * would count the isolate's recheck as the route's.
    */
   const usageReads = async () => {
-    await loadDeploymentModels(env.DB);
-    counter.reset();
-    const { status } = await get<ThreadUsageData>(
-      owner,
-      `/v1/threads/${threadId}/usage`,
-    );
-    expect(status).toBe(200);
+    vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+    try {
+      await loadDeploymentModels(env.DB);
+      counter.reset();
+      const { status } = await get<ThreadUsageData>(
+        owner,
+        `/v1/threads/${threadId}/usage`,
+      );
+      expect(status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
     const calls = [...counter.calls];
     return {
       ...summarizeD1Calls(calls),

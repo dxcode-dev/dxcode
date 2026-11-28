@@ -26,6 +26,12 @@ export const Agent37RunnerProfileConfiguration = Schema.Struct({
    * size. Absent before a Thread pins one.
    */
   template: Schema.optional(Agent37Template),
+  /**
+   * Agent37's instance type. `default` (omitted) shares its host's cores and
+   * keeps its disks on gVisor's 9p filesystem; `vm` is a whole virtual
+   * machine with its own cores and an ext4 disk, at 2.5x the compute rate.
+   */
+  instanceType: Schema.optional(Schema.Literals(["default", "vm"])),
 });
 
 export type Agent37RunnerProfileConfiguration =
@@ -35,16 +41,23 @@ export const Agent37OrbSize = Schema.Struct({
   id: RunnerProfileId,
   label: RunnerProfileLabel,
   resources: RunnerResources,
+  instanceType: Schema.Literals(["default", "vm"]),
 });
 
 export type Agent37OrbSize = typeof Agent37OrbSize.Type;
 
 /**
- * Agent37's four instance shapes as Orb sizes
+ * Agent37's instance shapes as Orb sizes
  * (agent37.com/docs/agents-api/instance-sizing, 2026-11-16), each with its
- * largest disk. 4 vCPU is Agent37's ceiling on every shape. The disk is the
- * Orb's workspace (`/home/user/workspace`); the rest of the system keeps
- * its own 10 GB layer, which Agent37 does not bill.
+ * largest disk. The disk is the Orb's workspace (`/home/user/workspace`);
+ * the rest of the system keeps its own 10 GB layer, which Agent37 does not
+ * bill.
+ *
+ * The shared (`default`) sizes stop at 4 vCPU and share their host's
+ * cores. The VM sizes are whole virtual machines with their own cores and
+ * an ext4 disk: on a clone, `pnpm install`, and compile benchmark
+ * (2026-11-27), a 4 vCPU VM ran in 16 s where the shared 4 vCPU size took
+ * 102 s, at 2.5x its compute price.
  */
 export const AGENT37_ORB_SIZES = Schema.decodeUnknownSync(
   Schema.Array(Agent37OrbSize),
@@ -53,26 +66,73 @@ export const AGENT37_ORB_SIZES = Schema.decodeUnknownSync(
     id: "a37.small",
     label: "small",
     resources: { cpuCores: 2, memoryMb: 4096, diskGb: 12 },
+    instanceType: "default",
   },
   {
     id: "a37.medium",
     label: "medium",
     resources: { cpuCores: 4, memoryMb: 8192, diskGb: 20 },
+    instanceType: "default",
   },
   {
     id: "a37.large",
     label: "large",
     resources: { cpuCores: 4, memoryMb: 16384, diskGb: 40 },
+    instanceType: "default",
   },
   {
     id: "a37.xlarge",
     label: "xlarge",
     resources: { cpuCores: 4, memoryMb: 32768, diskGb: 80 },
+    instanceType: "default",
+  },
+  {
+    id: "a37.vm-small",
+    label: "VM small",
+    resources: { cpuCores: 2, memoryMb: 4096, diskGb: 12 },
+    instanceType: "vm",
+  },
+  {
+    id: "a37.vm-medium",
+    label: "VM medium",
+    resources: { cpuCores: 4, memoryMb: 8192, diskGb: 20 },
+    instanceType: "vm",
+  },
+  {
+    id: "a37.vm-large",
+    label: "VM large",
+    resources: { cpuCores: 4, memoryMb: 16384, diskGb: 40 },
+    instanceType: "vm",
+  },
+  {
+    id: "a37.vm-xlarge",
+    label: "VM xlarge",
+    resources: { cpuCores: 4, memoryMb: 32768, diskGb: 80 },
+    instanceType: "vm",
+  },
+  {
+    id: "a37.vm-2xlarge",
+    label: "VM 2xlarge",
+    resources: { cpuCores: 8, memoryMb: 65536, diskGb: 100 },
+    instanceType: "vm",
   },
 ]);
 
 /** Agent37 prices by the month; it meters per minute at 1/730 of it an hour. */
 const HOURS_PER_MONTH = 730;
+const USD_PER_VCPU_MONTH = 0.8;
+const USD_PER_GIB_MEMORY_MONTH = 0.7;
+const USD_PER_GB_DISK_MONTH = 0.09;
+/** A VM's compute meters at this multiple of the default rate; disk does not. */
+const VM_COMPUTE_RATE = 2.5;
+
+/** A size's running hour at Agent37's list price, its full disk included. */
+const sizeHourUsd = ({ resources, instanceType }: Agent37OrbSize): number =>
+  ((resources.cpuCores * USD_PER_VCPU_MONTH +
+    (resources.memoryMb / 1024) * USD_PER_GIB_MEMORY_MONTH) *
+    (instanceType === "vm" ? VM_COMPUTE_RATE : 1) +
+    resources.diskGb * USD_PER_GB_DISK_MONTH) /
+  HOURS_PER_MONTH;
 
 export const agent37OrbProvider = defineOrbProvider({
   id: "agent37",
@@ -94,11 +154,11 @@ export const agent37OrbProvider = defineOrbProvider({
   requiredCapabilities: ORB_RUNNER_CAPABILITIES,
   // Metered per minute while running; asleep, only the disk bills.
   pricing: {
-    usdPerVcpuHour: 0.8 / HOURS_PER_MONTH,
-    usdPerGibMemoryHour: 0.7 / HOURS_PER_MONTH,
-    usdPerGbDiskHour: 0.09 / HOURS_PER_MONTH,
+    usdPerSizeHour: Object.fromEntries(
+      AGENT37_ORB_SIZES.map((size) => [size.id, sizeHourUsd(size)]),
+    ),
     source: "https://www.agent37.com/docs/agents-api/billing",
-    checkedOn: "2026-11-16",
+    checkedOn: "2026-11-27",
   },
   sizes: AGENT37_ORB_SIZES.map((size) => ({
     id: size.id,
@@ -108,6 +168,7 @@ export const agent37OrbProvider = defineOrbProvider({
     isolation: "sandbox" as const,
     availability: "available" as const,
     capabilities: ORB_RUNNER_CAPABILITIES,
+    ...(size.instanceType === "vm" ? { instanceType: "vm" as const } : {}),
   })),
   withTarget: (profile, template) => ({ ...profile, template }),
 });

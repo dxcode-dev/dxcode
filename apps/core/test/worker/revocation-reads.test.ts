@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import app from "../../src/app.js";
 import type { Bindings } from "../../src/http/types.js";
+import { sha256Hex } from "../../src/runners/repository.js";
 
 /**
  * With read replicas, a request that carries no D1 bookmark reads a replica
@@ -198,5 +199,50 @@ describe("revocation with read replicas", () => {
     reads.length = 0;
     expect((await cli("/v1/projects")).status).toBe(401);
     expect(replicaCredentialReads()).toEqual([]);
+  });
+
+  // #2696: a request with any cookie may read a lagging replica.
+  it("refuses a removed runner's token, reading the machine and its Threads at the primary", async () => {
+    const owner = `runner-owner-${crypto.randomUUID()}`;
+    const removed = `dxr_${"a".repeat(64)}`;
+    const live = `dxr_${"b".repeat(64)}`;
+    await env.DB.batch([
+      env.DB.prepare(
+        'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?1, ?1, ?2, 1, 1, 1)',
+      ).bind(owner, `${owner}@example.com`),
+      env.DB.prepare(
+        `INSERT INTO runner_machine
+           (id, owner_user_id, name, os, arch, token_sha256, created_at, revoked_at)
+         VALUES (?1, ?2, 'laptop', 'macos', 'aarch64', ?3, 1, 2),
+                (?4, ?2, 'studio', 'macos', 'aarch64', ?5, 1, NULL)`,
+      ).bind(
+        `rnm_${"1".repeat(24)}`,
+        owner,
+        await sha256Hex(removed),
+        `rnm_${"2".repeat(24)}`,
+        await sha256Hex(live),
+      ),
+    ]);
+    const runner = (token: string) =>
+      app.request(
+        "/v1/runner/archives/thr_00000000-0000-4000-8000-000000002696",
+        { headers: { authorization: `Bearer ${token}`, cookie: "a=1" } },
+        bindings,
+      );
+    const replicaRunnerReads = () =>
+      reads.filter(
+        (read) =>
+          read.via !== "binding" &&
+          read.via !== "first-primary" &&
+          /\b(?:runner_machine|execution_workspace)\b/.test(read.sql),
+      );
+
+    reads.length = 0;
+    expect((await runner(removed)).status).toBe(401);
+    expect((await runner(live)).status).toBe(404);
+    expect(reads.some((read) => read.sql.includes("execution_workspace"))).toBe(
+      true,
+    );
+    expect(replicaRunnerReads()).toEqual([]);
   });
 });

@@ -96,27 +96,40 @@ const failure = (
 /** Reports one person may send in an hour. */
 export const BUG_REPORTS_PER_HOUR = 10;
 
+const HOUR_MS = 60 * 60 * 1000;
+
 /**
- * Whether the reporter has sent their hour's reports (#2370). Each report
- * keeps up to about 84 MB and a Thread's report runs a billed Worker logs
- * query, so this is checked before the form is read. A retry of a report
- * already kept passes, so it gets that report back.
+ * Answers a send before its form is read, or undefined to read it. Each
+ * report keeps up to about 84 MB and a Thread's report runs a billed Worker
+ * logs query, so a person past their hour's reports (#2370) is refused here.
+ * A retry of a report already kept gets that report back at once, without
+ * redoing that work (#2690).
  */
-const overReportLimit = async (context: Context<AppEnv>, db: D1Database) => {
+const answerBeforeForm = async (context: Context<AppEnv>, db: D1Database) => {
   const reporter = context.get("actor") ?? context.get("principal");
+  const key = context.req.header("idempotency-key");
+  if (key !== undefined && IDEMPOTENCY_KEY.test(key)) {
+    const earlier = await readBugReport(
+      db,
+      await bugReportIdFor(reporter.userId, key),
+    );
+    if (earlier !== undefined && earlier.reporterUserId === reporter.userId)
+      return context.json(
+        Schema.encodeUnknownSync(CreateBugReportResponseSchema)({
+          status: "success",
+          data: earlier.report,
+        }),
+        201,
+      );
+  }
   const sent = await countReportedSince(
     db,
     reporter.userId,
-    new Date(Date.now() - 60 * 60 * 1000),
+    new Date(Date.now() - HOUR_MS),
   );
-  if (sent < BUG_REPORTS_PER_HOUR) return false;
-  const key = context.req.header("idempotency-key");
-  if (key === undefined || !IDEMPOTENCY_KEY.test(key)) return true;
-  const earlier = await readBugReport(
-    db,
-    await bugReportIdFor(reporter.userId, key),
-  );
-  return earlier?.reporterUserId !== reporter.userId;
+  return sent < BUG_REPORTS_PER_HOUR
+    ? undefined
+    : failure(context, "RATE_LIMITED", 429);
 };
 
 interface FormFile {
@@ -285,6 +298,12 @@ const keepReport = async (
       imageCount: input.images.length,
       diagnostics: input.diagnostics,
     },
+    // Checked again as it is kept, so concurrent sends past the count
+    // above are refused too (#2690).
+    {
+      since: new Date(now.getTime() - HOUR_MS),
+      maximum: BUG_REPORTS_PER_HOUR,
+    },
     now,
   ).catch((cause: unknown) => {
     persistenceFailed(context, cause);
@@ -292,7 +311,8 @@ const keepReport = async (
   });
   if (created === undefined)
     return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
-  if (!created) {
+  if (created === "limited") return failure(context, "RATE_LIMITED", 429);
+  if (created === "repeated") {
     // Kept by an earlier try of this send, whole: a report whose files
     // failed is removed again below.
     const earlier = await readBugReport(db, id);
@@ -381,8 +401,8 @@ export const threadBugReportRoutes = new Hono<AppEnv>().post(
     const db = context.env.DB;
     if (db === undefined)
       return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
-    if (await overReportLimit(context, db))
-      return failure(context, "RATE_LIMITED", 429);
+    const early = await answerBeforeForm(context, db);
+    if (early !== undefined) return early;
     const form = await readForm(
       context,
       CreateBugReportRequestSchema,
@@ -504,8 +524,8 @@ export const bugReportRoutes = new Hono<AppEnv>()
     const db = context.env.DB;
     if (db === undefined)
       return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
-    if (await overReportLimit(context, db))
-      return failure(context, "RATE_LIMITED", 429);
+    const early = await answerBeforeForm(context, db);
+    if (early !== undefined) return early;
     const form = await readForm(
       context,
       CreateAppBugReportRequestSchema,

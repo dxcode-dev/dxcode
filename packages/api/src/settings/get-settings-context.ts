@@ -50,6 +50,12 @@ export const PersonalSettingsContextDataSchema = Schema.Struct({
    * shows no Space, New Space, or Space setting anywhere.
    */
   spaces: Schema.optional(Schema.Boolean),
+  /**
+   * The person turned the `server-transcript` experimental feature on, so
+   * the web compares Core's transcript items with its own. Absent, the web
+   * loads none of that code and reads no experimental features for it.
+   */
+  serverTranscript: Schema.optional(Schema.Boolean),
 });
 
 export const WorkspaceSettingsContextDataSchema = Schema.Struct({
@@ -61,6 +67,7 @@ export const WorkspaceSettingsContextDataSchema = Schema.Struct({
   composerQuickActions: Schema.optional(Schema.Boolean),
   huddle: Schema.optional(Schema.Boolean),
   spaces: Schema.optional(Schema.Boolean),
+  serverTranscript: Schema.optional(Schema.Boolean),
 });
 
 export const SettingsContextDataSchema = Schema.Union([

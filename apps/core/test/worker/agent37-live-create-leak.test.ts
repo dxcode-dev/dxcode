@@ -91,11 +91,11 @@ describe.skipIf(apiKey === undefined || template === undefined)(
         .run();
       return threadId;
     };
-    const context = (): ExecutionContext => ({
+    const context = (sized = size): ExecutionContext => ({
       account: { scope: "personal", userId: owner, providerAccount: "live" },
       credentials: Redacted.make({ apiKey: apiKey as string }),
       profile: {
-        ...size,
+        ...sized,
         adapter: "agent37",
         template,
       } as unknown as ExecutionContext["profile"],
@@ -210,6 +210,38 @@ describe.skipIf(apiKey === undefined || template === undefined)(
       expect(instances.map(({ id }) => id)).toEqual([
         record?.provider_sandbox_id,
       ]);
+    }, 300_000);
+
+    it("opens a VM size as an Agent37 VM", async ({ annotate }) => {
+      const threadId = await thread();
+      const vmSize = AGENT37_ORB_SIZES.find(({ id }) => id === "a37.vm-small");
+      const handle = await makeAgent37ExecutionProvider().workspace.create(
+        context(vmSize),
+        { threadId: threadId as never },
+        { authorize: async () => {} },
+      );
+      const record = await recorded(threadId);
+      const instance = (await (
+        await fetch(
+          `https://api.agent37.com/v1/instances/${record?.provider_sandbox_id}`,
+          { headers: { authorization: `Bearer ${apiKey}` } },
+        )
+      ).json()) as { readonly type: string };
+      const disk = (
+        await handle.guest.commands.run(
+          "stat -f -c %T /home/user/workspace; whoami",
+        )
+      ).stdout.trim();
+      const proof = JSON.stringify({
+        proof: "agent37-vm-size",
+        threadId,
+        type: instance.type,
+        disk,
+      });
+      console.log(proof);
+      await annotate(proof);
+      expect(instance.type).toBe("vm");
+      expect(disk.split("\n")).toEqual(["ext2/ext3", "user"]);
     }, 300_000);
   },
 );

@@ -145,6 +145,8 @@ const ownerProject = {
 const model = vi.hoisted(() => ({
   calls: [] as Array<{ readonly model: string; readonly input: unknown }>,
   answer: "" as string,
+  /** While set, each call waits for it, as a slow Workers AI answer does. */
+  hold: undefined as Promise<void> | undefined,
 }));
 
 const bindings: Bindings = {
@@ -153,6 +155,7 @@ const bindings: Bindings = {
   AI: {
     run: async (name: string, input: unknown) => {
       model.calls.push({ model: name, input });
+      await model.hold;
       return { response: model.answer };
     },
   } as unknown as Ai,
@@ -351,6 +354,7 @@ beforeEach(async () => {
   agentSettlements.clear();
   model.calls.length = 0;
   model.answer = "";
+  model.hold = undefined;
   await env.DB.batch([
     user(owner, "Ada Owner"),
     user(member, "Ben Member"),
@@ -1188,6 +1192,41 @@ describe("Space thread cards in workerd with real D1", () => {
       (await send("cards-stranger" as UserId, `/v1/spaces/${spaceId}/catch-up`))
         .status,
     ).toBe(404);
+  });
+
+  // #2695: each request that saw the old visit called the paid model.
+  it("writes one catch-up card for many requests that arrive at once", async () => {
+    const spaceId = await newSpace();
+    const finished = await startChild(spaceId, "Fix coupon rounding");
+    const fiveHoursAgo = Date.now() - 5 * 3_600_000;
+    await env.DB.prepare(
+      "UPDATE threads SET created_at = ?1 WHERE parent_thread_id = ?2",
+    )
+      .bind(new Date(fiveHoursAgo - 60_000).toISOString(), spaceId)
+      .run();
+    expect(await catchUp(spaceId)).toBeNull();
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE space_visit SET seen_at = ?1 WHERE space_thread_id = ?2 AND user_id = ?3",
+      ).bind(fiveHoursAgo, spaceId, member),
+      env.DB.prepare(
+        "UPDATE threads SET activity_status = 'idle', status_line = 'Fixed the coupon rounding', turn_settled_at = ?2 WHERE id = ?1",
+      ).bind(finished, new Date().toISOString()),
+    ]);
+    model.answer = `In the last 5 hours, [Fix coupon rounding](/threads/${finished}) finished.`;
+    // The model answers slowly, so every request reads the visit first.
+    let release = () => {};
+    model.hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    const reads = Array.from({ length: 20 }, () => catchUp(spaceId));
+    setTimeout(release, 250);
+    const cards = (await Promise.all(reads)).filter((card) => card !== null);
+    expect(model.calls).toHaveLength(1);
+    expect(cards.map((card) => card.body)).toEqual([model.answer]);
+    // The card shows on the next read, unwritten.
+    expect((await catchUp(spaceId))?.body).toBe(model.answer);
+    expect(model.calls).toHaveLength(1);
   });
 
   it("links only the Space's threads, whatever a status line or the model writes", async () => {

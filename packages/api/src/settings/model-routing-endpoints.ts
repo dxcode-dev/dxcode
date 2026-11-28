@@ -10,6 +10,7 @@ import {
   ModelRoutingPersonalPath,
   ModelRoutingWorkspacePath,
   ModeParamsSchema,
+  ModelRoutingRateLimitedResponseSchema,
   modelRoutingRefusals,
   ProfileResponseSchema,
   PutModeRequestSchema,
@@ -27,6 +28,12 @@ import {
  * `model-routing.ts` for its routing reads and never calls these
  * (wiki/headless-client.md).
  */
+
+/** Refusals of the endpoints that check a connection's key (#2688). */
+const connectionCheckRefusals = [
+  ...modelRoutingRefusals,
+  { status: 429, schema: ModelRoutingRateLimitedResponseSchema },
+];
 
 // Endpoints ---------------------------------------------------------------
 
@@ -70,7 +77,7 @@ export const CreatePersonalModelConnectionEndpoint = defineEndpoint({
   path: `${ModelRoutingPersonalPath}/connections`,
   body: CreateConnectionRequestSchema,
   success: ConnectionResponseSchema,
-  refusals: modelRoutingRefusals,
+  refusals: connectionCheckRefusals,
 });
 
 export const CreateWorkspaceModelConnectionEndpoint = defineEndpoint({
@@ -80,7 +87,7 @@ export const CreateWorkspaceModelConnectionEndpoint = defineEndpoint({
   params: WorkspaceModelRoutingParamsSchema,
   body: CreateConnectionRequestSchema,
   success: ConnectionResponseSchema,
-  refusals: modelRoutingRefusals,
+  refusals: connectionCheckRefusals,
 });
 
 export const UpdatePersonalModelConnectionEndpoint = defineEndpoint({
@@ -90,7 +97,7 @@ export const UpdatePersonalModelConnectionEndpoint = defineEndpoint({
   params: ConnectionParamsSchema,
   body: UpdateConnectionRequestSchema,
   success: ConnectionResponseSchema,
-  refusals: modelRoutingRefusals,
+  refusals: connectionCheckRefusals,
 });
 
 export const UpdateWorkspaceModelConnectionEndpoint = defineEndpoint({
@@ -103,7 +110,7 @@ export const UpdateWorkspaceModelConnectionEndpoint = defineEndpoint({
   }),
   body: UpdateConnectionRequestSchema,
   success: ConnectionResponseSchema,
-  refusals: modelRoutingRefusals,
+  refusals: connectionCheckRefusals,
 });
 
 export const SetPersonalModelConnectionEnabledEndpoint = defineEndpoint({
@@ -158,7 +165,7 @@ export const CheckPersonalModelConnectionAccessEndpoint = defineEndpoint({
   path: `${ModelRoutingPersonalPath}/connections/:connectionId/check-access`,
   params: ConnectionParamsSchema,
   success: ConnectionResponseSchema,
-  refusals: modelRoutingRefusals,
+  refusals: connectionCheckRefusals,
 });
 
 export const CheckWorkspaceModelConnectionAccessEndpoint = defineEndpoint({
@@ -170,7 +177,7 @@ export const CheckWorkspaceModelConnectionAccessEndpoint = defineEndpoint({
     ...ConnectionParamsSchema.fields,
   }),
   success: ConnectionResponseSchema,
-  refusals: modelRoutingRefusals,
+  refusals: connectionCheckRefusals,
 });
 
 export const DeletePersonalModelConnectionEndpoint = defineEndpoint({

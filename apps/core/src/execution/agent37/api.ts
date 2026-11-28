@@ -93,6 +93,8 @@ export interface Agent37Api {
     /** Where the instance's billed disk mounts. */
     readonly mountPath: string;
     readonly metadata?: Readonly<Record<string, string>>;
+    /** `vm` for a whole virtual machine; omitted, Agent37's shared type. */
+    readonly type?: "default" | "vm";
   }) => Promise<Agent37Instance>;
   readonly getInstance: (id: string) => Promise<Agent37Instance | undefined>;
   /** Instances newest first, every page. */
@@ -229,6 +231,7 @@ export const agent37Api = (
             ...(input.metadata === undefined
               ? {}
               : { metadata: input.metadata }),
+            ...(input.type === undefined ? {} : { type: input.type }),
           },
           timeoutMs: CREATE_TIMEOUT_MS,
         }),

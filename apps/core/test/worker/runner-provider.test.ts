@@ -16,11 +16,14 @@ import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-provi
 import type { ExecutionContext } from "../../src/plugins/execution/provider.js";
 import { runnerCall, runnerStatus } from "../../src/runners/client.js";
 import {
-  PAIR_GUESSES_OVERALL,
   PAIR_GUESSES_PER_ADDRESS,
   personalRunnerRoutes,
   runnerPublicRoutes,
 } from "../../src/runners/routes.js";
+import {
+  RUNNER_MACHINE_HEADER,
+  RUNNER_ORIGIN_HEADER,
+} from "../../src/runners/session-object.js";
 import {
   desktopOwnerOnlyOnRunner,
   ownerOnlyOnRunner,
@@ -587,8 +590,9 @@ describe("Runners", () => {
     ).rejects.toThrow(/^runner:removed:/);
   });
 
-  // #2436: a code is 8 letters, so unlimited guessing finds live codes.
-  it("stops pairing guesses from one address, then from everyone", async () => {
+  // #2436: unlimited guessing of a short code finds live codes. #2696: a
+  // deployment-wide guess budget let anyone block every pairing.
+  it("limits pairing attempts per address and IPv6 /64, never for everyone", async () => {
     const pairing = await request("/v1/settings/personal/runners/pairings", {
       method: "POST",
     });
@@ -596,9 +600,12 @@ describe("Runners", () => {
       (await pairing.json()) as { readonly data: { code: string } }
     ).data;
     expect(code).toMatch(
-      /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/,
+      /^[BCDFGHJKLMNPQRSTVWXZ]{4}(?:-[BCDFGHJKLMNPQRSTVWXZ]{4}){3}$/,
     );
-    const wrong = code === "BBBB-BBBB" ? "CCCC-CCCC" : "BBBB-BBBB";
+    const wrong =
+      code === "BBBB-BBBB-BBBB-BBBB"
+        ? "CCCC-CCCC-CCCC-CCCC"
+        : "BBBB-BBBB-BBBB-BBBB";
     const pair = (guess: string, address: string) =>
       request("/v1/runner/pair", {
         method: "POST",
@@ -610,28 +617,61 @@ describe("Runners", () => {
           arch: "x86_64",
         }),
       });
+    // A code of the old eight letters is not a code.
+    expect((await pair(code.slice(0, 9), "198.51.100.9")).status).toBe(400);
     for (let guess = 0; guess < PAIR_GUESSES_PER_ADDRESS; guess += 1)
-      expect((await pair(wrong, "198.51.100.7")).status).toBe(403);
-    // Out of guesses, even the right code is refused, and the code stays live.
-    const limited = await pair(code, "198.51.100.7");
+      expect((await pair(wrong, "2001:db8:1:2::7")).status).toBe(403);
+    // Out of attempts, even the right code is refused from anywhere in the
+    // same /64, and the code stays live.
+    const limited = await pair(code, "2001:0db8:0001:0002:abcd::1");
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toBe("900");
     expect(
       ((await limited.json()) as { data: { code: string } }).data.code,
     ).toBe("RATE_LIMITED");
-    // Spread over many addresses, the guesses run out for everyone.
-    for (
-      let guess = PAIR_GUESSES_PER_ADDRESS;
-      guess < PAIR_GUESSES_OVERALL;
-      guess += 1
-    )
-      expect(
-        (await pair(wrong, `10.0.${Math.floor(guess / 256)}.${guess % 256}`))
-          .status,
-      ).toBe(403);
-    expect((await pair(code, "192.0.2.1")).status).toBe(429);
-    // A new window: the person on their own address pairs with the code.
-    await env.DB.prepare("DELETE FROM request_budget").run();
+    // More wrong attempts, spread over many addresses, than the old
+    // deployment-wide budget of 300 allowed in a window.
+    for (let address = 0; address < 32; address += 1)
+      for (let guess = 0; guess < PAIR_GUESSES_PER_ADDRESS; guess += 1)
+        expect((await pair(wrong, `10.0.0.${address}`)).status).toBe(403);
+    // The person on their own address still pairs with the code.
     expect((await pair(code, "192.0.2.1")).status).toBe(201);
+  });
+
+  // #2696: the route may read a lagging replica, or race the removal.
+  it("closes a removed machine's connection even when its token check passed", async () => {
+    const machine = await pairAndConnect();
+    await machine.hello;
+    const [runner] = (
+      (await (await request("/v1/settings/personal/runners")).json()) as {
+        data: { runners: Array<{ id: string }> };
+      }
+    ).data.runners;
+    if (runner === undefined) throw new Error("Expected the paired runner");
+    machine.socket.close(1000, "redial");
+    // Removed in D1, but the stale token check let the redial through.
+    await env.DB.prepare(
+      "UPDATE runner_machine SET revoked_at = ? WHERE id = ?",
+    )
+      .bind(Date.now(), runner.id)
+      .run();
+    const namespace = env.RUNNER_SESSION;
+    const response = await namespace.get(namespace.idFromName(runner.id)).fetch(
+      new Request("http://localhost/v1/runner/connect", {
+        headers: {
+          upgrade: "websocket",
+          [RUNNER_MACHINE_HEADER]: runner.id,
+          [RUNNER_ORIGIN_HEADER]: "http://localhost",
+        },
+      }),
+    );
+    expect(response.status).toBe(101);
+    const socket = response.webSocket as WebSocket;
+    const closed = new Promise<number>((resolve) =>
+      socket.addEventListener("close", (event) => resolve(event.code)),
+    );
+    socket.accept();
+    expect(await closed).toBe(4401);
+    expect((await runnerStatus(bindings, runner.id))?.online).toBe(false);
   });
 });

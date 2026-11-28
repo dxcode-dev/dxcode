@@ -1,5 +1,10 @@
 import { env } from "cloudflare:test";
-import { AGENT37_ORB_SIZES, Principal, type UserId } from "@dx/domain";
+import {
+  AGENT37_ORB_SIZES,
+  orbSizeHourlyPrice,
+  Principal,
+  type UserId,
+} from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -485,6 +490,75 @@ describe("Agent37 in a person's own workspace", () => {
     expect(world.instances.size).toBe(0);
   }, 30_000);
 
+  it("runs a VM size as an Agent37 VM on the shared sizes' template, at the VM rate", async () => {
+    await call("/agent37/connection", "PUT", {
+      credentials: { apiKey: "sk_live_one" },
+    });
+    await prepare();
+    const listed = agent37Of((await call("")).body.data).sizes.map(
+      ({ id }: { id: string }) => id,
+    );
+    expect(listed).toEqual(
+      expect.arrayContaining(["a37.medium", "a37.vm-medium", "a37.vm-2xlarge"]),
+    );
+    const open = async (id: string, size: string) => {
+      const { pin, target } = await pinThread(id, size);
+      if (target.credential.scope !== "personal") throw new Error("no account");
+      await makeAgent37ExecutionProvider({ fetch: send }).workspace.create(
+        {
+          account: {
+            scope: "personal",
+            userId: solo,
+            providerAccount: "mem_owner",
+          },
+          credentials: target.credential.credentials,
+          profile: target.profile,
+        },
+        { threadId: id as never },
+        { authorize: async () => {} },
+      );
+      const instance = [...world.instances.values()].find(
+        ({ metadata }) => metadata.dxThread === id,
+      ) as FakeInstance;
+      return { pin, instance };
+    };
+    const vm = await open(threadId, "a37.vm-medium");
+    const shared = await open(
+      "thr_00000000-0000-4000-8000-0000000037c2",
+      "a37.medium",
+    );
+    // The VM size asks Agent37 for a VM of the medium shape; the shared
+    // size asks for no type, as before.
+    expect(vm.instance).toMatchObject({
+      type: "vm",
+      resources: { cpu: 4, memory: 8, disk: 20 },
+    });
+    expect(shared.instance.type).toBe("default");
+    const creates = world.traffic.filter((line) =>
+      line.startsWith("POST https://api.agent37.com/v1/instances "),
+    );
+    expect(creates.filter((line) => line.includes('"type":"vm"'))).toHaveLength(
+      1,
+    );
+    // One template serves both: no second registration for VM sizes.
+    expect(vm.pin?.providerTemplate).toBe(shared.pin?.providerTemplate);
+    expect(world.templates.size).toBe(1);
+    // A VM's compute meters at 2.5x; its disk at the same rate.
+    const vmHour = orbSizeHourlyPrice("agent37", "a37.vm-medium", {
+      cpuCores: 4,
+      memoryMb: 8192,
+      diskGb: 20,
+    })?.usd as number;
+    const sharedHour = orbSizeHourlyPrice("agent37", "a37.medium", {
+      cpuCores: 4,
+      memoryMb: 8192,
+      diskGb: 20,
+    })?.usd as number;
+    const diskHour = (20 * 0.09) / 730;
+    expect((vmHour - diskHour) / (sharedHour - diskHour)).toBeCloseTo(2.5, 6);
+    expect(vmHour * 730).toBeCloseTo(23.8, 6);
+  }, 30_000);
+
   it("says the wallet is empty instead of failing obscurely", async () => {
     await call("/agent37/connection", "PUT", {
       credentials: { apiKey: "sk_live_one" },
@@ -815,6 +889,7 @@ describe("Agent37 creates one instance per Thread", () => {
       mountPath: "/home/user/workspace",
       resources: { cpu: 4, memory: 8, disk: 20 },
       metadata,
+      type: "default",
       status: "running",
       startedAt: world.clock,
       files: new Map(),

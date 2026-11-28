@@ -18,7 +18,7 @@ import {
   splitStreamMessage,
   streamClosePayload,
 } from "./protocol.js";
-import { recordMachineSeen } from "./repository.js";
+import { machineRemoved, recordMachineSeen } from "./repository.js";
 
 const logger = getLogger(["dx", "runners", "session"]);
 
@@ -155,6 +155,20 @@ export class RunnerSessionObject extends DurableObject<Bindings> {
       ...(ip === undefined ? {} : { ip }),
     };
     server.serializeAttachment(state);
+    // Removing a machine marks it revoked, then closes the sockets it finds
+    // (`revoke`). Checked again at the primary once this socket is accepted,
+    // a removal that raced the connection closes this one too (#2696).
+    if (
+      this.env.DB !== undefined &&
+      (await machineRemoved(this.env.DB, machineId))
+    ) {
+      server.close(4401, "This runner was removed from dx.");
+      logger.warn("Removed runner refused.", {
+        event: "runner_removed_refused",
+        machineId,
+      });
+      return new Response(null, { status: 101, webSocket: client });
+    }
     await this.#recordSeen(state, true);
     logger.info("Runner connected.", { event: "runner_connected", machineId });
     return new Response(null, { status: 101, webSocket: client });

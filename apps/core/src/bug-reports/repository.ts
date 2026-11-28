@@ -82,6 +82,20 @@ export const bugReportIdFor = async (reporterUserId: string, key: string) => {
     .join("")}` as BugReportId;
 };
 
+/**
+ * At most `maximum` reports since `since`. Checked in the insert itself, so
+ * concurrent sends cannot all pass a count taken before any of them is kept
+ * (#2690).
+ */
+export interface ReportLimit {
+  readonly since: Date;
+  readonly maximum: number;
+}
+
+/**
+ * Keeps a report once: `repeated` when its ID was kept already, `limited`
+ * when the reporter has kept `limit.maximum` since `limit.since`.
+ */
 export const insertBugReport = async (
   db: D1Database,
   report: {
@@ -93,28 +107,38 @@ export const insertBugReport = async (
     readonly imageCount: number;
     readonly diagnostics: ReadonlyArray<BugReportDiagnosticKind>;
   },
+  limit: ReportLimit,
   now = new Date(),
-): Promise<boolean> =>
-  (
-    await db
-      .prepare(
-        `INSERT INTO bug_report
+): Promise<"created" | "repeated" | "limited"> => {
+  const inserted = await db
+    .prepare(
+      `INSERT INTO bug_report
          (id, reporter_user_id, thread_id, message, image_count, diagnostics,
           created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+        WHERE (SELECT COUNT(*) FROM bug_report
+                WHERE reporter_user_id = ?2 AND created_at >= ?8) < ?9
        ON CONFLICT (id) DO NOTHING`,
-      )
-      .bind(
-        report.id,
-        report.reporterUserId,
-        report.threadId ?? null,
-        report.message,
-        report.imageCount,
-        JSON.stringify(report.diagnostics),
-        now.toISOString(),
-      )
-      .run()
-  ).meta.changes > 0;
+    )
+    .bind(
+      report.id,
+      report.reporterUserId,
+      report.threadId ?? null,
+      report.message,
+      report.imageCount,
+      JSON.stringify(report.diagnostics),
+      now.toISOString(),
+      limit.since.toISOString(),
+      limit.maximum,
+    )
+    .run();
+  if (inserted.meta.changes > 0) return "created";
+  const existing = await db
+    .prepare("SELECT 1 AS found FROM bug_report WHERE id = ?1")
+    .bind(report.id)
+    .first();
+  return existing === null ? "limited" : "repeated";
+};
 
 /** Removes a report a send could not keep whole. */
 export const deleteBugReport = async (db: D1Database, id: BugReportId) => {
@@ -129,7 +153,8 @@ export const intakeReporter = (sender: string) => `intake:${sender}`;
 
 /**
  * Keeps a report another deployment forwarded, once: a retry of the same
- * sender's report returns the ID it was kept under, with `created` false.
+ * sender's report returns the ID it was kept under, with `created` false,
+ * and a new one past `limit` is `limited`.
  */
 export const insertReceivedBugReport = async (
   db: D1Database,
@@ -143,15 +168,21 @@ export const insertReceivedBugReport = async (
     readonly imageCount: number;
     readonly diagnostics: ReadonlyArray<BugReportDiagnosticKind>;
   },
+  limit: ReportLimit,
   now = new Date(),
-): Promise<{ readonly id: BugReportId; readonly created: boolean }> => {
+): Promise<
+  | { readonly id: BugReportId; readonly created: boolean }
+  | { readonly limited: true }
+> => {
   const inserted = await db
     .prepare(
       `INSERT INTO bug_report
          (id, reporter_user_id, thread_id, message, image_count, diagnostics,
           created_at, source_sender, source_origin, source_report_id,
           source_thread_id)
-       VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+       SELECT ?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+        WHERE (SELECT COUNT(*) FROM bug_report
+                WHERE source_sender = ?7 AND created_at >= ?11) < ?12
        ON CONFLICT (source_sender, source_report_id)
          WHERE source_sender IS NOT NULL DO NOTHING`,
     )
@@ -166,6 +197,8 @@ export const insertReceivedBugReport = async (
       report.origin,
       report.sourceReportId,
       report.sourceThreadId ?? null,
+      limit.since.toISOString(),
+      limit.maximum,
     )
     .run();
   if (inserted.meta.changes > 0) return { id: report.id, created: true };
@@ -176,7 +209,9 @@ export const insertReceivedBugReport = async (
     )
     .bind(report.sender, report.sourceReportId)
     .first<{ id: BugReportId }>();
-  return { id: existing?.id ?? report.id, created: false };
+  return existing === null
+    ? { limited: true }
+    : { id: existing.id, created: false };
 };
 
 /** How many reports this person sent since `since`. */

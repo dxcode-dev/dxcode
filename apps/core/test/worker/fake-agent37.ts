@@ -12,6 +12,8 @@ export interface FakeInstance {
   readonly mountPath: string;
   readonly resources: { cpu: number; memory: number; disk: number };
   readonly metadata: Record<string, string>;
+  /** Agent37's instance type: `default` unless the create asked for `vm`. */
+  readonly type: string;
   status: string;
   /** When the instance's processes started (epoch seconds). */
   startedAt: number;
@@ -104,6 +106,7 @@ const instanceBody = (instance: FakeInstance) => ({
   resources: instance.resources,
   name: instance.name,
   metadata: instance.metadata,
+  type: instance.type,
   url: `https://${instance.id}.agent37.app`,
   past_due: false,
 });
@@ -328,6 +331,7 @@ export const fakeAgent37 =
         mountPath: body.mount_path,
         resources: body.resources,
         metadata: body.metadata ?? {},
+        type: body.type ?? "default",
         status: "running",
         startedAt: world.clock,
         files: new Map(),

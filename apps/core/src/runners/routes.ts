@@ -10,7 +10,9 @@ import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { runnerArchiveKey } from "../execution/runner/provider.js";
 import { readBoundedBody } from "../http/bounded-body.js";
+import { expandIpv6 } from "../http/egress.js";
 import type { AppEnv } from "../http/types.js";
+import { primaryDatabase } from "../persistence/d1-session.js";
 import { takeRequestBudget } from "../security/request-budget.js";
 import { enabledExperimentalFeatures } from "../settings/experimental-features/routes.js";
 import { revokeRunnerSession, runnerStatus } from "./client.js";
@@ -37,14 +39,24 @@ const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_PAIR_BODY_BYTES = 4096;
 
 /**
- * Pairing guesses (#2436). A code is one of 20^8 (about 2.6e10) and lives 15
- * minutes, so the deployment-wide budget caps a day's guesses at 28,800: a
- * chance of about 1 in 900,000 a day per live code. One address gets 10, so
- * a person who mistypes a code a few times still pairs.
+ * Pairing attempts (#2436, #2696). A code is one of 20^16, so guessing is
+ * hopeless and there is no deployment-wide budget for anyone to spend for
+ * everyone. One address, or one IPv6 /64, gets 10 attempts a window, so a
+ * person who mistypes a code a few times still pairs.
  */
 export const PAIR_GUESS_WINDOW_MS = 15 * 60_000;
 export const PAIR_GUESSES_PER_ADDRESS = 10;
-export const PAIR_GUESSES_OVERALL = 300;
+
+/** The budget key of a client address: an IPv6 address counts as its /64. */
+export const pairingAddressKey = (address: string) => {
+  const groups = expandIpv6(address);
+  return groups === undefined
+    ? address
+    : `${groups
+        .slice(0, 4)
+        .map((group) => group.toString(16))
+        .join(":")}::/64`;
+};
 
 const refuse = (
   context: Context<AppEnv>,
@@ -165,10 +177,14 @@ const bearer = (context: Context<AppEnv>) => {
   return match?.[1];
 };
 
-/** The live machine a runner request authenticates as. */
+/**
+ * The live machine a runner request authenticates as, read at the primary
+ * like every credential check, so a removed machine is refused at once
+ * (#2696).
+ */
 const runnerMachine = async (context: Context<AppEnv>) => {
   const token = bearer(context);
-  const db = context.env.DB;
+  const db = primaryDatabase(context.env.DB);
   if (token === undefined || db === undefined) return undefined;
   return machineForToken(db, token);
 };
@@ -238,14 +254,12 @@ export const runnerPublicRoutes = new Hono<AppEnv>()
         "INVALID_REQUEST",
         "Request validation failed.",
       );
-    const address = context.req.header("cf-connecting-ip") ?? "unknown";
+    const address = pairingAddressKey(
+      context.req.header("cf-connecting-ip") ?? "unknown",
+    );
     if (
       !(await takeRequestBudget(db, `runner-pair:address:${address}`, {
         maximum: PAIR_GUESSES_PER_ADDRESS,
-        windowMs: PAIR_GUESS_WINDOW_MS,
-      })) ||
-      !(await takeRequestBudget(db, "runner-pair", {
-        maximum: PAIR_GUESSES_OVERALL,
         windowMs: PAIR_GUESS_WINDOW_MS,
       }))
     ) {
@@ -316,7 +330,7 @@ export const runnerPublicRoutes = new Hono<AppEnv>()
     if (
       storage === undefined ||
       !(await threadPinnedToMachine(
-        context.env.DB as D1Database,
+        primaryDatabase(context.env.DB as D1Database),
         threadId,
         machine.id,
       ))
@@ -351,7 +365,7 @@ export const runnerPublicRoutes = new Hono<AppEnv>()
     if (
       storage === undefined ||
       !(await threadPinnedToMachine(
-        context.env.DB as D1Database,
+        primaryDatabase(context.env.DB as D1Database),
         threadId,
         machine.id,
       ))

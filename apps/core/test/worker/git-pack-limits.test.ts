@@ -63,7 +63,12 @@ const blob = (content: Uint8Array) =>
  * one before, written with the base last, so every delta waits for a later
  * base. Rescanning the waiting deltas for each base takes quadratic time.
  */
-const backwardChain = (length: number) => {
+/**
+ * A chain of `length` blobs, each a reference delta on the one before. In
+ * the backward pack every delta comes before its base, so each waits; in
+ * the forward pack each base comes first.
+ */
+const deltaChain = (length: number, order: "backward" | "forward") => {
   const content = (index: number) => {
     const bytes = new Uint8Array(4);
     new DataView(bytes.buffer).setUint32(0, index);
@@ -82,7 +87,11 @@ const backwardChain = (length: number) => {
     ]);
   });
   return {
-    pack: pack([...entries, blob(content(0))]),
+    pack: pack(
+      order === "backward"
+        ? [...entries, blob(content(0))]
+        : [blob(content(0)), ...entries],
+    ),
     lastId: Buffer.from(id(content(length - 1))).toString("hex"),
     last: content(length - 1),
   };
@@ -176,19 +185,38 @@ describe("pack parser limits", () => {
   });
 
   it("resolves a backward reference-delta chain in linear time", () => {
-    const chain = backwardChain(50_000);
-    const limits = { ...DEFAULT_UNPACK_LIMITS, maxWaitingDeltas: 50_000 };
-    const started = performance.now();
-    const objects = unpack(chain.pack, limits);
-    // Rescanning the waiting deltas took about 28 s here; resolving each once
-    // takes under 1 s.
-    expect(performance.now() - started).toBeLessThan(5_000);
-    expect(objects.size).toBe(50_000);
-    expect(objects.get(chain.lastId)?.data).toEqual(chain.last);
+    const length = 20_000;
+    const backward = deltaChain(length, "backward");
+    const forward = deltaChain(length, "forward");
+    const limits = { ...DEFAULT_UNPACK_LIMITS, maxWaitingDeltas: length };
+    const timed = (bytes: Uint8Array) => {
+      const started = performance.now();
+      const objects = unpack(bytes, limits);
+      return { ms: performance.now() - started, objects };
+    };
+    // The same deltas in base order are the yardstick, timed on the same
+    // machine at the same moment, so a loaded machine slows both. Each
+    // pack's fastest of three interleaved runs: a burst of load slows one
+    // run, not the comparison.
+    let backwardMs = Number.POSITIVE_INFINITY;
+    let forwardMs = Number.POSITIVE_INFINITY;
+    for (let round = 0; round < 3; round += 1) {
+      const inOrder = timed(forward.pack);
+      forwardMs = Math.min(forwardMs, inOrder.ms);
+      const waiting = timed(backward.pack);
+      backwardMs = Math.min(backwardMs, waiting.ms);
+      expect(waiting.objects.size).toBe(length);
+      expect(waiting.objects.get(backward.lastId)?.data).toEqual(backward.last);
+    }
+    // Rescanning the waiting deltas on each base made the backward pack
+    // about 7 times slower at this length, and grew as its square.
+    expect(backwardMs).toBeLessThan(4 * forwardMs);
   });
 
   it("refuses more reference deltas waiting on later bases than the cap", () => {
-    expect(failure(() => unpack(backwardChain(20_000).pack))).toBe("too-large");
+    expect(failure(() => unpack(deltaChain(20_000, "backward").pack))).toBe(
+      "too-large",
+    );
   });
 
   it("refuses a pack that claims more objects than the cap", () => {

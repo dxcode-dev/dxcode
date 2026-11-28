@@ -18,13 +18,19 @@ import { encodeBase64Url } from "../encoding/base64.js";
  * - The code lives two minutes, works once, and is stored hashed.
  * - Only the app that made the challenge holds the verifier, so another app
  *   that registered the same URL scheme can't redeem an intercepted code.
- * - Only the app's own load redeems (`Sec-Fetch-Site: none`). The code is
- *   bound to its challenge, not to a browser, so a page or link that sends
- *   someone here with an attacker's code and verifier would otherwise sign
- *   them in to the attacker's account (login CSRF).
+ * - Only the app's own load redeems. The code is bound to its challenge,
+ *   not to a browser, so a page or link that sends someone here with an
+ *   attacker's code and verifier would otherwise sign them in to the
+ *   attacker's account (login CSRF). A browser sends `Sec-Fetch-Site: none`
+ *   for a link opened from Slack or Mail too, or no header at all, so the
+ *   app proves the load is its own with `X-DX-Native-Redeem: 1`, which a
+ *   link cannot add (#2689). Builds before that header say so with their
+ *   web view's `dxShell/` user agent, which a link cannot change either.
  */
 
 const PREFIX = "native-handoff:";
+/** Sent by the app on its redeem load; a link cannot add it. */
+const NATIVE_REDEEM_HEADER = "x-dx-native-redeem";
 /** Seconds a handoff code stays redeemable. */
 const CODE_LIFETIME = 120;
 
@@ -74,7 +80,13 @@ export const nativeHandoff = (): BetterAuthPlugin => ({
       },
       async (context) => {
         const site = context.headers?.get("sec-fetch-site");
-        if (site !== null && site !== undefined && site !== "none")
+        const fromApp =
+          context.headers?.get(NATIVE_REDEEM_HEADER) === "1" ||
+          /\bdxShell\//u.test(context.headers?.get("user-agent") ?? "");
+        if (
+          !fromApp ||
+          (site !== null && site !== undefined && site !== "none")
+        )
           throw context.error("FORBIDDEN", {
             message: "Open this sign-in link from the dx app.",
           });

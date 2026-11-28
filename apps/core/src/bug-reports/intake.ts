@@ -243,8 +243,13 @@ export const bugReportIntakeRoutes = new Hono<AppEnv>().post(
           imageCount,
           diagnostics,
         },
+        {
+          since: new Date(now.getTime() - 60 * 60 * 1000),
+          maximum: INTAKE_REPORTS_PER_HOUR,
+        },
         now,
       );
+      if ("limited" in kept) return refuse(context, 429, "RATE_LIMITED");
       // A report whose files were not all kept is dropped again, so the
       // sender's retry keeps it whole instead of finding it half kept.
       if (kept.created)

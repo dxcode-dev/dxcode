@@ -1125,4 +1125,69 @@ describe("Bug reports", () => {
     await ageReports(principal.userId);
     await sent(await keyed(crypto.randomUUID()));
   });
+
+  it("answers a retry of a kept report without reading its form or Worker logs again (#2690)", async () => {
+    const threadId = await createThread();
+    const keyed = (key: string, report: unknown) => {
+      const form = new FormData();
+      form.set(
+        "report",
+        typeof report === "string" ? report : JSON.stringify(report),
+      );
+      return app().request(
+        `/threads/${threadId}/bug-reports`,
+        { method: "POST", body: form, headers: { "idempotency-key": key } },
+        deployedBindings(),
+      );
+    };
+    const key = crypto.randomUUID();
+    const first = await sent(
+      await keyed(key, { message: "Bug", diagnostics: { threadAndApp } }),
+    );
+    expect(logQueries).toHaveLength(1);
+
+    // Under the cap and past it, a retry is the kept report: no Worker logs
+    // query, and its form is not read (a broken one still answers).
+    for (let index = 1; index < BUG_REPORTS_PER_HOUR; index++)
+      await sent(
+        await keyed(crypto.randomUUID(), { message: "Bug", diagnostics: {} }),
+      );
+    const queries = logQueries.length;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect(
+        (
+          await sent(
+            await keyed(key, { message: "Bug", diagnostics: { threadAndApp } }),
+          )
+        ).id,
+      ).toBe(first.id);
+      expect((await sent(await keyed(key, "{not json"))).id).toBe(first.id);
+    }
+    expect(logQueries).toHaveLength(queries);
+    expect(await yourReports(threadId)).toHaveLength(BUG_REPORTS_PER_HOUR);
+  });
+
+  it("keeps no more than an hour's reports when they are sent at once (#2690)", async () => {
+    const responses = await Promise.all(
+      Array.from({ length: BUG_REPORTS_PER_HOUR * 3 }, (_, index) =>
+        sendFromSettings({ message: `Flood ${index}`, diagnostics: {} }),
+      ),
+    );
+    const statuses = responses.map((response) => response.status);
+    expect(statuses.filter((status) => status === 201)).toHaveLength(
+      BUG_REPORTS_PER_HOUR,
+    );
+    expect(statuses.filter((status) => status === 429)).toHaveLength(
+      BUG_REPORTS_PER_HOUR * 2,
+    );
+    const kept = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM bug_report WHERE reporter_user_id = ?1 AND created_at >= ?2",
+    )
+      .bind(
+        principal.userId,
+        new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      )
+      .first<{ count: number }>();
+    expect(kept?.count).toBe(BUG_REPORTS_PER_HOUR);
+  });
 });

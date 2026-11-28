@@ -10,6 +10,7 @@ import {
   ModelRoutingForbiddenResponseSchema,
   ModelRoutingInvalidRequestResponseSchema,
   ModelRoutingMutationForbiddenResponseSchema,
+  ModelRoutingRateLimitedResponseSchema,
   ModelRoutingUnavailableResponseSchema,
   ProfileResponseSchema,
   PutModeRequestSchema,
@@ -33,6 +34,10 @@ import { type Context, Hono } from "hono";
 import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv, Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
+import {
+  type RequestBudget,
+  takeRequestBudget,
+} from "../../security/request-budget.js";
 import { loadConfigEncryptionKeyring } from "../config-encryption.js";
 import { SettingsService } from "../service.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
@@ -49,6 +54,47 @@ const respond = (schema: Schema.ConstraintEncoder<unknown>, data: unknown) =>
 
 class MutationForbidden extends Error {}
 class ModelRoutingUnavailableError extends Error {}
+class ModelRoutingRateLimited extends Error {}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Saving a key and checking a connection ask the provider whether the key
+ * works, so without a limit anyone signed in could test stolen keys through
+ * dx's addresses (#2688, as #2623 for Orb providers). Each person, personal
+ * and workspace together, may submit this many keys an hour.
+ */
+export const MODEL_CONNECTION_KEY_BUDGET: RequestBudget = {
+  maximum: 10,
+  windowMs: HOUR_MS,
+};
+
+/**
+ * Checks re-test a key already saved, which the key budget meters. A Claude
+ * plan's panel runs one each time it opens, so this budget is wider.
+ */
+export const MODEL_CONNECTION_CHECK_BUDGET: RequestBudget = {
+  maximum: 60,
+  windowMs: HOUR_MS,
+};
+
+const spendBudget = async (
+  c: Context<AppEnv>,
+  kind: "key" | "check",
+  budget: RequestBudget,
+) => {
+  const db = c.env.DB;
+  // Without D1 the route answers that model routing is unavailable.
+  if (db === undefined) return;
+  if (
+    !(await takeRequestBudget(
+      db,
+      `model-connection-${kind}:${c.get("principal").userId}`,
+      budget,
+    ))
+  )
+    throw new ModelRoutingRateLimited();
+};
 
 const failure = (c: Context<AppEnv>, error: unknown): Response => {
   const requestId = c.get("requestId");
@@ -77,6 +123,20 @@ const failure = (c: Context<AppEnv>, error: unknown): Response => {
         },
       }),
       404,
+    );
+  }
+  if (error instanceof ModelRoutingRateLimited) {
+    c.header("Retry-After", "3600");
+    return c.json(
+      Schema.encodeUnknownSync(ModelRoutingRateLimitedResponseSchema)({
+        status: "error",
+        data: {
+          code: "MODEL_ROUTING_RATE_LIMITED",
+          message: "Too many model connection checks. Try again later.",
+          requestId,
+        },
+      }),
+      429,
     );
   }
   if (error instanceof MutationForbidden) {
@@ -262,6 +322,8 @@ const mountConnectionRoutes = (
       const { target, canMutate } = await resolveTarget(c);
       if (!canMutate) throw new MutationForbidden();
       const input = await decodeBody(c, CreateConnectionRequestSchema);
+      if (input.apiKey !== undefined && input.apiKey !== "")
+        await spendBudget(c, "key", MODEL_CONNECTION_KEY_BUDGET);
       const deps = await dependencies(c);
       return c.json(
         respond(
@@ -278,6 +340,8 @@ const mountConnectionRoutes = (
       const { target, canMutate } = await resolveTarget(c);
       if (!canMutate) throw new MutationForbidden();
       const input = await decodeBody(c, UpdateConnectionRequestSchema);
+      if (input.apiKey !== undefined && input.apiKey !== "")
+        await spendBudget(c, "key", MODEL_CONNECTION_KEY_BUDGET);
       const deps = await dependencies(c);
       return c.json(
         respond(
@@ -355,6 +419,7 @@ const mountConnectionRoutes = (
     handle(c, async () => {
       const { target, canMutate } = await resolveTarget(c);
       if (!canMutate) throw new MutationForbidden();
+      await spendBudget(c, "check", MODEL_CONNECTION_CHECK_BUDGET);
       const deps = await dependencies(c);
       return c.json(
         respond(

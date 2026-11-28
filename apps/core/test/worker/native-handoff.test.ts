@@ -18,7 +18,9 @@ import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
  * - a malformed challenge is stored;
  * - a page or link outside the app sends someone to redeem an attacker's
  *   code and verifier, signing them in to the attacker's account (login
- *   CSRF), or the refusal spends the code.
+ *   CSRF), or the refusal spends the code; a link opened from another app
+ *   (`Sec-Fetch-Site: none`) or a browser without Fetch Metadata counts;
+ * - the app's own load, from a build before its redeem header, is refused.
  */
 
 const origin = "http://dx.test";
@@ -82,11 +84,20 @@ const create = (cookie: string | undefined, challenge: string) =>
     bindings,
   );
 
-// The app's web view loads the link itself: `Sec-Fetch-Site: none`.
-const redeem = (code: string, verifier: string, fetchSite = "none") =>
+// The app's web view loads the link itself (`Sec-Fetch-Site: none`) and
+// says so with its own header.
+const APP_LOAD = {
+  "sec-fetch-site": "none",
+  "x-dx-native-redeem": "1",
+} as const;
+const redeem = (
+  code: string,
+  verifier: string,
+  headers: Record<string, string> = APP_LOAD,
+) =>
   app.request(
     `/api/auth/native-handoff/redeem?code=${encodeURIComponent(code)}&verifier=${encodeURIComponent(verifier)}`,
-    { headers: { "sec-fetch-site": fetchSite } },
+    { headers },
     bindings,
   );
 
@@ -156,15 +167,42 @@ describe("native sign-in handoff", () => {
     const created = await create(attacker, challenge);
     const { code } = (await created.json()) as { code: string };
 
-    // evil.example redirects the victim here, or a link in dx itself does.
-    for (const site of ["cross-site", "same-site", "same-origin"]) {
-      const forged = await redeem(code, verifier, site);
+    // evil.example redirects the victim here, or a link in dx itself does,
+    // or the link is opened from Slack or Mail (`none`), or from a browser
+    // without Fetch Metadata (#2689).
+    const browser =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+    for (const headers of [
+      ...["cross-site", "same-site", "same-origin"].map((site) => ({
+        ...APP_LOAD,
+        "sec-fetch-site": site,
+      })),
+      { "sec-fetch-site": "none", "user-agent": browser },
+      { "user-agent": browser },
+      {},
+    ]) {
+      const forged = await redeem(code, verifier, headers);
       expect(forged.status).toBe(403);
       expect(sessionCookie(forged)).toBeUndefined();
     }
 
     // The app's own load still redeems the same code.
     const redeemed = await redeem(code, verifier);
+    expect(redeemed.status).toBe(302);
+    expect(sessionCookie(redeemed)).toBeDefined();
+  });
+
+  it("still redeems for app builds from before the header, by their web view's user agent", async () => {
+    const person = await signUp();
+    const { verifier, challenge } = await pkce();
+    const { code } = (await (await create(person, challenge)).json()) as {
+      code: string;
+    };
+    const redeemed = await redeem(code, verifier, {
+      "sec-fetch-site": "none",
+      "user-agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) dxShell/0.1.0 (macOS) Safari/605.1.15",
+    });
     expect(redeemed.status).toBe(302);
     expect(sessionCookie(redeemed)).toBeDefined();
   });

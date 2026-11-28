@@ -30,24 +30,32 @@ const randomHex = (bytes: number) =>
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 
+/** Letters in a pairing code: four groups of four. */
+const PAIRING_CODE_LENGTH = 16;
+
 /**
- * `BCDF-GHJK`: 20 consonants, eight places, as RFC 8628 suggests. Bytes of
- * 240 and up are drawn again, so every letter is equally likely.
+ * `BCDF-GHJK-LMNP-QRST`: 20 consonants, as RFC 8628 suggests, sixteen places
+ * (20^16, about 6.6e20), so no guessing rate finds a live code and pairing
+ * needs no deployment-wide budget anyone could spend for everyone (#2696).
+ * Bytes of 240 and up are drawn again, so every letter is equally likely.
  */
 export const newPairingCode = () => {
   const letters: string[] = [];
-  while (letters.length < 8)
-    for (const value of crypto.getRandomValues(new Uint8Array(8)))
-      if (value < 240 && letters.length < 8)
+  while (letters.length < PAIRING_CODE_LENGTH)
+    for (const value of crypto.getRandomValues(new Uint8Array(16)))
+      if (value < 240 && letters.length < PAIRING_CODE_LENGTH)
         letters.push(PAIRING_CODE_LETTERS[value % 20] ?? "");
-  return `${letters.slice(0, 4).join("")}-${letters.slice(4).join("")}`;
+  return groupedCode(letters.join(""));
 };
 
-/** A typed code, normalised: case and the dash do not matter. */
+const groupedCode = (letters: string) =>
+  (letters.match(/.{4}/g) ?? []).join("-");
+
+/** A typed code, normalised: case and the dashes do not matter. */
 export const normalisePairingCode = (code: string) => {
   const letters = code.toUpperCase().replace(/[^A-Z]/g, "");
-  return letters.length === 8
-    ? `${letters.slice(0, 4)}-${letters.slice(4)}`
+  return letters.length === PAIRING_CODE_LENGTH
+    ? groupedCode(letters)
     : undefined;
 };
 
@@ -145,6 +153,15 @@ export const machineForToken = async (db: D1Database, token: string) =>
     )
     .bind(await sha256Hex(token))
     .first<{ id: string; owner_user_id: string }>()) ?? undefined;
+
+/** Whether a machine was removed: revoked, or gone with its owner. */
+export const machineRemoved = async (db: D1Database, machineId: string) => {
+  const row = await db
+    .prepare("SELECT revoked_at FROM runner_machine WHERE id = ?")
+    .bind(machineId)
+    .first<{ revoked_at: number | null }>();
+  return row === null || row.revoked_at !== null;
+};
 
 export const revokeMachine = async (
   db: D1Database,

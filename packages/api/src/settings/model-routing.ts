@@ -374,8 +374,18 @@ export const ModelRoutingUnavailableResponseSchema = errorResponse(
   "Model routing is not configured.",
 );
 
+/**
+ * Saving or checking a connection asks the provider whether its key works,
+ * so each person may do so only so many times an hour (#2688).
+ */
+export const ModelRoutingRateLimitedResponseSchema = errorResponse(
+  "MODEL_ROUTING_RATE_LIMITED",
+  "Too many model connection checks. Try again later.",
+);
+
 export const ModelRoutingErrorResponseSchema = Schema.Union([
   ModelRoutingInvalidRequestResponseSchema,
+  ModelRoutingRateLimitedResponseSchema,
   ModelRoutingForbiddenResponseSchema,
   ModelRoutingMutationForbiddenResponseSchema,
   ModelConnectionNotFoundResponseSchema,

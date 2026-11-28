@@ -502,6 +502,19 @@ export const readCatchUp = async (
       .run();
     return null;
   }
+  // Claim the return before the paid model call (#2695): of requests that
+  // read the same visit at once, only the one whose compare-and-set lands
+  // writes the card; the others show none this time.
+  const claimed = await db
+    .prepare(
+      `UPDATE space_visit
+          SET seen_at = ?3, catch_up_since = NULL, catch_up_until = NULL,
+              catch_up_body = NULL, catch_up_dismissed = 0
+        WHERE space_thread_id = ?1 AND user_id = ?2 AND seen_at = ?4`,
+    )
+    .bind(spaceThreadId, viewer, now, visit.seen_at)
+    .run();
+  if (claimed.meta.changes !== 1) return null;
   const body = (await write({ bindings, threads, awayMs: away, now })).slice(
     0,
     SPACE_CATCH_UP_MAX_LENGTH,
@@ -509,11 +522,11 @@ export const readCatchUp = async (
   await db
     .prepare(
       `UPDATE space_visit
-          SET seen_at = ?3, catch_up_since = ?4, catch_up_until = ?3,
-              catch_up_body = ?5, catch_up_dismissed = 0
+          SET catch_up_since = ?3, catch_up_until = ?4, catch_up_body = ?5,
+              catch_up_dismissed = 0
         WHERE space_thread_id = ?1 AND user_id = ?2`,
     )
-    .bind(spaceThreadId, viewer, now, visit.seen_at, body)
+    .bind(spaceThreadId, viewer, visit.seen_at, now, body)
     .run();
   return card(visit.seen_at, now, body);
 };

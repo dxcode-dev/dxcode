@@ -43,6 +43,7 @@ import {
   personalSpaceCoordinatorOrbRoutes,
   workspaceSpaceCoordinatorOrbRoutes,
 } from "../spaces/coordinator-orb.js";
+import { serverTranscriptOn } from "../transcript/transcript-routes.js";
 import { clefAvailable } from "../workers-ai/clef.js";
 import { personalAccountRoutes } from "./account/routes.js";
 import { personalAgentInstructionsRoutes } from "./agent-instructions/routes.js";
@@ -96,6 +97,7 @@ const responseData = (
   huddle: boolean,
   mailDomain: string | undefined,
   spaces: boolean,
+  serverTranscript: boolean,
 ) => ({
   activeScope: access.activeScope,
   dictationAvailable: dictation !== undefined,
@@ -103,6 +105,7 @@ const responseData = (
   ...(composerQuickActions ? { composerQuickActions } : {}),
   ...(huddle ? { huddle } : {}),
   ...(spaces ? { spaces } : {}),
+  ...(serverTranscript ? { serverTranscript } : {}),
   ...(dictation === undefined ? {} : { dictation }),
   ...(portalDomain === undefined ? {} : { portalDomain }),
   ...(mailDomain === undefined ? {} : { mailDomain }),
@@ -159,6 +162,12 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
     // to pay for calls.
     const composerQuickActions = clefAvailable(context.env);
     const huddle = realtimeKitAccess(context.env) !== undefined;
+    // The person's own experimental feature; a read failure leaves it off.
+    const serverTranscript = yield* Effect.promise(() =>
+      serverTranscriptOn(db, context.get("principal").userId).catch(
+        () => false,
+      ),
+    );
     return yield* Schema.encodeUnknownEffect(GetSettingsContextResponseSchema)({
       status: "success",
       data: responseData(
@@ -174,6 +183,7 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
           ),
         ))?.domain,
         spacesEnabled(context.env),
+        serverTranscript,
       ),
     });
   });

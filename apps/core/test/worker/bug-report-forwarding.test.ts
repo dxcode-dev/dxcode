@@ -552,4 +552,43 @@ describe("Bug report forwarding", () => {
       expect(response.status).toBe(401);
     }
   });
+
+  it("keeps no more than a sender's hour of reports sent at once (#2690)", async () => {
+    const key = await issueIntakeKey(SECRET, "burst");
+    const send = (index: number) => {
+      const form = new FormData();
+      form.set(
+        "report",
+        JSON.stringify({
+          message: `Burst ${index}`,
+          diagnostics: [],
+          source: {
+            origin: "https://burst.test",
+            reportId: `bug_${index.toString(16).padStart(32, "0")}`,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+      );
+      return app().request(
+        BUG_REPORT_INTAKE_PATH,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${key}` },
+          body: form,
+        },
+        centralBindings(),
+      );
+    };
+    const statuses = (
+      await Promise.all(
+        Array.from({ length: INTAKE_REPORTS_PER_HOUR + 20 }, (_, index) =>
+          send(index + 1),
+        ),
+      )
+    ).map((response) => response.status);
+    expect(statuses.filter((status) => status === 201)).toHaveLength(
+      INTAKE_REPORTS_PER_HOUR,
+    );
+    expect(statuses.filter((status) => status === 429)).toHaveLength(20);
+  });
 });

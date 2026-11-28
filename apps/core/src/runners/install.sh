@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs dx's runner on this Mac or Linux machine and pairs it with dx.
 #
-#   curl -fsSL __DX_ORIGIN__/v1/runner/install.sh | sh -s -- --code BCDF-GHJK
+#   curl -fsSL __DX_ORIGIN__/v1/runner/install.sh | sh -s -- --code BCDF-GHJK-LMNP-QRST
 #
 # Options: --name NAME (default: this machine's host name), --no-service
 # (run in the foreground instead of starting at login), --sandbox (confine
@@ -32,7 +32,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$code" ]; then
-  echo "dx runner: pass the pairing code from dx: --code XXXX-XXXX" >&2
+  echo "dx runner: pass the pairing code from dx: --code XXXX-XXXX-XXXX-XXXX" >&2
   exit 2
 fi
 

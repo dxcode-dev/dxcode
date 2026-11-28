@@ -214,7 +214,14 @@ export const makeAgent37Connector = (
               "agent37",
               image,
               AGENT37_MOUNT_PATH,
-              JSON.stringify(AGENT37_ORB_SIZES),
+              // The shared sizes as they were before VM sizes, so adding
+              // sizes asks no account to register its template again: the
+              // template serves every size and type.
+              JSON.stringify(
+                AGENT37_ORB_SIZES.filter(
+                  ({ instanceType }) => instanceType === "default",
+                ).map(({ id, label, resources }) => ({ id, label, resources })),
+              ),
             ].join("\0"),
           ),
         )

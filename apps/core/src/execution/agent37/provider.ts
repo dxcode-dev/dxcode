@@ -221,6 +221,7 @@ const createInstance = async (
       name: `dx ${threadId}`,
       mountPath: AGENT37_MOUNT_PATH,
       metadata: { [THREAD_TAG]: threadId, [ATTEMPT_TAG]: attempt },
+      ...(profile.instanceType === "vm" ? { type: "vm" as const } : {}),
     })
     .catch((cause: unknown) => {
       throw refused(cause);

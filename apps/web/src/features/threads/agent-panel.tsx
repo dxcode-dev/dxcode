@@ -20,7 +20,9 @@ import {
   type ClaudePlanLimit,
   parseClaudePlanLimit,
   THREAD_SNOOZE_UNTIL_NEEDED_MS,
+  type ThreadId,
   threadSnoozeState,
+  type UserId,
 } from "@dx/domain";
 import type {
   FailedSend,
@@ -29,6 +31,7 @@ import type {
   FlueHistoryWindow,
   UseFlueAgentResult,
 } from "@flue/react";
+import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   ArrowUp,
@@ -39,6 +42,7 @@ import {
   X,
 } from "lucide-react";
 import * as React from "react";
+import { useIdentity } from "../../shared/auth/auth-context.js";
 import { settle } from "../../shared/settle.js";
 import { lazyComponent } from "../../shared/stale-chunk.js";
 import { useOptionalThreadSnooze } from "../../shared/thread-snooze.js";
@@ -50,6 +54,7 @@ import {
   claudePlanLimitCopy,
 } from "../../shared/ui/claude-plan-limit.js";
 import { Textarea } from "../../shared/ui/textarea.js";
+import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { observeComposerDock } from "./composer-dock.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
 import { useDictation } from "./dictation/use-dictation.js";
@@ -123,9 +128,9 @@ const ClefQuickActions = lazyComponent(() =>
  * and loads after the transcript paints; a chunk that cannot load compares
  * nothing.
  */
-const ServerTranscriptShadow = lazyComponent(() =>
+const ServerTranscriptShadowStream = lazyComponent(() =>
   import("./server-transcript-shadow.js").then(
-    (module) => ({ default: module.ServerTranscriptShadow }),
+    (module) => ({ default: module.ShadowStream }),
     () => ({ default: () => null }),
   ),
 );
@@ -1615,14 +1620,39 @@ function AgentConversation({
   ) : (
     <>
       {transcript}
-      <React.Suspense fallback={null}>
-        <ServerTranscriptShadow
-          threadId={threadId}
-          localModel={transcripts.current}
-        />
-      </React.Suspense>
+      <ServerTranscriptShadow
+        threadId={threadId}
+        localModel={transcripts.current}
+      />
     </>
   );
+}
+
+/**
+ * The shadow's code loads only for a person whose settings context, which
+ * the page has from boot, says they turned `server-transcript` on; everyone
+ * else loads no chunk and reads nothing more.
+ */
+function ServerTranscriptShadow({
+  threadId,
+  localModel,
+}: {
+  readonly threadId: ThreadId;
+  readonly localModel: () => TranscriptViewModel;
+}) {
+  const auth = useIdentity();
+  const settings = useQuery({
+    ...settingsContextQueryOptions(auth?.identity.id ?? ("" as UserId)),
+    enabled: auth !== undefined,
+  });
+  return settings.data?.serverTranscript === true ? (
+    <React.Suspense fallback={null}>
+      <ServerTranscriptShadowStream
+        threadId={threadId}
+        localModel={localModel}
+      />
+    </React.Suspense>
+  ) : null;
 }
 
 /**

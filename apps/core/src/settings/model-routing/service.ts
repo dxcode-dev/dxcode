@@ -232,6 +232,14 @@ const normalizedEndpoint = (
   return "endpoint" in result ? result.endpoint : undefined;
 };
 
+const originOf = (endpoint: string | undefined) =>
+  endpoint !== undefined && URL.canParse(endpoint)
+    ? new URL(endpoint).origin
+    : endpoint;
+
+/** Provider fields that move a connection's endpoint (`providerBaseUrl`). */
+const ENDPOINT_FIELDS = ["resourceName", "accountId", "gatewayId", "region"];
+
 const MAX_CONNECTION_NAME_LENGTH = 80;
 
 const validateName = (name: string, fieldErrors: SettingsFieldError[]) => {
@@ -806,6 +814,23 @@ export class ModelRoutingService {
     let credentialId = current.credentialId;
     let replacementCredential: StoredModelCredential | undefined;
     const apiKey = claudeCodeToken?.trim() ?? input.apiKey;
+    // A stored key belongs to the host it was entered for (#2688, as #2355
+    // for MCP servers): moving the connection to another host needs it
+    // entered again, or anyone who may edit it could send it anywhere.
+    if (
+      current.credentialId !== undefined &&
+      (apiKey === undefined || apiKey === "") &&
+      (originOf(endpointResult) !== originOf(current.baseUrl) ||
+        ENDPOINT_FIELDS.some(
+          (key) => (merged.fields?.[key] ?? "") !== (current.fields[key] ?? ""),
+        ))
+    )
+      throw new ModelRoutingValidationError([
+        {
+          field: "apiKey",
+          message: "Enter the API key again for the new endpoint.",
+        },
+      ]);
     if (apiKey !== undefined && apiKey !== "") {
       replacementCredential = await this.#buildCredential(
         target,

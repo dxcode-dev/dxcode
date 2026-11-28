@@ -34,7 +34,9 @@ const isPublicIpv4 = (input: string): boolean => {
   );
 };
 
-const expandIpv6 = (input: string): ReadonlyArray<number> | undefined => {
+export const expandIpv6 = (
+  input: string,
+): ReadonlyArray<number> | undefined => {
   const unwrapped = input.replace(/^\[|\]$/g, "").toLowerCase();
   if (!unwrapped.includes(":")) return undefined;
   const pieces = unwrapped.split("::");
