@@ -454,7 +454,10 @@ export const ciEvent = async (
     key: `ci:${(await digest(state)).slice(0, 40)}`,
     kind: "ci",
     label: `${what} on ${short(sha)} ${passed ? "passed" : state.outcome === "failure" ? "failed" : `finished: ${state.outcome}`}`,
-    url: state.url ?? `https://github.com/${repository}/commit/${sha}/checks`,
+    // Printed as dx's own line, so only GitHub's own link (#2693).
+    url: state.url?.startsWith("https://github.com/")
+      ? state.url
+      : `https://github.com/${repository}/commit/${sha}/checks`,
     commit: {
       sha,
       ...(filter.branch === undefined ? {} : { branch: filter.branch }),

@@ -44,6 +44,8 @@ const COLUMNS = `id, owner_user_id, thread_id, title, repository, filter_kind,
 
 /** CI and comment subscriptions end after this unless given an expiry. */
 export const DEFAULT_LIFETIME_MS = 30 * 24 * 60 * 60_000;
+/** The furthest expiry a subscription takes (#2692). */
+export const MAX_LIFETIME_MS = 365 * 24 * 60 * 60_000;
 
 export const filterOf = (row: SubscriptionRow) =>
   JSON.parse(row.filter_json) as SubscriptionFilter;
@@ -428,16 +430,18 @@ export const automaticCiOn = async (
 /**
  * Saves what the header shows of a pull request on every subscription and
  * Thread link that follows it: one write each per pull_request webhook, so
- * no view reads GitHub. Skips the Threads whose owner's access was not
- * confirmed, and subscriptions that failed, such as on lost access.
+ * no view reads GitHub. Writes only to the Threads given, whose owner's
+ * access was just confirmed, and never to subscriptions that failed, such
+ * as on lost access.
  */
 export const savePullSubject = async (
   db: D1Database,
   repository: string,
   number: number,
   subject: PullSubject,
-  skipThreadIds: ReadonlyArray<string> = [],
+  threadIds: ReadonlyArray<string>,
 ) => {
+  if (threadIds.length === 0) return;
   await db.batch([
     db
       .prepare(
@@ -445,13 +449,13 @@ export const savePullSubject = async (
           WHERE repository = ?1 COLLATE NOCASE AND filter_kind = 'pr-comments'
             AND json_extract(filter_json, '$.prNumber') = ?2
             AND state != 'failed'
-            AND thread_id NOT IN (SELECT value FROM json_each(?4))`,
+            AND thread_id IN (SELECT value FROM json_each(?4))`,
       )
       .bind(
         repository,
         number,
         JSON.stringify(subject),
-        JSON.stringify(skipThreadIds),
+        JSON.stringify(threadIds),
       ),
     saveLinkSubjectStatement(
       db,
@@ -459,7 +463,7 @@ export const savePullSubject = async (
       number,
       "pull",
       subject,
-      skipThreadIds,
+      threadIds,
     ),
   ]);
 };
@@ -535,6 +539,64 @@ export const recordNewEvents = async (
   );
   return events.filter((event) => fresh.has(event.key.slice(0, 200)));
 };
+
+/**
+ * The most Threads new-thread subscriptions start in an hour, for one
+ * subscription and across its owner's: on a public repository anyone may
+ * open the issues and PRs that start them, on the owner's bill (#2694).
+ */
+export const NEW_THREADS_PER_HOUR = { subscription: 10, owner: 20 } as const;
+
+/**
+ * Records a new-thread subscription's event like `recordNewEvents`, but as
+ * failed once the subscription or its owner reached `NEW_THREADS_PER_HOUR`.
+ * One statement counts and inserts, so deliveries racing for the last start
+ * never pass a cap together. Returns whether it may start a Thread, or
+ * undefined for an event seen before.
+ */
+export const recordNewThreadEvent = async (
+  db: D1Database,
+  row: Pick<SubscriptionRow, "id" | "owner_user_id">,
+  event: GitHubEvent,
+  now: Date,
+) => {
+  const recorded = await db
+    .prepare(
+      `INSERT INTO github_subscription_event
+         (subscription_id, event_key, summary, url, status, created_at,
+          detail_json)
+       SELECT ?1, ?2, ?3, ?4,
+              CASE WHEN started.subscription >= ?8 OR started.owner >= ?9
+                   THEN 'failed' ELSE 'delivered' END,
+              ?5, ?6
+         FROM (SELECT COUNT(*) AS owner,
+                      COALESCE(SUM(e.subscription_id = ?1), 0) AS subscription
+                 FROM github_subscription AS s
+                 JOIN github_subscription_event AS e
+                   ON e.subscription_id = s.id
+                WHERE s.owner_user_id = ?7 AND s.destination = 'new-thread'
+                  AND e.status != 'failed' AND e.created_at > ?10) AS started
+        WHERE true
+       ON CONFLICT DO NOTHING RETURNING status`,
+    )
+    .bind(
+      row.id,
+      event.key.slice(0, 200),
+      event.label.slice(0, 500),
+      event.url?.slice(0, 2000) ?? null,
+      now.toISOString(),
+      event.detail === undefined ? null : JSON.stringify(event.detail),
+      row.owner_user_id,
+      NEW_THREADS_PER_HOUR.subscription,
+      NEW_THREADS_PER_HOUR.owner,
+      new Date(now.getTime() - 3_600_000).toISOString(),
+    )
+    .first<{ status: string }>();
+  return recorded === null ? undefined : recorded.status !== "failed";
+};
+
+/** Why a new-thread subscription's event started no Thread. */
+export const NEW_THREAD_CAP_DETAIL = `New-thread subscriptions start at most ${NEW_THREADS_PER_HOUR.subscription} Threads an hour each, and ${NEW_THREADS_PER_HOUR.owner} an hour for the owner; an event past that starts none.`;
 
 export const markEvent = (
   db: D1Database,

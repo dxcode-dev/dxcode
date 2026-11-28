@@ -372,17 +372,43 @@ const errorSearchText = (error: unknown): string => {
  * Core stamps a failure the person must fix (budget, credentials, plan) as
  * `(dx_failure:account:CODE)`; its text is written for the person.
  */
-const accountFailureMessage = (error: unknown) => {
-  const message =
-    typeof error === "object" && error !== null && "message" in error
-      ? String((error as { message: unknown }).message)
-      : errorSearchText(error);
-  if (!/\(dx_failure:account:[A-Z0-9_]+\)/.test(message)) return undefined;
-  return message
+const failureMessage = (error: unknown) =>
+  typeof error === "object" && error !== null && "message" in error
+    ? String((error as { message: unknown }).message)
+    : errorSearchText(error);
+
+/** Core's failure text for the person: no stamp, no submission prefix. */
+const failureTextForPerson = (message: string) =>
+  message
     .replace(/\(dx_failure:[a-z]+:[A-Z0-9_]+\)/g, "")
     .replace(/^\w+\(sub_[^)]*\) failed: /, "")
     .trim();
+
+const accountFailureMessage = (error: unknown) => {
+  const message = failureMessage(error);
+  if (!/\(dx_failure:account:[A-Z0-9_]+\)/.test(message)) return undefined;
+  return failureTextForPerson(message);
 };
+
+/**
+ * The model provider's safety system stopped the response
+ * (`(dx_failure:…:MODEL_SAFETY_STOP)`), such as Anthropic's cyber
+ * safeguards. Core's text carries the provider's own reason, so the person
+ * can rephrase, retry, or choose another model instead of reading
+ * "Provider error".
+ */
+const safetyStopPresentation = (
+  id: string,
+  text: string,
+): ThreadErrorPresentation | undefined =>
+  /\(dx_failure:[a-z]+:MODEL_SAFETY_STOP\)/.test(text)
+    ? {
+        id,
+        title: "Stopped by the model's safety system",
+        message: failureTextForPerson(text),
+        action: "resume",
+      }
+    : undefined;
 
 const modelRoutingErrorMessage = (error: unknown) => {
   const text = errorSearchText(error);
@@ -624,6 +650,13 @@ const threadErrorPresentation = (
         )
       : undefined;
     if (dxModelStop !== undefined) return dxModelStop;
+    const safetyStop = latestSettlementFailed
+      ? safetyStopPresentation(
+          `settlement:${latestSettlement.submissionId}`,
+          failureMessage(latestSettlement.error),
+        )
+      : undefined;
+    if (safetyStop !== undefined) return safetyStop;
     const preCloneFailure = latestSettlementFailed
       ? preCloneFailurePresentation(
           `settlement:${latestSettlement.submissionId}`,
@@ -701,6 +734,8 @@ const threadErrorPresentation = (
     if (!dismissed.has(id) && diskFull !== undefined) return diskFull;
     const dxModelStop = dxModelStopPresentation(id, failureText);
     if (!dismissed.has(id) && dxModelStop !== undefined) return dxModelStop;
+    const safetyStop = safetyStopPresentation(id, failureText);
+    if (!dismissed.has(id) && safetyStop !== undefined) return safetyStop;
     const preCloneFailure = preCloneFailurePresentation(id, failureText);
     if (!dismissed.has(id) && preCloneFailure !== undefined)
       return preCloneFailure;

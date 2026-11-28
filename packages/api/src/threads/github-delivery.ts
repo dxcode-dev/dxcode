@@ -8,7 +8,9 @@
  *   - [ci] CI on abc1234 passed
  *     https://github.com/owner/repo/commit/<sha>/checks
  *     commit <sha> main
- *     check success build https://github.com/…/runs/1
+ *   <github_event>
+ *   check success build https://github.com/…/runs/1
+ *   </github_event>
  *   - [comment] alice commented on PR #12
  *     https://github.com/owner/repo/pull/12#issuecomment-1
  *   <github_event>
@@ -60,6 +62,7 @@ export interface GitHubDelivery {
 }
 
 const oneLine = (text: string) => text.replaceAll(/\s+/g, " ").trim();
+const URL_PATTERN = /^https:\/\/\S+$/;
 
 /** Text from GitHub cannot close the block it is quoted in. */
 const quoted = (text: string) =>
@@ -82,10 +85,20 @@ export const formatGitHubDelivery = ({
             : [
                 `  commit ${event.commit.sha}${event.commit.branch === undefined ? "" : ` ${event.commit.branch}`}`,
               ]),
-          ...(event.checks ?? []).map(
-            (check) =>
-              `  check ${check.result} ${oneLine(check.name)}${check.url === undefined ? "" : ` ${check.url}`}`,
-          ),
+          // Check names and their links come from whoever wrote the
+          // workflow, such as a fork's (#2693): untrusted, so fenced.
+          ...(event.checks === undefined || event.checks.length === 0
+            ? []
+            : [
+                quoted(
+                  event.checks
+                    .map(
+                      (check) =>
+                        `check ${oneLine(check.result)} ${oneLine(check.name)}${check.url !== undefined && URL_PATTERN.test(check.url) ? ` ${check.url}` : ""}`,
+                    )
+                    .join("\n"),
+                ),
+              ]),
           ...(event.untrusted ? [quoted(event.untrusted)] : []),
         ].join("\n"),
       )
@@ -96,7 +109,16 @@ export const formatGitHubDelivery = ({
   ].join("\n\n");
 
 const KIND = new Set<string>(GITHUB_DELIVERY_KINDS);
-const URL_PATTERN = /^https:\/\/\S+$/;
+
+const parseCheck = (body: string): GitHubDeliveryCheck | undefined => {
+  const check = /^check (\S+) (.+?)(?: (https:\/\/\S+))?$/.exec(body);
+  if (check === null) return undefined;
+  return {
+    result: check[1] as string,
+    name: check[2] as string,
+    ...(check[3] === undefined ? {} : { url: check[3] }),
+  };
+};
 
 /** The events in a delivered message, or none if it is not one. */
 export const parseGitHubDelivery = (
@@ -121,8 +143,17 @@ export const parseGitHubDelivery = (
     if (line === "<github_event>") {
       const end = lines.indexOf("</github_event>", index + 1);
       if (end === -1) break;
-      event.untrusted = lines.slice(index + 1, end).join("\n");
+      const block = lines.slice(index + 1, end);
       index = end;
+      // A CI event's first block holds its checks.
+      if (event.kind === "ci" && event.checks === undefined) {
+        event.checks = block.flatMap((body) => {
+          const check = parseCheck(body);
+          return check === undefined ? [] : [check];
+        });
+        continue;
+      }
+      event.untrusted = block.join("\n");
       continue;
     }
     if (!line.startsWith("  ")) continue;
@@ -139,16 +170,9 @@ export const parseGitHubDelivery = (
       };
       continue;
     }
-    const check = /^check (\S+) (.+?)(?: (https:\/\/\S+))?$/.exec(body);
-    if (check !== null)
-      event.checks = [
-        ...(event.checks ?? []),
-        {
-          result: check[1] as string,
-          name: check[2] as string,
-          ...(check[3] === undefined ? {} : { url: check[3] }),
-        },
-      ];
+    // Messages delivered before #2693 listed checks outside the fence.
+    const check = parseCheck(body);
+    if (check !== undefined) event.checks = [...(event.checks ?? []), check];
   }
   return events;
 };

@@ -171,6 +171,63 @@ export const markRunFailure = (failure: RunFailure) =>
 export const runFailureText = (message: string) =>
   message.replace(MARKER, "").trim();
 
+/**
+ * A response the provider's safety system stopped. The same input is
+ * usually stopped again, so it is `internal` (not retried); the person reads
+ * the provider's reason and decides whether to rephrase, retry, or switch
+ * models.
+ */
+export const MODEL_SAFETY_STOP = "MODEL_SAFETY_STOP";
+
+/**
+ * The raw stop reasons (pi-ai's `rawStopReason`) by which each provider says
+ * its safety system stopped a response: Anthropic `refusal` and `sensitive`,
+ * Bedrock guardrails, OpenAI's content filter (Chat Completions and
+ * Responses), and Gemini's safety finish reasons.
+ */
+const SAFETY_STOP_REASONS: ReadonlySet<string> = new Set([
+  "refusal",
+  "sensitive",
+  "guardrail_intervened",
+  "content_filtered",
+  "content_filter",
+  "incomplete.content_filter",
+  "SAFETY",
+  "PROHIBITED_CONTENT",
+  "BLOCKLIST",
+  "SPII",
+  "RECITATION",
+  "IMAGE_SAFETY",
+  "IMAGE_PROHIBITED_CONTENT",
+  "IMAGE_RECITATION",
+]);
+
+/** pi-ai's own text for a stop that carried no explanation. */
+const BARE_STOP_TEXT =
+  /^(?:The model refused to complete the request|Provider stopped with: \w+|Provider finish_reason: \w+)$/;
+
+/**
+ * The failure for a response the provider's safety system stopped, or
+ * undefined when `rawStopReason` is not a safety stop. Keeps the provider's
+ * own explanation (Anthropic's names the safeguard and how to apply for an
+ * exception).
+ */
+export const safetyStopFailure = (
+  rawStopReason: string | undefined,
+  providerText: string | undefined,
+): RunFailure | undefined => {
+  if (rawStopReason === undefined || !SAFETY_STOP_REASONS.has(rawStopReason))
+    return undefined;
+  const reason = runFailureText(providerText ?? "").trim();
+  const explained = reason !== "" && !BARE_STOP_TEXT.test(reason);
+  return failure(
+    "internal",
+    MODEL_SAFETY_STOP,
+    `The model provider's safety system stopped this response${explained ? `: ${reason}` : ` (${rawStopReason}).`} Rephrase the request or choose another model, then retry.`,
+    undefined,
+  );
+};
+
 export const classifyRunFailure = (input: RunFailureInput): RunFailure => {
   const marked = MARKER.exec(input.message);
   if (marked?.[1] !== undefined && marked[2] !== undefined)

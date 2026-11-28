@@ -26,8 +26,10 @@ import {
   finishSubscription,
   listeningSubscriptions,
   markEvent,
+  NEW_THREAD_CAP_DETAIL,
   noteDeliveryFailure,
   recordNewEvents,
+  recordNewThreadEvent,
   type SubscriptionRow,
   savePullSubject,
   setSubscriptionEnabled,
@@ -175,7 +177,20 @@ const deliverTo = async (
   }
   const event = await eventFor(bindings, db, row, happening, now);
   if (event === undefined) return;
-  const [fresh] = await recordNewEvents(db, row.id, [event], now);
+  let fresh: GitHubEvent | undefined;
+  if (row.destination === "new-thread") {
+    const startable = await recordNewThreadEvent(db, row, event, now);
+    if (startable === undefined) return;
+    if (!startable) {
+      await noteDeliveryFailure(db, row.id, NEW_THREAD_CAP_DETAIL, now);
+      automationLogger.warn("A new-thread subscription reached its cap.", {
+        event: "github_subscription_new_thread_capped",
+        subscriptionId: row.id,
+      });
+      return;
+    }
+    fresh = event;
+  } else [fresh] = await recordNewEvents(db, row.id, [event], now);
   if (fresh === undefined) return;
   const finished =
     happening.kind === "ci"
@@ -493,69 +508,91 @@ const followPullRequest = async (
 
 /**
  * Before a webhook's title and state reach the Threads that follow an issue
- * or PR, each must still read its repository: one whose owner lost access
- * loses its links and subscriptions there instead (#2666). Returns the
- * Threads the write skips: those, and any whose owner has no credentials to
- * check with. GitHub failing to answer says nothing of access: the write
- * goes on, so an outage does not lose a PR's merge.
+ * or PR, each must still read its repository (#2666, #2692). Returns the
+ * Threads whose owner's access GitHub just confirmed: only those get the
+ * write. One whose owner lost access (GitHub says 404) loses its links and
+ * subscriptions there. No credentials to check with, or any other failure,
+ * such as a bad token, an SSO block, or an outage, says nothing of access:
+ * that Thread keeps them, so a merge still ships it, but gets no new content.
  */
-const forgetLostFollowers = async (
+const FOLLOWERS_PER_PAGE = 50;
+const confirmedFollowers = async (
   bindings: Bindings,
   db: D1Database,
   repository: string,
   number: number,
   now: Date,
 ) => {
-  const followers = (
-    await db
-      .prepare(
-        `SELECT l.thread_id, t.owner_user_id
-           FROM thread_github_link AS l JOIN threads AS t ON t.id = l.thread_id
-          WHERE l.repository_key = lower(?1) AND l.number = ?2 AND l.verified = 1
-         UNION
-         SELECT thread_id, owner_user_id FROM github_subscription
-          WHERE repository = ?1 COLLATE NOCASE AND filter_kind = 'pr-comments'
-            AND json_extract(filter_json, '$.prNumber') = ?2
-            AND state != 'failed'
-         LIMIT 50`,
-      )
-      .bind(repository, number)
-      .all<{ thread_id: string; owner_user_id: string }>()
-  ).results;
-  const skipped = await Promise.all(
-    followers.map(async (follower) => {
-      const reads = await ownerReadsRepository(
-        bindings,
-        db,
-        follower.thread_id,
-        follower.owner_user_id,
-        repository,
-        now.getTime(),
-      ).catch((cause) => {
-        automationLogger.info("Checking a linked Thread's access failed.", {
-          event: "github_link_access_check_failed",
-          threadId: follower.thread_id,
-          cause,
+  const confirmed = new Set<string>();
+  const unconfirmed = new Set<string>();
+  let after = { thread_id: "", owner_user_id: "" };
+  for (;;) {
+    const page = (
+      await db
+        .prepare(
+          `SELECT thread_id, owner_user_id FROM (
+             SELECT l.thread_id, t.owner_user_id
+               FROM thread_github_link AS l JOIN threads AS t ON t.id = l.thread_id
+              WHERE l.repository_key = lower(?1) AND l.number = ?2 AND l.verified = 1
+             UNION
+             SELECT thread_id, owner_user_id FROM github_subscription
+              WHERE repository = ?1 COLLATE NOCASE AND filter_kind = 'pr-comments'
+                AND json_extract(filter_json, '$.prNumber') = ?2
+                AND state != 'failed')
+            WHERE (thread_id, owner_user_id) > (?3, ?4)
+            ORDER BY thread_id, owner_user_id
+            LIMIT ?5`,
+        )
+        .bind(
+          repository,
+          number,
+          after.thread_id,
+          after.owner_user_id,
+          FOLLOWERS_PER_PAGE,
+        )
+        .all<{ thread_id: string; owner_user_id: string }>()
+    ).results;
+    await Promise.all(
+      page.map(async (follower) => {
+        const reads = await ownerReadsRepository(
+          bindings,
+          db,
+          follower.thread_id,
+          follower.owner_user_id,
+          repository,
+          now.getTime(),
+        ).catch((cause) => {
+          automationLogger.info("Checking a linked Thread's access failed.", {
+            event: "github_link_access_check_failed",
+            threadId: follower.thread_id,
+            cause,
+          });
+          return "unknown" as const;
         });
-        return true;
-      });
-      if (reads === true) return [];
-      if (reads === undefined) return [follower.thread_id];
-      await loseRepositoryAccess(
-        db,
-        follower.thread_id,
-        follower.owner_user_id,
-        repository,
-        now,
-      );
-      automationLogger.info("A linked Thread's owner lost GitHub access.", {
-        event: "github_link_access_lost",
-        threadId: follower.thread_id,
-      });
-      return [follower.thread_id];
-    }),
-  );
-  return skipped.flat();
+        if (reads === true) {
+          confirmed.add(follower.thread_id);
+          return;
+        }
+        unconfirmed.add(follower.thread_id);
+        if (reads !== false) return;
+        await loseRepositoryAccess(
+          db,
+          follower.thread_id,
+          follower.owner_user_id,
+          repository,
+          now,
+        );
+        automationLogger.info("A linked Thread's owner lost GitHub access.", {
+          event: "github_link_access_lost",
+          threadId: follower.thread_id,
+        });
+      }),
+    );
+    const last = page.at(-1);
+    if (last === undefined || page.length < FOLLOWERS_PER_PAGE) break;
+    after = last;
+  }
+  return [...confirmed].filter((threadId) => !unconfirmed.has(threadId));
 };
 
 /** Keeps the header's title, description, and state of a followed PR. */
@@ -578,9 +615,9 @@ const savePullFromWebhook = async (
   )
     return;
   const number = pull.number;
-  await forgetLostFollowers(bindings, db, repository, number, now)
-    .then((skipped) =>
-      savePullSubject(db, repository, number, subject, skipped),
+  await confirmedFollowers(bindings, db, repository, number, now)
+    .then((confirmed) =>
+      savePullSubject(db, repository, number, subject, confirmed),
     )
     .catch((cause) =>
       automationLogger.warn("Saving a PR's title failed.", {
@@ -672,9 +709,9 @@ const saveIssueFromWebhook = async (
   )
     return;
   const number = issue.number;
-  await forgetLostFollowers(bindings, db, repository, number, now)
-    .then((skipped) =>
-      saveLinkSubject(db, repository, number, "issue", subject, skipped),
+  await confirmedFollowers(bindings, db, repository, number, now)
+    .then((confirmed) =>
+      saveLinkSubject(db, repository, number, "issue", subject, confirmed),
     )
     .catch((cause) =>
       automationLogger.warn("Saving an issue's title failed.", {

@@ -1324,6 +1324,51 @@ describe("thread composer ownership", () => {
     await React.act(() => panel.root.unmount());
   });
 
+  // thr_6615ce2c: Anthropic's cyber safeguards stopped a response, and the
+  // Thread said only "Provider error", so the person retried the same
+  // request for hours without knowing why.
+  it("says the provider's safety reason when its safety system stopped the response, and Retry resumes", async () => {
+    const resume = vi.fn().mockResolvedValue(undefined);
+    const reason =
+      "The model provider's safety system stopped this response: Cyber safeguards flagged this message. If this is legitimate security work, you can apply for the Cyber Verification Program: https://support.claude.com/en/articles/14604842-cyber-verification-program. Rephrase the request or choose another model, then retry.";
+    const panel = await mountPanel({
+      resume,
+      settlements: [
+        {
+          submissionId: "safety-stop",
+          outcome: "failed",
+          // The settlement error in the shape production delivered it.
+          error: {
+            name: "FlueError",
+            type: "operation_failed",
+            message: `direct(sub_ik_d9e8) failed: ${reason} (dx_failure:internal:MODEL_SAFETY_STOP)`,
+            details: "",
+            meta: {
+              operation: "direct(sub_ik_d9e8)",
+              reason: `${reason} (dx_failure:internal:MODEL_SAFETY_STOP)`,
+            },
+          },
+        },
+      ],
+    });
+
+    const card = panel.container.querySelector(".thread-error-card");
+    expect(card?.textContent).toContain("Stopped by the model's safety system");
+    expect(card?.textContent).toContain(reason);
+    expect(card?.textContent).not.toContain("Provider error");
+    expect(card?.textContent).not.toContain("dx_failure");
+    expect(card?.textContent).not.toContain("direct(sub_ik_d9e8)");
+    const retry = Array.from(card?.querySelectorAll("button") ?? []).find(
+      (button) => button.textContent?.includes("Retry"),
+    );
+    await React.act(async () => {
+      retry?.click();
+      await Promise.resolve();
+    });
+    expect(resume).toHaveBeenCalledOnce();
+    await React.act(() => panel.root.unmount());
+  });
+
   // #1843: Claude Code could not write its run on a disk returning I/O
   // errors, and the Thread said only "Provider error".
   it("says the Orb's disk is failing when Claude Code could not start on it, and Retry resumes", async () => {

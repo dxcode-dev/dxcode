@@ -93,8 +93,8 @@ export const linkThreadAndList = async (
 };
 
 /**
- * A webhook's title and state for every verified link to the item, except
- * on the Threads skipped: those whose owner's access was not confirmed.
+ * A webhook's title and state for the verified links to the item on the
+ * Threads given: those whose owner's access was just confirmed.
  */
 export const saveLinkSubjectStatement = (
   db: D1Database,
@@ -102,20 +102,20 @@ export const saveLinkSubjectStatement = (
   number: number,
   kind: LinkKind,
   subject: PullSubject,
-  skipThreadIds: ReadonlyArray<string> = [],
+  threadIds: ReadonlyArray<string>,
 ) =>
   db
     .prepare(
       `UPDATE thread_github_link SET kind = ?3, subject_json = ?4
         WHERE repository_key = lower(?1) AND number = ?2 AND verified = 1
-          AND thread_id NOT IN (SELECT value FROM json_each(?5))`,
+          AND thread_id IN (SELECT value FROM json_each(?5))`,
     )
     .bind(
       repository,
       number,
       kind,
       JSON.stringify(subject),
-      JSON.stringify(skipThreadIds),
+      JSON.stringify(threadIds),
     );
 
 /** See `saveLinkSubjectStatement`. */
@@ -125,7 +125,7 @@ export const saveLinkSubject = (
   number: number,
   kind: LinkKind,
   subject: PullSubject,
-  skipThreadIds: ReadonlyArray<string> = [],
+  threadIds: ReadonlyArray<string>,
 ) =>
   saveLinkSubjectStatement(
     db,
@@ -133,7 +133,7 @@ export const saveLinkSubject = (
     number,
     kind,
     subject,
-    skipThreadIds,
+    threadIds,
   ).run();
 
 const threadLinksStatement = (db: D1Database, threadId: string) =>

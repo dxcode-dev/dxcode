@@ -1,9 +1,11 @@
 import {
   type Api,
+  type AssistantMessage,
   type AssistantMessageEvent,
   type Context,
   createAssistantMessageEventStream,
   type ImageContent,
+  type Message,
   type Model,
   type Provider,
   type TextContent,
@@ -28,6 +30,7 @@ import {
   type RunFailure,
   type RunFailureClass,
   runFailureText,
+  safetyStopFailure,
 } from "../../runtime/run-failure.js";
 import { catalogProviderModels, IN_DO_APIS } from "../model-routing/catalog.js";
 import { DX_PROVIDER_ID } from "../model-routing/deployment-models.js";
@@ -194,9 +197,39 @@ const withSendableImages = (context: Context): Context => {
   return changed ? { ...context, messages } : context;
 };
 
+const isTrailingThinking = (block: AssistantMessage["content"][number]) =>
+  block.type === "thinking" ||
+  (block.type === "text" && block.text.trim() === "");
+
+/**
+ * Every assistant message without thinking at its end, and without the
+ * messages that held only thinking. A response the provider stopped after
+ * thinking (a safety stop, a dropped stream) leaves such a message; Retry
+ * resumes it (Flue's `resumeFailedAssistantId`), and Anthropic refuses any
+ * assistant message whose final block is thinking (HTTP 400), so every Retry
+ * failed the same way. Like pi-ai's replay of a failed turn, the model starts
+ * again from the last complete message. Thinking before a tool call or text
+ * is kept.
+ */
+const withoutTrailingThinking = (context: Context): Context => {
+  let changed = false;
+  const messages = context.messages.flatMap((message): Message[] => {
+    if (message.role !== "assistant") return [message];
+    const end =
+      message.content.findLastIndex((block) => !isTrailingThinking(block)) + 1;
+    if (!message.content.slice(end).some((block) => block.type === "thinking"))
+      return [message];
+    changed = true;
+    return end === 0
+      ? []
+      : [{ ...message, content: message.content.slice(0, end) }];
+  });
+  return changed ? { ...context, messages } : context;
+};
+
 /** History as every provider accepts it. */
 const sendableContext = (context: Context) =>
-  withSendableImages(withNonEmptyToolErrors(context));
+  withSendableImages(withoutTrailingThinking(withNonEmptyToolErrors(context)));
 
 const LEFT_OUT_FOR_SIZE =
   "[An image was left out: the model provider refused a request this large. View it again if you need it.]";
@@ -397,7 +430,15 @@ const withFailureText = (
         ...event,
         error: {
           ...event.error,
-          errorMessage: failureText(event.error.errorMessage ?? "", failure),
+          errorMessage: failureText(
+            event.error.errorMessage ?? "",
+            // A safety stop arrives on a successful response, so it is told
+            // apart by the provider's stop reason, never by its words.
+            safetyStopFailure(
+              event.error.rawStopReason,
+              event.error.errorMessage,
+            ) ?? failure,
+          ),
         },
       }
     : event;
