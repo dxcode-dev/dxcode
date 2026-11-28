@@ -964,6 +964,52 @@ describe("Project repository Commits and Files", () => {
     }
   }, 60_000);
 
+  it("keeps a clone host readable for everyone after ten viewers spend their whole budgets on it", async () => {
+    // A window of its own, three days back, apart from the test above.
+    const window = 10 * 60 * 1000;
+    const start =
+      Math.floor(Date.now() / window) * window - 3 * 24 * 60 * 60 * 1000;
+    vi.useFakeTimers({ now: start + 5_000, toFake: ["Date"] });
+    try {
+      fakeGitHub(gitHost("acme/drain-app"));
+      const read = async (projectId: string, path: string, viewer: Principal) =>
+        (
+          (await browse(projectId, path, viewer)).body as {
+            readonly data: { readonly state: string; readonly reason?: string };
+          }
+        ).data;
+      // Ten accounts each read fresh github.com paths until dx stops them.
+      for (let account = 0; account < 10; account += 1) {
+        const viewer = {
+          ...otherPrincipal,
+          userId: `drain-viewer-${account}`,
+        } as Principal;
+        const projectId = await seedPublicProject(
+          `Browse-drain-${account}`,
+          "acme/drain-app",
+          viewer,
+        );
+        let reads = 0;
+        while (
+          (await read(projectId, `drain-${account}-${reads}`, viewer)).state ===
+          "path-not-found"
+        )
+          reads += 1;
+        expect(reads).toBeGreaterThan(100);
+      }
+      // Every other tenant's github.com Project still reads.
+      const bystander = await seedPublicProject(
+        "Browse-drain-bystander",
+        "acme/drain-app",
+      );
+      expect(await read(bystander, "fresh", principal)).toMatchObject({
+        state: "path-not-found",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 120_000);
+
   it("normalizes a trailing slash and rejects encoded traversal before any provider call", async () => {
     const projectId = await seedConnectedProject("Browse-encoded", "bg-8");
     const requests = fakeGitHub();

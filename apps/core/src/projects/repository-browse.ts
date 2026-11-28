@@ -181,13 +181,16 @@ const TIP_CACHE_SECONDS = 30;
 
 /**
  * Anonymous reads that miss the cache, each a ref advertisement or two
- * upload-pack POSTs to whatever host the Project's URL names. Budgets per
- * viewer and per clone host stop anyone using dx to flood a Git server; a
- * person opening a new folder every few seconds stays well under them.
+ * upload-pack POSTs to whatever host the Project's URL names. The viewer
+ * budget stops anyone using dx to flood a Git server; a person opening a new
+ * folder every few seconds stays well under it. The clone host's budget is
+ * shared by everyone reading that host, so it is a hundred viewers' worth
+ * (20 reads a second, which a small server still serves): a few accounts
+ * spending all of theirs can't lock every tenant out of github.com.
  */
 const PUBLIC_GIT_READ_BUDGETS = {
   viewer: { maximum: 120, windowMs: 10 * 60 * 1000 },
-  host: { maximum: 1_200, windowMs: 10 * 60 * 1000 },
+  host: { maximum: 12_000, windowMs: 10 * 60 * 1000 },
 } as const satisfies Record<string, RequestBudget>;
 
 /** Spends one uncached public read; false when the viewer or host is out. */

@@ -294,19 +294,28 @@ const deliver = async (
           ),
         }
       : { envelopeFrom: mail.from };
-  if (
-    (await recentMailFrom(db, owner.userId, sender, HOUR_MS, trusted)) >=
-      MAIL_PER_SENDER_PER_HOUR[trusted ? "trusted" : "untrusted"] ||
-    (await recentMailFrom(db, owner.userId, undefined, HOUR_MS, trusted)) >=
-      MAIL_PER_HOUR
-  ) {
+  const cap = {
+    sender,
+    perSender: MAIL_PER_SENDER_PER_HOUR[trusted ? "trusted" : "untrusted"],
+    perMailbox: MAIL_PER_HOUR,
+    since: new Date(Date.now() - HOUR_MS),
+  };
+  const rateLimited = (): InboundOutcome => {
     mailLogger.info("Mail was dropped.", {
       event: "mail_dropped",
       reason: "rate_limit",
       ownerUserId: owner.userId,
     });
     return { kind: "dropped", reason: "rate_limit" };
-  }
+  };
+  // A cheap early refusal during a flood; the insert checks again atomically.
+  if (
+    (await recentMailFrom(db, owner.userId, sender, HOUR_MS, trusted)) >=
+      cap.perSender ||
+    (await recentMailFrom(db, owner.userId, undefined, HOUR_MS, trusted)) >=
+      cap.perMailbox
+  )
+    return rateLimited();
   const messageId =
     safeMessageId(parsed.messageId) ?? `sha256-${await sha256Hex(mail.raw)}@dx`;
   // The same message delivered twice, or to two of the person's addresses.
@@ -346,7 +355,7 @@ const deliver = async (
       )
       .bind(owner.userId, conversationKey)
       .first<number>("found")) !== null;
-  await insertMailItem(
+  const kept = await insertMailItem(
     bindings,
     {
       id,
@@ -380,7 +389,9 @@ const deliver = async (
       thread_id: null,
     },
     { raw: mail.raw, parts: parsed.parts },
+    cap,
   );
+  if (!kept) return rateLimited();
   mailLogger.info("Mail reached a mailbox.", {
     event: "mail_stored",
     ownerUserId: owner.userId,

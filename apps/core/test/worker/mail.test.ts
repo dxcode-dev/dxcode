@@ -216,6 +216,27 @@ describe("dx Mailbox", () => {
     expect(await stored(owner.userId)).toBe(3);
   });
 
+  it("holds one sender to its hourly cap when its mail arrives all at once", async () => {
+    const owner = await signUp();
+    const withStorage = { ...on, DX_STORAGE: env.DX_STORAGE } as Bindings;
+    // An untrusted sender's cap is 60 an hour; send twice that concurrently.
+    await Promise.all(
+      Array.from({ length: 120 }, () =>
+        email(
+          message(`${owner.username}@${MAIL_DOMAIN}`).message,
+          withStorage,
+          context,
+        ),
+      ),
+    );
+    expect(await stored(owner.userId)).toBe(60);
+    // Bodies of refused mail are not kept.
+    const bodies = await env.DX_STORAGE.list({
+      prefix: `mail/${owner.userId}/`,
+    });
+    expect(bodies.objects.length).toBe(2 * 60);
+  }, 60_000);
+
   it("is off for a person until they turn the Mailbox on, even with a mail domain", async () => {
     const owner = await signUp({ mailbox: false });
     const off = await mailbox(owner.cookie, on);

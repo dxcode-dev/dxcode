@@ -371,16 +371,36 @@ export interface GitCommit {
   readonly message: string;
 }
 
+/**
+ * `name <email> seconds zone`, read in linear time: a host writes these
+ * lines, and a backtracking regex over a long one pins the isolate. The
+ * email is the last `<…>` with no `>` inside, and the name ends at the
+ * first ` <` after any earlier `>`, as `/^(.*?) <[^>]*> (\d+) [+-]\d{4}$/`
+ * reads it.
+ */
 const signature = (value: string) => {
-  const match = value.match(/^(.*?) <[^>]*> (\d+) [+-]\d{4}$/);
-  return match === null
-    ? undefined
-    : { name: match[1] ?? "", at: new Date(Number(match[2]) * 1_000) };
+  const close = value.lastIndexOf(">");
+  if (close < 0) return undefined;
+  const tail = /^ (\d+) [+-]\d{4}$/.exec(value.slice(close + 1));
+  if (tail === null) return undefined;
+  const open = value.indexOf(" <", value.lastIndexOf(">", close - 1) + 1);
+  if (open < 0 || open + 1 >= close) return undefined;
+  const name = value.slice(0, open);
+  if (/[\r\n\u2028\u2029]/.test(name)) return undefined;
+  return { name, at: new Date(Number(tail[1]) * 1_000) };
 };
+
+/**
+ * A real commit's headers are a few hundred characters; a GPG signature adds
+ * a few thousand.
+ */
+const MAX_COMMIT_HEADER_LENGTH = 64 * 1024;
 
 export const parseCommit = (data: Uint8Array): GitCommit => {
   const value = text.decode(data);
   const split = value.indexOf("\n\n");
+  if ((split < 0 ? value.length : split) > MAX_COMMIT_HEADER_LENGTH)
+    throw new GitWireError("too-large");
   const header = (split < 0 ? value : value.slice(0, split)).split("\n");
   let tree: string | undefined;
   const parents: string[] = [];

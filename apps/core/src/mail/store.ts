@@ -374,11 +374,31 @@ export const conversationKeyFor = async (
  * Stores one email: its raw copy and parts in R2 (when `body` is given),
  * then its row. Bodies go first, so a row never names a missing object.
  */
+/**
+ * Inbound flood caps, checked in the same statement as the insert so
+ * concurrent deliveries can't all pass them: at most `perSender` emails from
+ * `sender`, and `perMailbox` from anyone, as trusted as this one since
+ * `since` (see `recentMailFrom`).
+ */
+export interface MailFloodCap {
+  readonly sender:
+    | { readonly envelopeFrom: string }
+    | { readonly fromDomain: string };
+  readonly perSender: number;
+  readonly perMailbox: number;
+  readonly since: Date;
+}
+
+/**
+ * Stores one email; false when `cap` refused it, and then nothing of it is
+ * kept.
+ */
 export const insertMailItem = async (
   bindings: MailBindings,
   row: Omit<MailItemRow, "r2_key">,
   body?: { readonly raw: Uint8Array; readonly parts: StoredMailParts },
-) => {
+  cap?: MailFloodCap,
+): Promise<boolean> => {
   const db = bindings.DB;
   if (db === undefined) throw new Error("Mail requires the D1 binding.");
   let key: string | null = null;
@@ -391,7 +411,7 @@ export const insertMailItem = async (
       httpMetadata: { contentType: "application/json" },
     });
   }
-  await db
+  const inserted = await db
     .prepare(
       `INSERT INTO mail_item (
          id, owner_user_id, direction, folder, tag, project_id, private, read_at,
@@ -399,8 +419,17 @@ export const insertMailItem = async (
          to_addresses, cc_addresses, subject, message_id, conversation_key,
          dmarc, authenticated, size, has_attachments, r2_key, preview,
          disposition, thread_id
-       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                 ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)`,
+       ) SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
+          WHERE ?27 IS NULL OR (
+            (SELECT count(*) FROM mail_item
+              WHERE owner_user_id = ?2 AND direction = 'in'
+                AND (?28 IS NULL OR envelope_from = ?28)
+                AND (?29 IS NULL OR from_address LIKE '%@' || ?29)
+                AND received_at > ?27 AND authenticated = ?20) < ?30
+            AND (SELECT count(*) FROM mail_item
+              WHERE owner_user_id = ?2 AND direction = 'in'
+                AND received_at > ?27 AND authenticated = ?20) < ?31)`,
     )
     .bind(
       row.id,
@@ -429,8 +458,21 @@ export const insertMailItem = async (
       row.preview?.slice(0, 400) ?? null,
       row.disposition,
       row.thread_id,
+      cap?.since.toISOString() ?? null,
+      cap !== undefined && "envelopeFrom" in cap.sender
+        ? cap.sender.envelopeFrom
+        : null,
+      cap !== undefined && "fromDomain" in cap.sender
+        ? cap.sender.fromDomain
+        : null,
+      cap?.perSender ?? null,
+      cap?.perMailbox ?? null,
     )
     .run();
+  if ((inserted.meta.changes ?? 0) > 0) return true;
+  if (key !== null)
+    await bindings.DX_STORAGE?.delete([`${key}.eml`, `${key}.json`]);
+  return false;
 };
 
 /** Records what dx did with an email, and the Thread it reached. */
