@@ -10,7 +10,7 @@ overrides:
   "@earendil-works/pi-ai": 1.1.0
   "@earendil-works/pi-agent-core": 1.1.0
   "@earendil-works/pi-telemetry": 1.1.0
-  "@flue/runtime": file:third-party/flue/runtime-ea96490468932c82c2894dd9463b56a21b158dad.tgz
+  "@flue/runtime": file:third-party/flue/runtime-ff1c6b0cc82f5c7ce1831fc77dc18e293c006f07.tgz
   # Security fixes for transitive dependencies whose parents (vendored flue,
   # pinned and patched alchemy and excalidraw, e2b, wrangler) still resolve a
   # vulnerable version. Each selector matches only the vulnerable range.
